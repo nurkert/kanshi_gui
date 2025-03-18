@@ -301,7 +301,6 @@ class _HomePageState extends State<HomePage> {
   void _selectProfile(int index) {
     setState(() {
       activeProfileIndex = index;
-      _scalingInitialized = false;
     });
   }
 
@@ -353,6 +352,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _isSidebarOpen = !_isSidebarOpen;
     });
+
   }
 
   @override
@@ -361,30 +361,12 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          tooltip: 'Toggle Sidebar',
+          onPressed: _toggleSidebar,
+        ),
         title: const Text("Kanshi GUI"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.menu),
-            tooltip: 'Toggle Sidebar',
-            onPressed: _toggleSidebar,
-          ),
-          IconButton(
-            icon: const Icon(Icons.update),
-            tooltip: 'Refresh Scaling',
-            onPressed: () {
-              setState(() {
-                _scalingInitialized = false;
-              });
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Reload Sway',
-            onPressed: () {
-              debugPrint("Sway reload triggered");
-            },
-          ),
-        ],
       ),
       // Wrap the entire layout in a Stack to animate the sidebar.
       body: Stack(
@@ -398,12 +380,7 @@ class _HomePageState extends State<HomePage> {
                 color: Colors.black,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    if (!_scalingInitialized) {
-                      _updateDisplayMonitors(constraints);
-                      _scalingInitialized = true;
-                    } else {
-                      _updateDisplayMonitors(constraints);
-                    }
+                    _updateDisplayMonitors(constraints);
                     return Stack(
                       children: [
                         for (final tile in _displayMonitors)
