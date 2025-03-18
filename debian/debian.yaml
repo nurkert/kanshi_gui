@@ -1,0 +1,14 @@
+flutter_app:
+  command: kanshi-gui
+  arch: x64
+  parent: /usr/local/lib
+  nonInteractive: false
+
+control:
+  Package: kanshi_gui
+  Version: 1.0.0
+  Architecture: amd64
+  Priority: optional
+  Depends:
+  Maintainer: nurkert
+  Description: A simple GUI for kanshi.
