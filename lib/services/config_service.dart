@@ -18,7 +18,10 @@ class ConfigService {
       List<Profile> profiles = [];
 
       // Profile-Blöcke finden: profile 'name' { ... }
-      RegExp profileBlockRegExp = RegExp(r"profile\s+'([^']+)'\s*\{([^}]*)\}", dotAll: true);
+      RegExp profileBlockRegExp = RegExp(
+        r"profile\s+'([^']+)'\s*\{([^}]*)\}",
+        dotAll: true,
+      );
       Iterable<RegExpMatch> profileMatches = profileBlockRegExp.allMatches(content);
 
       for (final match in profileMatches) {
@@ -26,9 +29,10 @@ class ConfigService {
         String blockContent = match.group(2)!;
 
         List<MonitorTileData> monitors = [];
-        // Beispiel: output 'XYZ' enable scale 1 transform normal position 0,0
+
+        // This regex now optionally parses a size after the position:
         RegExp outputLineRegExp = RegExp(
-          r"output\s+'([^']+)'\s+(enable|disable)(?:\s+scale\s+(\S+))?\s+transform\s+(\S+)\s+position\s+(-?\d+),(-?\d+)",
+          r"output\s+'([^']+)'\s+(enable|disable)(?:\s+scale\s+(\S+))?\s+transform\s+(\S+)\s+position\s+(-?\d+),(-?\d+)(?:\s+size\s+(\d+),(\d+))?",
         );
         Iterable<RegExpMatch> outputMatches = outputLineRegExp.allMatches(blockContent);
 
@@ -47,12 +51,20 @@ class ConfigService {
             rotation = 270;
           }
 
+          // Try to parse the size if present
+          double width;
+          double height;
+          if (outputMatch.group(7) != null && outputMatch.group(8) != null) {
+            width = double.tryParse(outputMatch.group(7)!) ?? 1920;
+            height = double.tryParse(outputMatch.group(8)!) ?? 1080;
+          } else {
+            // Defaults: 1920x1080 bei normal/180, sonst 1080x1920.
+            width = (rotation == 90 || rotation == 270) ? 1080 : 1920;
+            height = (rotation == 90 || rotation == 270) ? 1920 : 1080;
+          }
+
           double x = double.tryParse(outputMatch.group(5)!) ?? 0;
           double y = double.tryParse(outputMatch.group(6)!) ?? 0;
-
-          // Defaults: 1920x1080 bei normal/180, sonst 1080x1920.
-          double width = (rotation == 90 || rotation == 270) ? 1080 : 1920;
-          double height = (rotation == 90 || rotation == 270) ? 1920 : 1080;
 
           String resolution = "${width.toInt()}x${height.toInt()}";
           String orientation = (rotation == 90 || rotation == 270) ? "portrait" : "landscape";
@@ -80,13 +92,12 @@ class ConfigService {
     StringBuffer buffer = StringBuffer();
 
     for (final profile in profiles) {
-      // Zuerst: Koordinaten anpassen, falls es negative Werte gibt.
+      // Adjust negative coordinates if any.
       double minX = profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
       double minY = profile.monitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
       double offsetX = (minX < 0) ? -minX : 0;
       double offsetY = (minY < 0) ? -minY : 0;
 
-      // Alle Monitore um den berechneten Offset verschieben.
       List<MonitorTileData> adjustedMonitors = profile.monitors.map((m) {
         return m.copyWith(
           x: m.x + offsetX,
@@ -94,24 +105,23 @@ class ConfigService {
         );
       }).toList();
 
-      // Monitore sortieren: Der linkeste Monitor (kleinster x-Wert) wird als erstes betrachtet.
+      // Sort monitors from left to right.
       adjustedMonitors.sort((a, b) => a.x.compareTo(b.x));
 
       buffer.writeln("profile '${profile.name}' {");
 
-      // Workspace-Nummerierung: Linkester Monitor = Workspace 1, dann fortlaufend.
       int workspace = 1;
       for (final monitor in adjustedMonitors) {
-        // Koordinaten nochmals auf 0 clampen, falls erforderlich.
         int posX = (monitor.x < 0) ? 0 : monitor.x.toInt();
         int posY = (monitor.y < 0) ? 0 : monitor.y.toInt();
 
         String transformStr = (monitor.rotation == 0)
             ? 'normal'
-            : monitor.rotation.toString(); // "90","180","270"
+            : monitor.rotation.toString(); // e.g. "90", "180", "270"
 
+        // Save the actual size so that the correct dimensions are loaded later.
         buffer.writeln(
-          "    output '${monitor.id}' enable scale 1 transform $transformStr position $posX,$posY",
+          "    output '${monitor.id}' enable scale 1 transform $transformStr position $posX,$posY size ${monitor.width.toInt()},${monitor.height.toInt()}",
         );
         buffer.writeln(
           "    exec swaymsg \"workspace $workspace output '${monitor.id}'; workspace $workspace\"",
