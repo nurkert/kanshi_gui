@@ -26,9 +26,9 @@ class ConfigService {
         String blockContent = match.group(2)!;
 
         List<MonitorTileData> monitors = [];
-        // output 'XYZ' enable scale 1 transform normal position 0,0
+        // Beispiel: output 'XYZ' enable scale 1 transform normal position 0,0
         RegExp outputLineRegExp = RegExp(
-          r"output\s+'([^']+)'\s+(enable|disable)(?:\s+scale\s+(\S+))?\s+transform\s+(\S+)\s+position\s+(\d+),(\d+)",
+          r"output\s+'([^']+)'\s+(enable|disable)(?:\s+scale\s+(\S+))?\s+transform\s+(\S+)\s+position\s+(-?\d+),(-?\d+)",
         );
         Iterable<RegExpMatch> outputMatches = outputLineRegExp.allMatches(blockContent);
 
@@ -78,16 +78,40 @@ class ConfigService {
   /// Schreibt alle Profile wieder im kanshi-Format in die Config-Datei.
   Future<void> saveProfiles(List<Profile> profiles) async {
     StringBuffer buffer = StringBuffer();
+
     for (final profile in profiles) {
+      // Zuerst: Koordinaten anpassen, falls es negative Werte gibt.
+      double minX = profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
+      double minY = profile.monitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
+      double offsetX = (minX < 0) ? -minX : 0;
+      double offsetY = (minY < 0) ? -minY : 0;
+
+      // Alle Monitore um den berechneten Offset verschieben.
+      List<MonitorTileData> adjustedMonitors = profile.monitors.map((m) {
+        return m.copyWith(
+          x: m.x + offsetX,
+          y: m.y + offsetY,
+        );
+      }).toList();
+
+      // Monitore sortieren: Der linkeste Monitor (kleinster x-Wert) wird als erstes betrachtet.
+      adjustedMonitors.sort((a, b) => a.x.compareTo(b.x));
+
       buffer.writeln("profile '${profile.name}' {");
+
+      // Workspace-Nummerierung: Linkester Monitor = Workspace 1, dann fortlaufend.
       int workspace = 1;
-      for (final monitor in profile.monitors) {
+      for (final monitor in adjustedMonitors) {
+        // Koordinaten nochmals auf 0 clampen, falls erforderlich.
+        int posX = (monitor.x < 0) ? 0 : monitor.x.toInt();
+        int posY = (monitor.y < 0) ? 0 : monitor.y.toInt();
+
         String transformStr = (monitor.rotation == 0)
             ? 'normal'
             : monitor.rotation.toString(); // "90","180","270"
 
         buffer.writeln(
-          "    output '${monitor.id}' enable scale 1 transform $transformStr position ${monitor.x.toInt()},${monitor.y.toInt()}",
+          "    output '${monitor.id}' enable scale 1 transform $transformStr position $posX,$posY",
         );
         buffer.writeln(
           "    exec swaymsg \"workspace $workspace output '${monitor.id}'; workspace $workspace\"",
