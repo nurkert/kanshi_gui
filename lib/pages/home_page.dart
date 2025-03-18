@@ -20,10 +20,10 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final ConfigService _configService = ConfigService();
 
-  /// Geladene Profile aus der Config
+  /// Loaded profiles from config.
   List<Profile> profiles = [];
 
-  /// Aktuelles Setup – Achte auf korrekte Maße (bei gedrehten Monitoren vertauschte width/height)
+  /// List of currently connected monitors.
   List<MonitorTileData> currentMonitors = [];
 
   Future<List<MonitorTileData>> getConnectedMonitors() async {
@@ -35,7 +35,6 @@ class _HomePageState extends State<HomePage> {
     List<MonitorTileData> monitors = [];
     for (var output in outputs) {
       if (output['active'] == true) {
-        // Adjust these values according to your needs. For example:
         String name = output['name'];
         double x = (output['rect']['x'] as num).toDouble();
         double y = (output['rect']['y'] as num).toDouble();
@@ -60,34 +59,46 @@ class _HomePageState extends State<HomePage> {
     return monitors;
   }
 
-  /// Welches Profil wird gerade bearbeitet?
+  /// Which profile is currently active?
   int? activeProfileIndex;
 
-  /// Snap-Toleranz in Pixeln
+  /// Sidebar state – if true, sidebar is visible.
+  bool _isSidebarOpen = false;
+
+  /// Snap threshold (in pixels)
   final double snapThreshold = 500.0;
 
-  /// Skalierungs-/Positionsparameter
+  /// Scaling and positioning parameters.
   double _scaleFactor = 1.0;
   double _offsetX = 0;
   double _offsetY = 0;
   bool _scalingInitialized = false;
 
-  /// Die skalierten Monitor-Daten zur Anzeige
+  /// Scaled monitor data for display.
   List<MonitorTileData> _displayMonitors = [];
 
-  /// Alte Positionen für Overlap-Revert
+  /// Old positions for overlap revert.
   Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
 
-  /// Timer für Debounced-Save
+  /// Timer for debounced saving.
   Timer? _saveTimer;
 
-  /// Greift auf aktive Monitore (des selektierten Profils) zu.
+  /// Active monitors (from the active profile).
   List<MonitorTileData> get activeMonitors {
     if (activeProfileIndex == null) {
       return [];
     } else {
       return profiles[activeProfileIndex!].monitors;
     }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConfig();
+    _updateConnectedMonitors();
+    // If no active setup, open sidebar by default.
+    _isSidebarOpen = activeProfileIndex == null;
   }
 
   void _updateConnectedMonitors() async {
@@ -101,34 +112,27 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _loadConfig();
-    _updateConnectedMonitors();
-  }
-
-  /// Profile laden und ggf. Standard-Auswahl setzen.
+  /// Load profiles and set default active profile.
   void _loadConfig() async {
     List<Profile> loaded = await _configService.loadProfiles();
     setState(() {
       profiles = loaded;
-      // Falls ein "Current Setup" vorhanden ist, automatisch als aktiv auswählen:
       int? currentSetupIndex = _findProfileWithAllCurrentMonitors();
       if (currentSetupIndex != null) {
         activeProfileIndex = currentSetupIndex;
       } else if (profiles.isNotEmpty) {
         activeProfileIndex = 0;
       }
+      // Set sidebar open if no current setup exists.
+      _isSidebarOpen = (activeProfileIndex == null);
     });
   }
 
-  /// Verzögertes Speichern (debounced)
   void _debouncedAutoSave() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 600), () {
       _configService.saveProfiles(profiles);
-      debugPrint("Debounced Auto-Save: Konfiguration gespeichert");
+      debugPrint("Debounced Auto-Save: Configuration saved");
     });
   }
 
@@ -136,7 +140,7 @@ class _HomePageState extends State<HomePage> {
     _debouncedAutoSave();
   }
 
-  /// Aktualisiert die skalierten Monitor-Daten (_displayMonitors) anhand der absoluten Koordinaten.
+  /// Update display monitors (scaled) based on absolute coordinates.
   void _updateDisplayMonitors(BoxConstraints constraints) {
     final mons = activeMonitors;
     if (mons.isEmpty) {
@@ -170,7 +174,6 @@ class _HomePageState extends State<HomePage> {
       double dy = (m.y - minY) * scale + _offsetY;
       double dw = m.width * scale;
       double dh = m.height * scale;
-
       return m.copyWith(
         x: dx,
         y: dy,
@@ -346,19 +349,28 @@ class _HomePageState extends State<HomePage> {
     _autoSave();
   }
 
-
+  void _toggleSidebar() {
+    setState(() {
+      _isSidebarOpen = !_isSidebarOpen;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final currentSetupIndex = _findProfileWithAllCurrentMonitors();
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("Kanshi GUI"),
         actions: [
           IconButton(
+            icon: const Icon(Icons.menu),
+            tooltip: 'Toggle Sidebar',
+            onPressed: _toggleSidebar,
+          ),
+          IconButton(
             icon: const Icon(Icons.update),
-            tooltip: 'Skalierung aktualisieren',
+            tooltip: 'Refresh Scaling',
             onPressed: () {
               setState(() {
                 _scalingInitialized = false;
@@ -367,73 +379,19 @@ class _HomePageState extends State<HomePage> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Sway neu laden',
+            tooltip: 'Reload Sway',
             onPressed: () {
-              debugPrint("Sway reload ausgeführt");
+              debugPrint("Sway reload triggered");
             },
           ),
         ],
       ),
-      body: Row(
+      // Wrap the entire layout in a Stack to animate the sidebar.
+      body: Stack(
         children: [
-          // Sidebar
-          Container(
-            width: 320,
-            color: Colors.grey[850],
-            child: Column(
-              children: [
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: profiles.length,
-                    itemBuilder: (context, i) {
-                      return ProfileListItem(
-                        profile: profiles[i],
-                        isActive: (activeProfileIndex == i),
-                        onSelect: () => _selectProfile(i),
-                        onNameChanged: (newName) {
-                          bool nameExists = profiles.any((p) =>
-                              p.name.toLowerCase() == newName.toLowerCase() &&
-                              p != profiles[i]);
-                          if (nameExists) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text("Profile name already exists!"),
-                              ),
-                            );
-                          } else {
-                            setState(() {
-                              profiles[i].name = newName;
-                              _autoSave();
-                            });
-                          }
-                        },
-                        onDelete: () {
-                          setState(() {
-                            if (activeProfileIndex == i) {
-                              activeProfileIndex = null;
-                            }
-                            profiles.removeAt(i);
-                            _autoSave();
-                          });
-                        },
-                        exists: true,
-                      );
-                    },
-                  ),
-                ),
-                if (currentSetupIndex == null)
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: ElevatedButton(
-                      onPressed: _createCurrentSetup,
-                      child: const Text("Create Current Setup"),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // Layout-Bereich
-          Expanded(
+          // Main content area:
+          Positioned.fill(
+            left: _isSidebarOpen ? 320 : 0,
             child: MouseRegion(
               cursor: SystemMouseCursors.basic,
               child: Container(
@@ -472,6 +430,69 @@ class _HomePageState extends State<HomePage> {
                     );
                   },
                 ),
+              ),
+            ),
+          ),
+          // Sidebar (animated sliding in/out from left)
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            left: _isSidebarOpen ? 0 : -320,
+            top: 0,
+            bottom: 0,
+            width: 320,
+            child: Container(
+              color: Colors.grey[850],
+              child: Column(
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: profiles.length,
+                      itemBuilder: (context, i) {
+                        return ProfileListItem(
+                          profile: profiles[i],
+                          isActive: (activeProfileIndex == i),
+                          onSelect: () => _selectProfile(i),
+                          onNameChanged: (newName) {
+                            bool nameExists = profiles.any((p) =>
+                                p.name.toLowerCase() == newName.toLowerCase() &&
+                                p != profiles[i]);
+                            if (nameExists) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("Profile name already exists!"),
+                                ),
+                              );
+                            } else {
+                              setState(() {
+                                profiles[i].name = newName;
+                                _autoSave();
+                              });
+                            }
+                          },
+                          onDelete: () {
+                            setState(() {
+                              if (activeProfileIndex == i) {
+                                activeProfileIndex = null;
+                              }
+                              profiles.removeAt(i);
+                              _autoSave();
+                            });
+                          },
+                          exists: true,
+                        );
+                      },
+                    ),
+                  ),
+                  if (currentSetupIndex == null)
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: ElevatedButton(
+                        onPressed: _createCurrentSetup,
+                        child: const Text("Create Current Setup"),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
