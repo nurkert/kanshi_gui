@@ -43,40 +43,41 @@ class _ProfileListItemState extends State<ProfileListItem> {
 
   @override
   Widget build(BuildContext context) {
-    Color baseColor = Colors.blue;
-    Color tileColor = widget.isActive
-        ? baseColor.withOpacity(0.5)
-        : baseColor.withOpacity(0.2);
-
-    return ListTile(
-      tileColor: tileColor,
-      title: isEditing
-          ? TextField(
-              controller: _controller,
-              autofocus: true,
-              onSubmitted: (value) {
-                widget.onNameChanged(value);
-                setState(() {
-                  isEditing = false;
-                });
-              },
-            )
-          : Text(widget.profile.name),
-      leading: IconButton(
-        icon: const Icon(Icons.edit),
-        tooltip: 'Namen bearbeiten',
-        onPressed: () {
-          setState(() {
-            isEditing = true;
-          });
-        },
+    // Setze unterschiedliche Hintergrundfarben:
+    Color backgroundColor = widget.isActive ? Colors.teal.shade300 : Colors.transparent;
+    return Container(
+      color: backgroundColor,
+      child: ListTile(
+        title: isEditing
+            ? TextField(
+                controller: _controller,
+                autofocus: true,
+                onSubmitted: (value) {
+                  widget.onNameChanged(value);
+                  setState(() {
+                    isEditing = false;
+                  });
+                },
+              )
+            : Text(widget.profile.name),
+        leading: IconButton(
+          icon: const Icon(Icons.edit),
+          tooltip: 'Edit name',
+          onPressed: () {
+            setState(() {
+              isEditing = true;
+            });
+          },
+        ),
+        trailing: widget.onDelete != null
+            ? IconButton(
+                icon: const Icon(Icons.delete),
+                tooltip: 'Delete profile',
+                onPressed: widget.onDelete,
+              )
+            : null,
+        onTap: widget.onSelect,
       ),
-      trailing: IconButton(
-        icon: const Icon(Icons.delete),
-        tooltip: 'Profil löschen',
-        onPressed: widget.onDelete,
-      ),
-      onTap: widget.onSelect,
     );
   }
 }

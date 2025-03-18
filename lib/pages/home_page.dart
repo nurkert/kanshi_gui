@@ -21,8 +21,7 @@ class _HomePageState extends State<HomePage> {
   /// Geladene Profile aus der Config
   List<Profile> profiles = [];
 
-  /// Hier simulieren wir das tatsächlich vorhandene "aktuelle Setup"
-  /// ACHTUNG: Hier die IDs exakt so wie in deiner Config (inkl. "Unknown" etc.)
+  /// Aktuelles Setup – Achte auf korrekte Maße (bei gedrehten Monitoren vertauschte width/height)
   List<MonitorTileData> currentMonitors = [
     MonitorTileData(
       id: "InfoVision Optoelectronics (Kunshan) Co.,Ltd China 0x057D Unknown",
@@ -48,19 +47,19 @@ class _HomePageState extends State<HomePage> {
       id: "Samsung Electric Company S24E450 H4ZJ704845",
       x: 0,
       y: 0,
-      width: 1920,
-      height: 1080,
-      rotation: 90,   // Hier z.B. schon gedreht
-      resolution: "1920x1080",
-      orientation: "portrait", // passt zu rotation=90
+      width: 1080,  // width und height vertauscht für portrait
+      height: 1920,
+      rotation: 90,
+      resolution: "1080x1920",
+      orientation: "portrait",
     ),
   ];
 
-  /// Welches Profil wird gerade bearbeitet? Wenn null => kein Profil aktiv
+  /// Welches Profil wird gerade bearbeitet?
   int? activeProfileIndex;
 
-  /// Snap-Toleranz in absoluten Pixeln
-  final double snapThreshold = 500.0;
+  /// Snap-Toleranz in Pixeln
+  final double snapThreshold = 50.0;
 
   /// Skalierungs-/Positionsparameter
   double _scaleFactor = 1.0;
@@ -77,7 +76,7 @@ class _HomePageState extends State<HomePage> {
   /// Timer für Debounced-Save
   Timer? _saveTimer;
 
-  /// Zugriff auf aktive Monitore (des selektierten Profils)
+  /// Greift auf aktive Monitore (des selektierten Profils) zu.
   List<MonitorTileData> get activeMonitors {
     if (activeProfileIndex == null) {
       return [];
@@ -92,11 +91,18 @@ class _HomePageState extends State<HomePage> {
     _loadConfig();
   }
 
-  /// Profile laden
+  /// Profile laden und ggf. Standard-Auswahl setzen.
   void _loadConfig() async {
     List<Profile> loaded = await _configService.loadProfiles();
     setState(() {
       profiles = loaded;
+      // Falls ein "Current Setup" vorhanden ist, automatisch als aktiv auswählen:
+      int? currentSetupIndex = _findProfileWithAllCurrentMonitors();
+      if (currentSetupIndex != null) {
+        activeProfileIndex = currentSetupIndex;
+      } else if (profiles.isNotEmpty) {
+        activeProfileIndex = 0;
+      }
     });
   }
 
@@ -113,7 +119,7 @@ class _HomePageState extends State<HomePage> {
     _debouncedAutoSave();
   }
 
-  /// Rekonstruiert die anzuzeigenden (skalierten) Monitor-Daten
+  /// Aktualisiert die skalierten Monitor-Daten (_displayMonitors) anhand der absoluten Koordinaten.
   void _updateDisplayMonitors(BoxConstraints constraints) {
     final mons = activeMonitors;
     if (mons.isEmpty) {
@@ -129,7 +135,6 @@ class _HomePageState extends State<HomePage> {
     double boundingWidth = maxX - minX;
     double boundingHeight = maxY - minY;
 
-    // 80% des Containers; nicht über 1.0 skalieren
     double allowedW = constraints.maxWidth * 0.8;
     double allowedH = constraints.maxHeight * 0.8;
     double scaleX = boundingWidth == 0 ? 1 : allowedW / boundingWidth;
@@ -138,13 +143,11 @@ class _HomePageState extends State<HomePage> {
     if (scale > 1.0) scale = 1.0;
     _scaleFactor = scale;
 
-    // Zentrieren
     double scaledBW = boundingWidth * scale;
     double scaledBH = boundingHeight * scale;
     _offsetX = (constraints.maxWidth - scaledBW) / 2;
     _offsetY = (constraints.maxHeight - scaledBH) / 2;
 
-    // Neue Liste der scaled-Werte
     _displayMonitors = mons.map((m) {
       double dx = (m.x - minX) * scale + _offsetX;
       double dy = (m.y - minY) * scale + _offsetY;
@@ -160,42 +163,30 @@ class _HomePageState extends State<HomePage> {
     }).toList();
   }
 
-  /// Wenn ein Monitor per Drag verschoben/gedreht wird, erhalten wir hier das Update
   void _onMonitorUpdate(MonitorTileData updatedTile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
-
     final mons = activeMonitors;
     final index = mons.indexWhere((m) => m.id == updatedTile.id);
     if (index == -1) return;
-
     final oldMonitor = mons[index];
     final oldRotation = oldMonitor.rotation;
     final newRotation = updatedTile.rotation;
 
-    // Prüfen, ob wir uns von Landscape nach Portrait bewegen oder umgekehrt
     bool wasLandscape = (oldRotation % 180 == 0);
     bool isLandscape = (newRotation % 180 == 0);
-
     double newWidth = oldMonitor.width;
     double newHeight = oldMonitor.height;
-
-    // Wenn sich das grundsätzliche Format ändert => Breite/Höhe tauschen
     if (wasLandscape != isLandscape) {
       double temp = newWidth;
       newWidth = newHeight;
       newHeight = temp;
     }
 
-    // Rückrechnung scaled -> absolute
     final minX = mons.map((m) => m.x).reduce(min);
     final minY = mons.map((m) => m.y).reduce(min);
-
     final newAbsX = minX + (updatedTile.x - _offsetX) / _scaleFactor;
     final newAbsY = minY + (updatedTile.y - _offsetY) / _scaleFactor;
-
-    // Neue Orientation
-    final newOrientation =
-        (newRotation % 180 == 0) ? "landscape" : "portrait";
+    final newOrientation = (newRotation % 180 == 0) ? "landscape" : "portrait";
 
     final newAbsMonitor = oldMonitor.copyWith(
       x: newAbsX,
@@ -212,34 +203,26 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  /// Beim Drag-Beginn: alte Position merken
   void _onMonitorDragStart(MonitorTileData tile) {
     if (activeProfileIndex == null) return;
     final index = activeMonitors.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
-
     _oldPositionsBeforeDrag[tile.id] = activeMonitors[index];
   }
 
-  /// Am Drag-Ende: Snap & Overlap-Check
   void _onMonitorDragEnd(MonitorTileData tile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
-
     final index = activeMonitors.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
-
     final newMonitors = [...activeMonitors];
     final updated = _snapToEdges(newMonitors[index], newMonitors);
     newMonitors[index] = updated;
-
     if (_hasOverlap(updated, newMonitors, index)) {
-      // revert
       final oldPos = _oldPositionsBeforeDrag[tile.id];
       if (oldPos != null) {
         newMonitors[index] = oldPos;
       }
     }
-
     setState(() {
       profiles[activeProfileIndex!].monitors = newMonitors;
       _oldPositionsBeforeDrag.remove(tile.id);
@@ -247,7 +230,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  /// Neu rendern + speichern
   void _buildAndSave(BoxConstraints constraints) {
     _updateDisplayMonitors(constraints);
     _autoSave();
@@ -256,30 +238,23 @@ class _HomePageState extends State<HomePage> {
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
     double newX = m.x;
     double newY = m.y;
-
     for (int i = 0; i < all.length; i++) {
       final other = all[i];
       if (other.id == m.id) continue;
-
       final left = m.x;
       final right = m.x + m.width;
       final top = m.y;
       final bottom = m.y + m.height;
-
       final oLeft = other.x;
       final oRight = other.x + other.width;
       final oTop = other.y;
       final oBottom = other.y + other.height;
-
-      // Horizontal:
       if ((left - oRight).abs() <= snapThreshold) {
         newX = oRight;
       }
       if ((right - oLeft).abs() <= snapThreshold) {
         newX = oLeft - m.width;
       }
-
-      // Vertikal:
       if ((top - oBottom).abs() <= snapThreshold) {
         newY = oBottom;
       }
@@ -287,7 +262,6 @@ class _HomePageState extends State<HomePage> {
         newY = oTop - m.height;
       }
     }
-
     return m.copyWith(x: newX, y: newY);
   }
 
@@ -311,18 +285,15 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  /// Test, ob eines der Profile alle IDs aus currentMonitors besitzt
   int? _findProfileWithAllCurrentMonitors() {
     bool idsMatch(String id1, String id2) {
       String base1 = id1.replaceAll("Unknown", "").trim();
       String base2 = id2.replaceAll("Unknown", "").trim();
       return base1 == base2;
     }
-
     for (int i = 0; i < profiles.length; i++) {
       final profile = profiles[i];
       if (profile.monitors.length != currentMonitors.length) continue;
-
       bool allMatch = true;
       for (final cm in currentMonitors) {
         if (!profile.monitors.any((pm) => idsMatch(pm.id, cm.id))) {
@@ -337,10 +308,6 @@ class _HomePageState extends State<HomePage> {
     return null;
   }
 
-  /// Neues Profil "Current Setup" anlegen
-  /// Creates a new "Current Setup" profile.
-  /// Rotated monitors (90° or 270°) will have width and height swapped,
-  /// so they are displayed correctly in the GUI.
   void _createCurrentSetup() {
     final newProfile = Profile(
       name: "Current Setup",
@@ -365,7 +332,6 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final currentSetupIndex = _findProfileWithAllCurrentMonitors();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text("Kanshi GUI"),
@@ -405,10 +371,21 @@ class _HomePageState extends State<HomePage> {
                         isActive: (activeProfileIndex == i),
                         onSelect: () => _selectProfile(i),
                         onNameChanged: (newName) {
-                          setState(() {
-                            profiles[i].name = newName;
-                            _autoSave();
-                          });
+                          bool nameExists = profiles.any((p) =>
+                              p.name.toLowerCase() == newName.toLowerCase() &&
+                              p != profiles[i]);
+                          if (nameExists) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Profile name already exists!"),
+                              ),
+                            );
+                          } else {
+                            setState(() {
+                              profiles[i].name = newName;
+                              _autoSave();
+                            });
+                          }
                         },
                         onDelete: () {
                           setState(() {
@@ -449,7 +426,6 @@ class _HomePageState extends State<HomePage> {
                     } else {
                       _updateDisplayMonitors(constraints);
                     }
-
                     return Stack(
                       children: [
                         for (final tile in _displayMonitors)
