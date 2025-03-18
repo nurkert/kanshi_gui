@@ -1,6 +1,8 @@
 // lib/pages/home_page.dart
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
@@ -22,44 +24,47 @@ class _HomePageState extends State<HomePage> {
   List<Profile> profiles = [];
 
   /// Aktuelles Setup – Achte auf korrekte Maße (bei gedrehten Monitoren vertauschte width/height)
-  List<MonitorTileData> currentMonitors = [
-    MonitorTileData(
-      id: "InfoVision Optoelectronics (Kunshan) Co.,Ltd China 0x057D Unknown",
-      x: 3000,
-      y: 2,
-      width: 1920,
-      height: 1080,
-      rotation: 0,
-      resolution: "1920x1080",
-      orientation: "landscape",
-    ),
-    MonitorTileData(
-      id: "Samsung Electric Company S24E450 H4ZJ700279",
-      x: 1080,
-      y: 0,
-      width: 1920,
-      height: 1080,
-      rotation: 0,
-      resolution: "1920x1080",
-      orientation: "landscape",
-    ),
-    MonitorTileData(
-      id: "Samsung Electric Company S24E450 H4ZJ704845",
-      x: 0,
-      y: 0,
-      width: 1080,  // width und height vertauscht für portrait
-      height: 1920,
-      rotation: 90,
-      resolution: "1080x1920",
-      orientation: "portrait",
-    ),
-  ];
+  List<MonitorTileData> currentMonitors = [];
+
+  Future<List<MonitorTileData>> getConnectedMonitors() async {
+    final result = await Process.run('swaymsg', ['-t', 'get_outputs']);
+    if (result.exitCode != 0) {
+      throw Exception('swaymsg failed: ${result.stderr}');
+    }
+    final outputs = jsonDecode(result.stdout) as List;
+    List<MonitorTileData> monitors = [];
+    for (var output in outputs) {
+      if (output['active'] == true) {
+        // Adjust these values according to your needs. For example:
+        String name = output['name'];
+        double x = (output['rect']['x'] as num).toDouble();
+        double y = (output['rect']['y'] as num).toDouble();
+        double width = (output['rect']['width'] as num).toDouble();
+        double height = (output['rect']['height'] as num).toDouble();
+        int rotation = 0;
+        String orientation = (width >= height) ? "landscape" : "portrait";
+        String resolution = "${width.toInt()}x${height.toInt()}";
+
+        monitors.add(MonitorTileData(
+          id: name,
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          rotation: rotation,
+          resolution: resolution,
+          orientation: orientation,
+        ));
+      }
+    }
+    return monitors;
+  }
 
   /// Welches Profil wird gerade bearbeitet?
   int? activeProfileIndex;
 
   /// Snap-Toleranz in Pixeln
-  final double snapThreshold = 50.0;
+  final double snapThreshold = 500.0;
 
   /// Skalierungs-/Positionsparameter
   double _scaleFactor = 1.0;
@@ -85,10 +90,22 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _updateConnectedMonitors() async {
+    try {
+      List<MonitorTileData> monitors = await getConnectedMonitors();
+      setState(() {
+        currentMonitors = monitors;
+      });
+    } catch (e) {
+      debugPrint("Error getting connected monitors: $e");
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _loadConfig();
+    _updateConnectedMonitors();
   }
 
   /// Profile laden und ggf. Standard-Auswahl setzen.
@@ -329,9 +346,12 @@ class _HomePageState extends State<HomePage> {
     _autoSave();
   }
 
+
+
   @override
   Widget build(BuildContext context) {
     final currentSetupIndex = _findProfileWithAllCurrentMonitors();
+    
     return Scaffold(
       appBar: AppBar(
         title: const Text("Kanshi GUI"),
