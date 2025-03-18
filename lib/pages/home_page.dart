@@ -313,13 +313,19 @@ class _HomePageState extends State<HomePage> {
 
   /// Test, ob eines der Profile alle IDs aus currentMonitors besitzt
   int? _findProfileWithAllCurrentMonitors() {
+    bool idsMatch(String id1, String id2) {
+      String base1 = id1.replaceAll("Unknown", "").trim();
+      String base2 = id2.replaceAll("Unknown", "").trim();
+      return base1 == base2;
+    }
+
     for (int i = 0; i < profiles.length; i++) {
       final profile = profiles[i];
       if (profile.monitors.length != currentMonitors.length) continue;
 
       bool allMatch = true;
       for (final cm in currentMonitors) {
-        if (!profile.monitors.any((pm) => pm.id == cm.id)) {
+        if (!profile.monitors.any((pm) => idsMatch(pm.id, cm.id))) {
           allMatch = false;
           break;
         }
@@ -332,10 +338,22 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Neues Profil "Current Setup" anlegen
+  /// Creates a new "Current Setup" profile.
+  /// Rotated monitors (90° or 270°) will have width and height swapped,
+  /// so they are displayed correctly in the GUI.
   void _createCurrentSetup() {
     final newProfile = Profile(
       name: "Current Setup",
-      monitors: currentMonitors.map((m) => m.copyWith()).toList(),
+      monitors: currentMonitors.map((m) {
+        if (m.rotation == 90 || m.rotation == 270) {
+          return m.copyWith(
+            width: m.height,
+            height: m.width,
+            orientation: "portrait",
+          );
+        }
+        return m;
+      }).toList(),
     );
     setState(() {
       profiles.add(newProfile);

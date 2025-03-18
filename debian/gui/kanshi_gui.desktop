@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=kanshi_gui
+GenericName=kanshi_gui
+Comment=A simple gui for kanshi.
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=Flutter;kanshi;
