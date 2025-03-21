@@ -35,7 +35,14 @@ class _HomePageState extends State<HomePage> {
     List<MonitorTileData> monitors = [];
     for (var output in outputs) {
       if (output['active'] == true) {
-        String name = output['name'];
+        String id = output['name']; // z.B. "eDP-1"
+        // Zusammensetzen des vollen Herstellerstrings:
+        String make = output['make'] ?? "";
+        String model = output['model'] ?? "";
+        String manufacturer = (make + " " + model).trim();
+        if (manufacturer.isEmpty) {
+          manufacturer = id;
+        }
         double x = (output['rect']['x'] as num).toDouble();
         double y = (output['rect']['y'] as num).toDouble();
         double width = (output['rect']['width'] as num).toDouble();
@@ -44,8 +51,10 @@ class _HomePageState extends State<HomePage> {
         String orientation = (width >= height) ? "landscape" : "portrait";
         String resolution = "${width.toInt()}x${height.toInt()}";
 
+        // Verwende den vollen Herstellerstring als id für konsistentes Matching.
         monitors.add(MonitorTileData(
-          id: name,
+          id: manufacturer,
+          manufacturer: manufacturer,
           x: x,
           y: y,
           width: width,
@@ -59,31 +68,70 @@ class _HomePageState extends State<HomePage> {
     return monitors;
   }
 
-  /// Which profile is currently active?
+  // Passt das "Current Setup" an die aktuell verbundenen Monitore an.
+  Future<void> ensureCurrentSetupMatchesConnectedMonitors() async {
+    List<MonitorTileData> connected = await getConnectedMonitors();
+
+    // Verwende den vollen Herstellerstring als Normalisierung.
+    Set<String> normalize(List<MonitorTileData> list) =>
+        list.map((m) => m.manufacturer.trim()).toSet();
+
+    Set<String> connectedIds = normalize(connected);
+
+    int index = profiles.indexWhere((p) => p.name == "Current Setup");
+
+    if (index == -1) {
+      Profile currentSetup = Profile(name: "Current Setup", monitors: connected);
+      setState(() {
+        profiles.add(currentSetup);
+        activeProfileIndex = profiles.length - 1;
+      });
+    } else {
+      Profile currentSetup = profiles[index];
+      Set<String> currentIds = normalize(currentSetup.monitors);
+      if (currentIds.difference(connectedIds).isNotEmpty ||
+          connectedIds.difference(currentIds).isNotEmpty) {
+        setState(() {
+          profiles[index] = Profile(name: "Current Setup", monitors: connected);
+          activeProfileIndex = index;
+        });
+      }
+    }
+
+    // Schreibe "Current Setup" in die Datei, die kanshi als aktives Profil erwartet.
+    final home = Platform.environment['HOME'] ?? '/home/nburkert';
+    final file = File("$home/.config/kanshi/current");
+    await file.create(recursive: true);
+    await file.writeAsString("Current Setup");
+
+    _autoSave();
+  }
+
+  /// Welches Profil ist aktuell aktiv?
   int? activeProfileIndex;
 
-  /// Sidebar state – if true, sidebar is visible.
+  /// Sidebar state – true, wenn Sidebar sichtbar.
   bool _isSidebarOpen = false;
 
   /// Snap threshold (in pixels)
   final double snapThreshold = 500.0;
 
-  /// Scaling and positioning parameters.
+  /// Scaling- und Positionierungsparameter.
   double _scaleFactor = 1.0;
   double _offsetX = 0;
   double _offsetY = 0;
   bool _scalingInitialized = false;
 
-  /// Scaled monitor data for display.
+  /// Skaliertes Monitor-Layout für die Anzeige.
   List<MonitorTileData> _displayMonitors = [];
 
-  /// Old positions for overlap revert.
+  /// Alte Positionen vor Drag zum Zurücksetzen.
   Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
 
-  /// Timer for debounced saving.
+  /// Timer für debounced saving.
   Timer? _saveTimer;
 
-  /// Active monitors (from the active profile).
+  /// Aktive Monitore (aus dem aktiven Profil).
   List<MonitorTileData> get activeMonitors {
     if (activeProfileIndex == null) {
       return [];
@@ -95,13 +143,16 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _loadConfig();
-    _updateConnectedMonitors();
-    // If no active setup, open sidebar by default.
-    _isSidebarOpen = activeProfileIndex == null;
+    _initSetup();
   }
 
-  void _updateConnectedMonitors() async {
+  Future<void> _initSetup() async {
+    await _loadConfig();
+    await _updateConnectedMonitors();
+    await ensureCurrentSetupMatchesConnectedMonitors();
+  }
+
+  Future<void> _updateConnectedMonitors() async {
     try {
       List<MonitorTileData> monitors = await getConnectedMonitors();
       setState(() {
@@ -112,8 +163,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Load profiles and set default active profile.
-  void _loadConfig() async {
+  /// Lädt die Profile und setzt das Standardprofil.
+  Future<void> _loadConfig() async {
     List<Profile> loaded = await _configService.loadProfiles();
     setState(() {
       profiles = loaded;
@@ -123,7 +174,6 @@ class _HomePageState extends State<HomePage> {
       } else if (profiles.isNotEmpty) {
         activeProfileIndex = 0;
       }
-      // Set sidebar open if no current setup exists.
       _isSidebarOpen = (activeProfileIndex == null);
     });
   }
@@ -140,7 +190,7 @@ class _HomePageState extends State<HomePage> {
     _debouncedAutoSave();
   }
 
-  /// Update display monitors (scaled) based on absolute coordinates.
+  /// Aktualisiert das angezeigte Monitor-Layout (skaliert) basierend auf absoluten Koordinaten.
   void _updateDisplayMonitors(BoxConstraints constraints) {
     final mons = activeMonitors;
     if (mons.isEmpty) {
@@ -186,7 +236,7 @@ class _HomePageState extends State<HomePage> {
   void _onMonitorUpdate(MonitorTileData updatedTile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
     final mons = activeMonitors;
-    final index = mons.indexWhere((m) => m.id == updatedTile.id);
+    final index = mons.indexWhere((m) => m.manufacturer == updatedTile.manufacturer);
     if (index == -1) return;
     final oldMonitor = mons[index];
     final oldRotation = oldMonitor.rotation;
@@ -225,27 +275,27 @@ class _HomePageState extends State<HomePage> {
 
   void _onMonitorDragStart(MonitorTileData tile) {
     if (activeProfileIndex == null) return;
-    final index = activeMonitors.indexWhere((m) => m.id == tile.id);
+    final index = activeMonitors.indexWhere((m) => m.manufacturer == tile.manufacturer);
     if (index == -1) return;
-    _oldPositionsBeforeDrag[tile.id] = activeMonitors[index];
+    _oldPositionsBeforeDrag[tile.manufacturer] = activeMonitors[index];
   }
 
   void _onMonitorDragEnd(MonitorTileData tile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
-    final index = activeMonitors.indexWhere((m) => m.id == tile.id);
+    final index = activeMonitors.indexWhere((m) => m.manufacturer == tile.manufacturer);
     if (index == -1) return;
     final newMonitors = [...activeMonitors];
     final updated = _snapToEdges(newMonitors[index], newMonitors);
     newMonitors[index] = updated;
     if (_hasOverlap(updated, newMonitors, index)) {
-      final oldPos = _oldPositionsBeforeDrag[tile.id];
+      final oldPos = _oldPositionsBeforeDrag[tile.manufacturer];
       if (oldPos != null) {
         newMonitors[index] = oldPos;
       }
     }
     setState(() {
       profiles[activeProfileIndex!].monitors = newMonitors;
-      _oldPositionsBeforeDrag.remove(tile.id);
+      _oldPositionsBeforeDrag.remove(tile.manufacturer);
       _buildAndSave(constraints);
     });
   }
@@ -260,7 +310,7 @@ class _HomePageState extends State<HomePage> {
     double newY = m.y;
     for (int i = 0; i < all.length; i++) {
       final other = all[i];
-      if (other.id == m.id) continue;
+      if (other.manufacturer == m.manufacturer) continue;
       final left = m.x;
       final right = m.x + m.width;
       final top = m.y;
@@ -305,17 +355,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   int? _findProfileWithAllCurrentMonitors() {
-    bool idsMatch(String id1, String id2) {
-      String base1 = id1.replaceAll("Unknown", "").trim();
-      String base2 = id2.replaceAll("Unknown", "").trim();
-      return base1 == base2;
+    bool manufacturersMatch(String m1, String m2) {
+      return m1.trim() == m2.trim();
     }
     for (int i = 0; i < profiles.length; i++) {
       final profile = profiles[i];
       if (profile.monitors.length != currentMonitors.length) continue;
       bool allMatch = true;
       for (final cm in currentMonitors) {
-        if (!profile.monitors.any((pm) => idsMatch(pm.id, cm.id))) {
+        if (!profile.monitors.any((pm) => manufacturersMatch(pm.manufacturer, cm.manufacturer))) {
           allMatch = false;
           break;
         }
@@ -352,7 +400,6 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _isSidebarOpen = !_isSidebarOpen;
     });
-
   }
 
   @override
@@ -368,10 +415,9 @@ class _HomePageState extends State<HomePage> {
         ),
         title: const Text("Kanshi GUI"),
       ),
-      // Wrap the entire layout in a Stack to animate the sidebar.
       body: Stack(
         children: [
-          // Main content area:
+          // Main content area
           Positioned.fill(
             left: _isSidebarOpen ? 320 : 0,
             child: MouseRegion(
@@ -385,9 +431,9 @@ class _HomePageState extends State<HomePage> {
                       children: [
                         for (final tile in _displayMonitors)
                           MonitorTile(
-                            key: ValueKey(tile.id),
+                            key: ValueKey(tile.manufacturer),
                             data: tile,
-                            exists: currentMonitors.any((m) => m.id == tile.id),
+                            exists: currentMonitors.any((m) => m.manufacturer == tile.manufacturer),
                             snapThreshold: snapThreshold,
                             containerSize: Size(constraints.maxWidth, constraints.maxHeight),
                             scaleFactor: _scaleFactor,
@@ -410,7 +456,7 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
-          // Sidebar (animated sliding in/out from left)
+          // Sidebar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
