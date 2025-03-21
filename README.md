@@ -1,4 +1,4 @@
-![kanshi_gui banner](https://raw.githubusercontent.com/nurkert/kanshi_gui/main/assets/banner.png)
+![kanshi_gui banner](https://raw.githubusercontent.com/nurkert/kanshi_gui/blob/main/assets/banner.png)
 
 Kanshi GUI is a Flutter-based graphical user interface for managing dynamic display configurations on Wayland systems. It simplifies the process of defining and switching between output profiles, enhancing the functionality provided by the [kanshi](https://github.com/emersion/kanshi) utility.
 
