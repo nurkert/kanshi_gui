@@ -100,13 +100,13 @@ class _MonitorTileState extends State<MonitorTile> {
           // Wir machen hier kein Transform.rotate mehr,
           // sondern zeigen den Text normal an.
           // Die "Rotation" wird stattdessen in width/height gespiegelt (siehe HomePage).
-          child: FittedBox(
+          child:  FittedBox(
             fit: BoxFit.scaleDown,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  widget.data.id,
+                  widget.data.manufacturer,  // Zeigt den vollständigen String an
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   maxLines: 2,
@@ -120,8 +120,6 @@ class _MonitorTileState extends State<MonitorTile> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  // z.B. "landscape" oder "portrait" oder "rotation=90"
-                  // Kannst du anpassen wie du willst
                   "${widget.data.orientation} (${widget.data.rotation}°)",
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 14),
