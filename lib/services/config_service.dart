@@ -113,7 +113,7 @@ Future<List<Profile>> loadProfiles() async {
 
       // Schreibe den kompletten Herstellerstring ohne "size":
       buffer.writeln(
-        "    output '${monitor.manufacturer}' enable scale 1 transform $transformStr position $posX,$posY"
+        "    output '${monitor.id}' enable scale 1 transform $transformStr position $posX,$posY"
       );
       buffer.writeln(
         "    exec swaymsg \"workspace $workspace output '${monitor.manufacturer}'; workspace $workspace\""
