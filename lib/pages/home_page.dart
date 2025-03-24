@@ -36,7 +36,6 @@ class _HomePageState extends State<HomePage> {
     for (var output in outputs) {
       if (output['active'] == true) {
         String id = output['name']; // z.B. "eDP-1"
-        // Zusammensetzen des vollen Herstellerstrings:
         String make = output['make'] ?? "";
         String model = output['model'] ?? "";
         String manufacturer = (make + " " + model).trim();
@@ -53,7 +52,7 @@ class _HomePageState extends State<HomePage> {
 
         // Verwende den vollen Herstellerstring als id für konsistentes Matching.
         monitors.add(MonitorTileData(
-          id: manufacturer,
+          id: id, // Verwende den tatsächlichen, eindeutigen Output-Namen
           manufacturer: manufacturer,
           x: x,
           y: y,
@@ -236,7 +235,7 @@ class _HomePageState extends State<HomePage> {
   void _onMonitorUpdate(MonitorTileData updatedTile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
     final mons = activeMonitors;
-    final index = mons.indexWhere((m) => m.manufacturer == updatedTile.manufacturer);
+    final index = mons.indexWhere((m) => m.id == updatedTile.id);
     if (index == -1) return;
     final oldMonitor = mons[index];
     final oldRotation = oldMonitor.rotation;
@@ -275,14 +274,14 @@ class _HomePageState extends State<HomePage> {
 
   void _onMonitorDragStart(MonitorTileData tile) {
     if (activeProfileIndex == null) return;
-    final index = activeMonitors.indexWhere((m) => m.manufacturer == tile.manufacturer);
+    final index = activeMonitors.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
     _oldPositionsBeforeDrag[tile.manufacturer] = activeMonitors[index];
   }
 
   void _onMonitorDragEnd(MonitorTileData tile, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
-    final index = activeMonitors.indexWhere((m) => m.manufacturer == tile.manufacturer);
+    final index = activeMonitors.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
     final newMonitors = [...activeMonitors];
     final updated = _snapToEdges(newMonitors[index], newMonitors);
@@ -431,7 +430,7 @@ class _HomePageState extends State<HomePage> {
                       children: [
                         for (final tile in _displayMonitors)
                           MonitorTile(
-                            key: ValueKey(tile.manufacturer),
+                            key: ValueKey(tile.id),
                             data: tile,
                             exists: currentMonitors.any((m) => m.manufacturer == tile.manufacturer),
                             snapThreshold: snapThreshold,
