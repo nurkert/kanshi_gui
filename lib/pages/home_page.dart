@@ -309,7 +309,8 @@ class _HomePageState extends State<HomePage> {
     double newY = m.y;
     for (int i = 0; i < all.length; i++) {
       final other = all[i];
-      if (other.manufacturer == m.manufacturer) continue;
+      // Vergleiche anhand der eindeutigen ID statt des Herstellers:
+      if (other.id == m.id) continue;
       final left = m.x;
       final right = m.x + m.width;
       final top = m.y;
