@@ -1,8 +1,7 @@
-// lib/widgets/profile_list_item.dart
-
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 
+/// Widget showing a single profile with edit and delete controls.
 class ProfileListItem extends StatefulWidget {
   final Profile profile;
   final bool isActive;
@@ -17,7 +16,7 @@ class ProfileListItem extends StatefulWidget {
     required this.isActive,
     required this.onSelect,
     required this.onNameChanged,
-    required this.onDelete,
+    this.onDelete,
     required this.exists,
   }) : super(key: key);
 
@@ -26,56 +25,49 @@ class ProfileListItem extends StatefulWidget {
 }
 
 class _ProfileListItemState extends State<ProfileListItem> {
-  bool isEditing = false;
-  late TextEditingController _controller;
+  bool _editing = false;
+  late TextEditingController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.profile.name);
+    _ctrl = TextEditingController(text: widget.profile.name);
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Setze unterschiedliche Hintergrundfarben:
-    Color backgroundColor = widget.isActive ? Colors.teal.shade300 : Colors.transparent;
+    final bg = widget.isActive ? Colors.teal.shade300 : Colors.transparent;
     return Container(
-      color: backgroundColor,
+      color: bg,
       child: ListTile(
-        title: isEditing
-            ? TextField(
-                controller: _controller,
-                autofocus: true,
-                onSubmitted: (value) {
-                  widget.onNameChanged(value);
-                  setState(() {
-                    isEditing = false;
-                  });
-                },
-              )
-            : Text(widget.profile.name),
+        title:
+            _editing
+                ? TextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  onSubmitted: (v) {
+                    widget.onNameChanged(v);
+                    setState(() => _editing = false);
+                  },
+                )
+                : Text(widget.profile.name),
         leading: IconButton(
           icon: const Icon(Icons.edit),
-          tooltip: 'Edit name',
-          onPressed: () {
-            setState(() {
-              isEditing = true;
-            });
-          },
+          onPressed: () => setState(() => _editing = true),
         ),
-        trailing: widget.onDelete != null
-            ? IconButton(
-                icon: const Icon(Icons.delete),
-                tooltip: 'Delete profile',
-                onPressed: widget.onDelete,
-              )
-            : null,
+        trailing:
+            widget.onDelete != null
+                ? IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: widget.onDelete,
+                )
+                : null,
         onTap: widget.onSelect,
       ),
     );
