@@ -1,25 +1,18 @@
-// lib/widgets/monitor_tile.dart
-
 import 'package:flutter/material.dart';
-import 'dart:math';
-import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import '../models/monitor_tile_data.dart';
 
-/// Ein visuelles Rechteck, das man per Drag verschieben kann.
-/// Rechtsklick (onSecondaryTap) erhöht rotation um +90°.
+/// Draggable, rotatable visual representation of a monitor.
 class MonitorTile extends StatefulWidget {
-  final MonitorTileData data;    // bereits auf die UI-Scale heruntergerechnete Koordinaten
+  final MonitorTileData data;
   final bool exists;
   final double snapThreshold;
   final Size containerSize;
   final double scaleFactor;
   final double offsetX;
   final double offsetY;
-  final double originX;
-  final double originY;
-
-  final Function(MonitorTileData) onUpdate; // beim Drag oder Rotation
-  final VoidCallback onDragEnd;             
-  final Function()? onDragStart;           
+  final VoidCallback? onDragStart;
+  final Function(MonitorTileData) onUpdate;
+  final VoidCallback onDragEnd;
 
   const MonitorTile({
     Key? key,
@@ -30,11 +23,9 @@ class MonitorTile extends StatefulWidget {
     required this.scaleFactor,
     required this.offsetX,
     required this.offsetY,
-    required this.originX,
-    required this.originY,
+    this.onDragStart,
     required this.onUpdate,
     required this.onDragEnd,
-    this.onDragStart,
   }) : super(key: key);
 
   @override
@@ -42,53 +33,37 @@ class MonitorTile extends StatefulWidget {
 }
 
 class _MonitorTileState extends State<MonitorTile> {
-  late Offset position; // Position innerhalb der Stack (skaliert)
+  late Offset _pos;
 
   @override
   void initState() {
     super.initState();
-    position = Offset(widget.data.x, widget.data.y);
+    _pos = Offset(widget.data.x, widget.data.y);
   }
 
   @override
-  void didUpdateWidget(MonitorTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Falls sich die Koordinaten ändern, aktualisieren wir die Position.
-    position = Offset(widget.data.x, widget.data.y);
+  void didUpdateWidget(MonitorTile old) {
+    super.didUpdateWidget(old);
+    _pos = Offset(widget.data.x, widget.data.y);
   }
 
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      left: position.dx,
-      top: position.dy,
+      left: _pos.dx,
+      top: _pos.dy,
       width: widget.data.width,
       height: widget.data.height,
       child: GestureDetector(
-        onPanStart: (_) {
-          if (widget.onDragStart != null) {
-            widget.onDragStart!();
-          }
+        onPanStart: (_) => widget.onDragStart?.call(),
+        onPanUpdate: (d) {
+          setState(() => _pos += d.delta);
+          widget.onUpdate(widget.data.copyWith(x: _pos.dx, y: _pos.dy));
         },
-        onPanUpdate: (details) {
-          setState(() {
-            position += details.delta;
-          });
-          // Melden neue Position an den Parent
-          widget.onUpdate(
-            widget.data.copyWith(
-              x: position.dx,
-              y: position.dy,
-            ),
-          );
-        },
-        onPanEnd: (_) {
-          widget.onDragEnd();
-        },
+        onPanEnd: (_) => widget.onDragEnd(),
         onSecondaryTap: () {
-          // Drehe um +90°
-          final newRotation = (widget.data.rotation + 90) % 360;
-          widget.onUpdate(widget.data.copyWith(rotation: newRotation));
+          final newRot = (widget.data.rotation + 90) % 360;
+          widget.onUpdate(widget.data.copyWith(rotation: newRot));
         },
         child: Container(
           decoration: BoxDecoration(
@@ -97,35 +72,17 @@ class _MonitorTileState extends State<MonitorTile> {
               width: 2,
             ),
           ),
-          // Wir machen hier kein Transform.rotate mehr,
-          // sondern zeigen den Text normal an.
-          // Die "Rotation" wird stattdessen in width/height gespiegelt (siehe HomePage).
-          child:  FittedBox(
+          child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  widget.data.manufacturer,  // Zeigt den vollständigen String an
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  widget.data.manufacturer,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                Text(
-                  widget.data.resolution,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  "${widget.data.orientation} (${widget.data.rotation}°)",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(widget.data.resolution),
+                Text("\${widget.data.orientation} (\${widget.data.rotation}°)"),
               ],
             ),
           ),
