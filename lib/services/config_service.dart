@@ -1,131 +1,142 @@
-// lib/services/config_service.dart
-
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
+
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 
 class ConfigService {
-  final String configPath = "${Platform.environment['HOME']}/.config/kanshi/config";
-Future<List<Profile>> loadProfiles() async {
-  final file = File(configPath);
-  if (await file.exists()) {
+  final String configPath =
+      "${Platform.environment['HOME']}/.config/kanshi/config";
+
+  /*───────────────────────────────*
+   *  LOAD                          *
+   *───────────────────────────────*/
+  Future<List<Profile>> loadProfiles() async {
+    final file = File(configPath);
+    if (!await file.exists()) return [];
+
     final content = await file.readAsString();
-    List<Profile> profiles = [];
+    final profiles = <Profile>[];
 
-    // Profil-Blöcke finden: profile 'Name' { ... }
-    RegExp profileBlockRegExp = RegExp(
-      r"profile\s+'([^']+)'\s*\{([^}]*)\}",
-      dotAll: true,
-    );
-    Iterable<RegExpMatch> profileMatches = profileBlockRegExp.allMatches(content);
+    final profileRE =
+        RegExp(r"profile\s+'([^']+)'\s*\{([^}]*)\}", dotAll: true);
 
-    for (final match in profileMatches) {
-      String profileName = match.group(1)!.trim();
-      String blockContent = match.group(2)!;
+    for (final match in profileRE.allMatches(content)) {
+      final name = match.group(1)!.trim();
+      final body = match.group(2)!;
 
-      List<MonitorTileData> monitors = [];
+      final outputs = <MonitorTileData>[];
 
-      // Regex ohne size-Anteil:
-      RegExp outputLineRegExp = RegExp(
-        r"output\s+'([^']+)'\s+(enable|disable)(?:\s+scale\s+(\S+))?\s+transform\s+(\S+)\s+position\s+(-?\d+),(-?\d+)",
+      // ── ohne "mode" ──
+      final outputRE = RegExp(
+        r"output\s+'([^']+)'\s+(enable|disable)"
+        r"(?:\s+scale\s+(\S+))?"
+        r"\s+transform\s+(\S+)\s+position\s+(-?\d+),(-?\d+)",
       );
-      Iterable<RegExpMatch> outputMatches = outputLineRegExp.allMatches(blockContent);
 
-      for (final outputMatch in outputMatches) {
-        // Gruppe 1: kompletter Herstellerstring (als ID und Anzeige)
-        String manufacturer = outputMatch.group(1)!.trim();
-        double x = double.tryParse(outputMatch.group(5)!) ?? 0;
-        double y = double.tryParse(outputMatch.group(6)!) ?? 0;
-        String transform = outputMatch.group(4)!.trim();
+      for (final o in outputRE.allMatches(body)) {
+        final fullName = o.group(1)!.trim();
+        final rotationStr = o.group(4)!.trim();
+        final x = double.parse(o.group(5)!);
+        final y = double.parse(o.group(6)!);
 
-        int rotation = 0;
-        if (transform == 'normal') {
-          rotation = 0;
-        } else if (transform == '90') {
-          rotation = 90;
-        } else if (transform == '180') {
-          rotation = 180;
-        } else if (transform == '270') {
-          rotation = 270;
-        }
+        final rotation = switch (rotationStr) {
+          '90' => 90,
+          '180' => 180,
+          '270' => 270,
+          _ => 0,
+        };
 
-        // Default-Werte: Für normal/180 nehmen wir 1920x1080, bei 90/270 1080x1920
-        double width, height;
-        if (rotation == 90 || rotation == 270) {
-          width = 1080;
-          height = 1920;
-        } else {
-          width = 1920;
-          height = 1080;
-        }
-        String resolution = "${width.toInt()}x${height.toInt()}";
-        String orientation = (rotation == 90 || rotation == 270) ? "portrait" : "landscape";
+        // Fallback‑Größen (wie ursprünglich)
+        final landscape = rotation % 180 == 0;
+        final width = landscape ? 1920.0 : 1080.0;
+        final height = landscape ? 1080.0 : 1920.0;
 
-        monitors.add(MonitorTileData(
-          id: manufacturer,
-          manufacturer: manufacturer,
-          x: x,
-          y: y,
-          width: width,
-          height: height,
-          rotation: rotation,
-          resolution: resolution,
-          orientation: orientation,
-        ));
+        final resolution = "${width.toInt()}x${height.toInt()}";
+        final orientation =
+            (rotation % 180 == 0) ? "landscape" : "portrait";
+
+        outputs.add(
+          MonitorTileData(
+            id: fullName,
+            manufacturer: fullName,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            rotation: rotation,
+            resolution: resolution,
+            orientation: orientation,
+          ),
+        );
       }
-      profiles.add(Profile(name: profileName, monitors: monitors));
+
+      profiles.add(Profile(name: name, monitors: outputs));
     }
+
     return profiles;
   }
-  return [];
-}
 
-  
- Future<void> saveProfiles(List<Profile> profiles) async {
-  StringBuffer buffer = StringBuffer();
+  /*───────────────────────────────*
+   *  SAVE                          *
+   *───────────────────────────────*/
+  Future<void> saveProfiles(List<Profile> profiles) async {
+    final buffer = StringBuffer();
 
-  for (final profile in profiles) {
-    // Korrigiere negative Koordinaten:
-    double minX = profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
-    double minY = profile.monitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
-    double offsetX = (minX < 0) ? -minX : 0;
-    double offsetY = (minY < 0) ? -minY : 0;
+    for (final profile in profiles) {
+      // Negative Koordinaten eliminieren
+      final minX =
+          profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
+      final minY =
+          profile.monitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
+      final offsetX = minX < 0 ? -minX : 0;
+      final offsetY = minY < 0 ? -minY : 0;
 
-    List<MonitorTileData> adjustedMonitors = profile.monitors.map((m) {
-      return m.copyWith(
-        x: m.x + offsetX,
-        y: m.y + offsetY,
-      );
-    }).toList();
+      final mons = profile.monitors
+          .map((m) => m.copyWith(x: m.x + offsetX, y: m.y + offsetY))
+          .toList()
+        ..sort((a, b) => a.x.compareTo(b.x));
 
-    // Sortiere Monitore von links nach rechts:
-    adjustedMonitors.sort((a, b) => a.x.compareTo(b.x));
+      buffer.writeln("profile '${profile.name}' {");
 
-    buffer.writeln("profile '${profile.name}' {");
+      /*── 1. Outputs ───────────────────────────────────────────*/
+      for (final m in mons) {
+        final posX = m.x < 0 ? 0 : m.x.toInt();
+        final posY = m.y < 0 ? 0 : m.y.toInt();
+        final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
-    int workspace = 1;
-    for (final monitor in adjustedMonitors) {
-      int posX = (monitor.x < 0) ? 0 : monitor.x.toInt();
-      int posY = (monitor.y < 0) ? 0 : monitor.y.toInt();
+        buffer.writeln(
+          "    output '${m.id}' enable scale 1 transform $transform position $posX,$posY",
+        );
+      }
 
-      String transformStr = (monitor.rotation == 0) ? 'normal' : monitor.rotation.toString();
+      /*── 2. Workspace‑Moves ──────────────────────────────────*
+       *    Zuerst hohe Nummern → dann Zielnummern              */
+      final tmpBase = mons.length + 1; // z. B. 4 … 6 bei 3 Monitoren
 
-      // Schreibe den kompletten Herstellerstring ohne "size":
+      for (var i = 0; i < mons.length; i++) {
+        final m = mons[i];
+        final tmpWS = tmpBase + i;
+        buffer.writeln(
+          "    exec swaymsg \"workspace $tmpWS output '${m.manufacturer}'; workspace $tmpWS\"",
+        );
+      }
+      for (var i = 0; i < mons.length; i++) {
+        final m = mons[i];
+        final finalWS = i + 1;
+        buffer.writeln(
+          "    exec swaymsg \"workspace $finalWS output '${m.manufacturer}'; workspace $finalWS\"",
+        );
+      }
+
       buffer.writeln(
-        "    output '${monitor.id}' enable scale 1 transform $transformStr position $posX,$posY"
+        "    exec echo \"${profile.name}\" > ~/.current_kanshi_profile",
       );
-      buffer.writeln(
-        "    exec swaymsg \"workspace $workspace output '${monitor.manufacturer}'; workspace $workspace\""
-      );
-      workspace++;
+      buffer.writeln("}\n");
     }
-    buffer.writeln("    exec echo \"${profile.name}\" > ~/.current_kanshi_profile");
-    buffer.writeln("}\n");
+
+    final file = File(configPath);
+    await file.create(recursive: true);
+    await file.writeAsString(buffer.toString());
   }
-
-  final file = File(configPath);
-  await file.writeAsString(buffer.toString());
-}
-
 }

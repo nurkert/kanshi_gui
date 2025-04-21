@@ -26,46 +26,66 @@ class _HomePageState extends State<HomePage> {
   /// List of currently connected monitors.
   List<MonitorTileData> currentMonitors = [];
 
-  Future<List<MonitorTileData>> getConnectedMonitors() async {
-    final result = await Process.run('swaymsg', ['-t', 'get_outputs']);
-    if (result.exitCode != 0) {
-      throw Exception('swaymsg failed: ${result.stderr}');
-    }
-    final outputs = jsonDecode(result.stdout) as List;
-    List<MonitorTileData> monitors = [];
-    for (var output in outputs) {
-      if (output['active'] == true) {
-        String id = output['name']; // z.B. "eDP-1"
-        String make = output['make'] ?? "";
-        String model = output['model'] ?? "";
-        String manufacturer = (make + " " + model).trim();
-        if (manufacturer.isEmpty) {
-          manufacturer = id;
-        }
-        double x = (output['rect']['x'] as num).toDouble();
-        double y = (output['rect']['y'] as num).toDouble();
-        double width = (output['rect']['width'] as num).toDouble();
-        double height = (output['rect']['height'] as num).toDouble();
-        int rotation = 0;
-        String orientation = (width >= height) ? "landscape" : "portrait";
-        String resolution = "${width.toInt()}x${height.toInt()}";
-
-        // Verwende den vollen Herstellerstring als id für konsistentes Matching.
-        monitors.add(MonitorTileData(
-          id: id, // Verwende den tatsächlichen, eindeutigen Output-Namen
-          manufacturer: manufacturer,
-          x: x,
-          y: y,
-          width: width,
-          height: height,
-          rotation: rotation,
-          resolution: resolution,
-          orientation: orientation,
-        ));
-      }
-    }
-    return monitors;
+ Future<List<MonitorTileData>> getConnectedMonitors() async {
+  final result = await Process.run('swaymsg', ['-t', 'get_outputs']);
+  if (result.exitCode != 0) {
+    throw Exception('swaymsg failed: ${result.stderr}');
   }
+
+  final outputs = jsonDecode(result.stdout) as List;
+  List<MonitorTileData> monitors = [];
+
+  for (final output in outputs) {
+    if (output['active'] != true) continue;
+
+    // ───── Vollständiger, stabiler Identifier ─────
+    final make   = (output['make']   ?? 'Unknown').toString().trim();
+    final model  = (output['model']  ?? 'Unknown').toString().trim();
+    final serial = (output['serial'] ?? 'Unknown').toString().trim();
+    String fullName = '$make $model $serial'.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    // Connector‑Name wird nicht mehr als ID benutzt ⇒ nur noch informativ
+    // final connector = output['name'];  // eDP‑1, DP‑1 …
+
+    // ───── höchste verfügbare Auflösung bestimmen ─────
+    final modes = (output['modes'] as List).cast<Map<String, dynamic>>();
+    Map<String, dynamic> best = modes.reduce((a, b) {
+      int aPx = a['width'] * a['height'];
+      int bPx = b['width'] * b['height'];
+      if (aPx != bPx) return aPx > bPx ? a : b;
+      return (a['refresh'] > b['refresh']) ? a : b;
+    });
+
+    double width  = (best['width']  as num).toDouble();
+    double height = (best['height'] as num).toDouble();
+
+    // ───── Rotation korrekt übernehmen ─────
+    String transform = (output['transform'] ?? 'normal').toString();
+    int rotation = switch (transform) {
+      '90'      || 'flipped-90'  => 90,
+      '180'     || 'flipped-180' => 180,
+      '270'     || 'flipped-270' => 270,
+      _                               => 0,
+    };
+
+    String orientation = (rotation % 180 == 0)
+        ? (width >= height ? 'landscape' : 'portrait')
+        : (width >= height ? 'portrait'  : 'landscape');
+
+    monitors.add(MonitorTileData(
+      id:  fullName,           // <── neue, stabile ID
+      manufacturer: fullName,
+      x:  (output['rect']['x']      as num).toDouble(),
+      y:  (output['rect']['y']      as num).toDouble(),
+      width:  width,
+      height: height,
+      rotation: rotation,
+      resolution: '${width.toInt()}x${height.toInt()}',
+      orientation: orientation,
+    ));
+  }
+  return monitors;
+}
 
   // Passt das "Current Setup" an die aktuell verbundenen Monitore an.
   Future<void> ensureCurrentSetupMatchesConnectedMonitors() async {
