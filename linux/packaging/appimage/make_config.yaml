@@ -1,0 +1,3 @@
+display_name: kanshi_gui
+icon: assets/kanshi_gui.png      # falls ihr ein Icon habt
+include: []                      # Shared Libraries, falls nötig
