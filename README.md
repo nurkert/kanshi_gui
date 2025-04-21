@@ -47,3 +47,7 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
    ```
    kanshi_gui
    ```
+
+# License
+
+Copyright (C) 2025 nurkert - This project is licensed under the terms of the [GNU General Public License v3.0](LICENSE).
