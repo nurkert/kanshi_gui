@@ -20,7 +20,7 @@ class MonitorTile extends StatefulWidget {
   final Function()? onDragStart;           
 
   const MonitorTile({
-    Key? key,
+    super.key,
     required this.data,
     required this.exists,
     required this.snapThreshold,
@@ -33,7 +33,7 @@ class MonitorTile extends StatefulWidget {
     required this.onUpdate,
     required this.onDragEnd,
     this.onDragStart,
-  }) : super(key: key);
+  });
 
   @override
   _MonitorTileState createState() => _MonitorTileState();

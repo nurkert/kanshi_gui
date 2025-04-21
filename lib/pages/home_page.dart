@@ -10,7 +10,7 @@ import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/profile_list_item.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  const HomePage({super.key});
 
   @override
   _HomePageState createState() => _HomePageState();
@@ -19,13 +19,13 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   final ConfigService _configService = ConfigService();
 
-  /// Loaded profiles from config.
+  /// Geladene Profile aus der Konfiguration.
   List<Profile> profiles = [];
 
-  /// List of currently connected monitors.
+  /// Aktuell verbundene Monitore.
   List<MonitorTileData> currentMonitors = [];
 
-  /// Controller for menu ↔ close icon animation.
+  /// Controller für das Menü‑Icon.
   late final AnimationController _iconController;
 
   @override
@@ -99,34 +99,47 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return monitors;
   }
 
+  /// Stellt sicher, dass es genau ein Profil mit dem aktuellen Layout gibt.
   Future<void> ensureCurrentSetupMatchesConnectedMonitors() async {
     List<MonitorTileData> connected = await getConnectedMonitors();
-    Set<String> normalize(List<MonitorTileData> list) =>
-        list.map((m) => m.manufacturer.trim()).toSet();
-    Set<String> connectedIds = normalize(connected);
-    int index = profiles.indexWhere((p) => p.name == 'Current Setup');
-    if (index == -1) {
-      Profile currentSetup = Profile(name: 'Current Setup', monitors: connected);
+
+    // 1) Prüfe, ob bereits irgendein Profil exakt diese Monitore hat.
+    int? matchIndex = _findProfileWithAllCurrentMonitors();
+    if (matchIndex != null) {
+      // Aktiviere das gefundene Profil
       setState(() {
-        profiles.add(currentSetup);
-        activeProfileIndex = profiles.length - 1;
+        activeProfileIndex = matchIndex;
       });
     } else {
-      Profile currentSetup = profiles[index];
-      Set<String> currentIds = normalize(currentSetup.monitors);
-      if (currentIds.difference(connectedIds).isNotEmpty ||
-          connectedIds.difference(currentIds).isNotEmpty) {
+      // 2) Sonst erstelle oder aktualisiere das Profil "Current Setup"
+      const currentName = 'Current Setup';
+      int currentIndex = profiles.indexWhere((p) => p.name == currentName);
+      if (currentIndex == -1) {
+        // Profil anlegen
+        Profile currentSetup = Profile(name: currentName, monitors: connected);
         setState(() {
-          profiles[index] =
-              Profile(name: 'Current Setup', monitors: connected);
-          activeProfileIndex = index;
+          profiles.add(currentSetup);
+          activeProfileIndex = profiles.length - 1;
+        });
+      } else {
+        // Bestehendes "Current Setup" updaten
+        setState(() {
+          profiles[currentIndex] =
+              Profile(name: currentName, monitors: connected);
+          activeProfileIndex = currentIndex;
         });
       }
     }
-    final home = Platform.environment['HOME'] ?? '/home/nburkert';
+
+    // 3) Schreibe die aktive Profilbezeichnung in ~/.config/kanshi/current
+    final home = Platform.environment['HOME'] ?? '';
     final file = File('$home/.config/kanshi/current');
     await file.create(recursive: true);
-    await file.writeAsString('Current Setup');
+    final activeName = activeProfileIndex != null
+        ? profiles[activeProfileIndex!].name
+        : 'Current Setup';
+    await file.writeAsString(activeName);
+
     _autoSave();
   }
 
@@ -137,7 +150,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   double _offsetX = 0;
   double _offsetY = 0;
   List<MonitorTileData> _displayMonitors = [];
-  Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
+  final Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
   Timer? _saveTimer;
 
   List<MonitorTileData> get activeMonitors {
@@ -359,6 +372,31 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     });
   }
 
+  void _restartKanshi() async {
+    try {
+      final result = await Process.run(
+        'bash',
+        ['-c', '[ ! "\$(pgrep kanshi)" ] && pkill kanshi; kanshi &'],
+      );
+
+      if (result.exitCode != 0) {
+        debugPrint('Fehler beim Ausführen von kanshi: ${result.stderr}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fehler: ${result.stderr}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('kanshi wurde (neu) gestartet.')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Exception beim Starten von kanshi: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Exception: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -372,6 +410,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           onPressed: _toggleSidebar,
         ),
         title: const Text('Kanshi GUI'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Restart kanshi',
+            onPressed: _restartKanshi,
+          ),
+        ],
       ),
       body: Stack(
         children: [
@@ -392,16 +437,19 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                       return MonitorTile(
                         key: ValueKey(tile.id),
                         data: tile,
-                        exists: currentMonitors.any((m) => m.manufacturer == tile.manufacturer),
+                        exists: currentMonitors
+                            .any((m) => m.manufacturer == tile.manufacturer),
                         snapThreshold: snapThreshold,
-                        containerSize: Size(constraints.maxWidth, constraints.maxHeight),
+                        containerSize: Size(
+                            constraints.maxWidth, constraints.maxHeight),
                         scaleFactor: _scaleFactor,
                         offsetX: _offsetX,
                         offsetY: _offsetY,
                         originX: 0,
                         originY: 0,
                         onDragStart: () => _onMonitorDragStart(tile),
-                        onUpdate: (updated) => _onMonitorUpdate(updated, constraints),
+                        onUpdate: (updated) =>
+                            _onMonitorUpdate(updated, constraints),
                         onDragEnd: () => _onMonitorDragEnd(tile, constraints),
                       );
                     }).toList(),
@@ -428,20 +476,30 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         return ProfileListItem(
                           profile: profiles[i],
                           isActive: activeProfileIndex == i,
-                          onSelect: () => setState(() => activeProfileIndex = i),
+                          onSelect: () =>
+                              setState(() => activeProfileIndex = i),
                           onNameChanged: (newName) {
-                            bool exists = profiles.any((p) => p.name.toLowerCase() == newName.toLowerCase() && p != profiles[i]);
+                            bool exists = profiles.any((p) =>
+                                p.name.toLowerCase() ==
+                                    newName.toLowerCase() &&
+                                p != profiles[i]);
                             if (exists) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Profile name already exists!')),
+                                const SnackBar(
+                                    content:
+                                        Text('Profile name already exists!')),
                               );
                             } else {
-                              setState(() { profiles[i].name = newName; _autoSave(); });
+                              setState(() {
+                                profiles[i].name = newName;
+                                _autoSave();
+                              });
                             }
                           },
                           onDelete: () {
                             setState(() {
-                              if (activeProfileIndex == i) activeProfileIndex = null;
+                              if (activeProfileIndex == i)
+                                activeProfileIndex = null;
                               profiles.removeAt(i);
                               _autoSave();
                             });

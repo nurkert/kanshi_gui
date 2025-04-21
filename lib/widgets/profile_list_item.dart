@@ -12,14 +12,14 @@ class ProfileListItem extends StatefulWidget {
   final bool exists;
 
   const ProfileListItem({
-    Key? key,
+    super.key,
     required this.profile,
     required this.isActive,
     required this.onSelect,
     required this.onNameChanged,
     required this.onDelete,
     required this.exists,
-  }) : super(key: key);
+  });
 
   @override
   _ProfileListItemState createState() => _ProfileListItemState();
