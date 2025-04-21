@@ -1,7 +1,5 @@
-// lib/widgets/monitor_tile.dart
-
+import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'dart:math';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
@@ -59,74 +57,76 @@ class _MonitorTileState extends State<MonitorTile> {
 
   @override
   Widget build(BuildContext context) {
+    // Name ohne die letzten zwei Worte
+    final parts = widget.data.manufacturer.split(' ');
+    final displayName = parts.length > 2
+        ? parts.sublist(0, parts.length - 2).join(' ')
+        : widget.data.manufacturer;
+
     return Positioned(
       left: position.dx,
       top: position.dy,
       width: widget.data.width,
       height: widget.data.height,
       child: GestureDetector(
-        onPanStart: (_) {
-          if (widget.onDragStart != null) {
-            widget.onDragStart!();
-          }
-        },
+        onPanStart: (_) => widget.onDragStart?.call(),
         onPanUpdate: (details) {
-          setState(() {
-            position += details.delta;
-          });
-          // Melden neue Position an den Parent
-          widget.onUpdate(
-            widget.data.copyWith(
-              x: position.dx,
-              y: position.dy,
-            ),
-          );
+          setState(() => position += details.delta);
+          widget.onUpdate(widget.data.copyWith(
+            x: position.dx,
+            y: position.dy,
+          ));
         },
-        onPanEnd: (_) {
-          widget.onDragEnd();
-        },
+        onPanEnd: (_) => widget.onDragEnd(),
         onSecondaryTap: () {
-          // Drehe um +90°
           final newRotation = (widget.data.rotation + 90) % 360;
           widget.onUpdate(widget.data.copyWith(rotation: newRotation));
         },
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: widget.exists ? Colors.green : Colors.red,
-              width: 2,
-            ),
-          ),
-          // Wir machen hier kein Transform.rotate mehr,
-          // sondern zeigen den Text normal an.
-          // Die "Rotation" wird stattdessen in width/height gespiegelt (siehe HomePage).
-          child:  FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  widget.data.manufacturer,  // Zeigt den vollständigen String an
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+        child: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+            child: Container(
+              decoration: BoxDecoration(
+                color: (widget.exists
+                        ? Colors.green.withOpacity(0.3)
+                        : Colors.red.withOpacity(0.3)),
+                border: Border.all(
+                  color: widget.exists ? Colors.greenAccent : Colors.redAccent,
+                  width: 2,
                 ),
-                Text(
-                  widget.data.resolution,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  "${widget.data.orientation} (${widget.data.rotation}°)",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+              ),
+              padding: const EdgeInsets.all(8),
+              child: Center(
+                child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      displayName,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                      softWrap: true,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.data.resolution,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  Text(
+                    "${widget.data.orientation} (${widget.data.rotation}°)",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ],
+              )
+              ),
             ),
           ),
         ),
