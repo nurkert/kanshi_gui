@@ -1,0 +1,13 @@
+name: kanshi_gui
+version: 1.0.0
+targets:
+  - linux
+jobs:
+  - appimage
+
+linux:
+  package:
+    appimage:
+      output: kanshi_gui.AppImage
+      description: "Kanshi GUI – Manage Wayland display profiles"
+      icon: assets/kanshi_gui.png
