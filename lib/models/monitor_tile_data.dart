@@ -1,5 +1,7 @@
 // lib/models/monitor_tile_data.dart
 
+import 'monitor_mode.dart';
+
 class MonitorTileData {
   final String id;
   final String manufacturer; // Neuer Herstellerstring
@@ -10,7 +12,8 @@ class MonitorTileData {
   final double scale;
   final int rotation;
   final String resolution;
-  final String orientation; 
+  final String orientation;
+  final List<MonitorMode> modes;
 
   MonitorTileData({
     required this.id,
@@ -23,6 +26,7 @@ class MonitorTileData {
     required this.rotation,
     required this.resolution,
     required this.orientation,
+    this.modes = const [],
   });
 
   MonitorTileData copyWith({
@@ -36,6 +40,7 @@ class MonitorTileData {
     int? rotation,
     String? resolution,
     String? orientation,
+    List<MonitorMode>? modes,
   }) {
     return MonitorTileData(
       id: id ?? this.id,
@@ -48,6 +53,7 @@ class MonitorTileData {
       rotation: rotation ?? this.rotation,
       resolution: resolution ?? this.resolution,
       orientation: orientation ?? this.orientation,
+      modes: modes ?? this.modes,
     );
   }
 }

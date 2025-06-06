@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
@@ -65,8 +66,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       String fullName = '$make $model $serial'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
-      final modes = (output['modes'] as List).cast<Map<String, dynamic>>();
-      Map<String, dynamic> best = modes.reduce((a, b) {
+      final modeMaps = (output['modes'] as List).cast<Map<String, dynamic>>();
+      final modes = modeMaps
+          .map((m) => MonitorMode(
+                width: (m['width'] as num).toDouble(),
+                height: (m['height'] as num).toDouble(),
+                refresh: ((m['refresh'] as num).toInt() / 1000).round(),
+              ))
+          .toList();
+      Map<String, dynamic> best = modeMaps.reduce((a, b) {
         int aPx = a['width'] * a['height'];
         int bPx = b['width'] * b['height'];
         if (aPx != bPx) return aPx > bPx ? a : b;
@@ -96,6 +104,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         rotation: rotation,
         resolution: '${width.toInt()}x${height.toInt()}',
         orientation: orientation,
+        modes: modes,
       ));
     }
     return monitors;
@@ -256,6 +265,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           ? '${newWidth.toInt()}x${newHeight.toInt()}'
           : '${newHeight.toInt()}x${newWidth.toInt()}',
       orientation: newOrientation,
+      modes: oldMonitor.modes,
     );
     setState(() {
       profiles[activeProfileIndex!].monitors[index] = newAbsMonitor;
@@ -321,6 +331,44 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       mons[i] = other;
     }
 
+    mons[index] = updated;
+    setState(() {
+      profiles[activeProfileIndex!] =
+          Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
+      _buildAndSave(constraints);
+    });
+  }
+
+  Future<void> _onMonitorModeChange(
+      String id, MonitorMode mode, BoxConstraints constraints) async {
+    if (activeProfileIndex == null) return;
+    final mons = activeMonitors;
+    final index = mons.indexWhere((m) => m.id == id);
+    if (index == -1) return;
+
+    try {
+      await Process.run('swaymsg', [
+        'output',
+        id,
+        'mode',
+        '${mode.width.toInt()}x${mode.height.toInt()}@${mode.refresh}Hz'
+      ]);
+    } catch (e) {
+      debugPrint('Error setting mode: $e');
+    }
+
+    final rotatedWidth =
+        (mons[index].rotation % 180 == 0) ? mode.width : mode.height;
+    final rotatedHeight =
+        (mons[index].rotation % 180 == 0) ? mode.height : mode.width;
+    final updated = mons[index].copyWith(
+      width: rotatedWidth,
+      height: rotatedHeight,
+      resolution: '${rotatedWidth.toInt()}x${rotatedHeight.toInt()}',
+      orientation: (mons[index].rotation % 180 == 0)
+          ? (mode.width >= mode.height ? 'landscape' : 'portrait')
+          : (mode.width >= mode.height ? 'portrait' : 'landscape'),
+    );
     mons[index] = updated;
     setState(() {
       profiles[activeProfileIndex!] =
@@ -506,6 +554,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                             _onMonitorUpdate(updated, constraints),
                         onDragEnd: () => _onMonitorDragEnd(tile, constraints),
                         onScale: (s) => _onMonitorScale(tile.id, s, constraints),
+                        onModeChange: (m) =>
+                            _onMonitorModeChange(tile.id, m, constraints),
                       );
                     }).toList(),
                   );
