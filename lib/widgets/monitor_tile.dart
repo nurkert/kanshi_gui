@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/models/monitor_mode.dart';
 
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
 /// Rechtsklick (onSecondaryTap) erhöht rotation um +90°.
@@ -21,6 +22,7 @@ class MonitorTile extends StatefulWidget {
   final VoidCallback onDragEnd;
   final Function()? onDragStart;
   final ValueChanged<double>? onScale;
+  final ValueChanged<MonitorMode>? onModeChange;
 
   const MonitorTile({
     super.key,
@@ -39,6 +41,7 @@ class MonitorTile extends StatefulWidget {
     required this.onDragEnd,
     this.onDragStart,
     this.onScale,
+    this.onModeChange,
   });
 
   @override
@@ -75,14 +78,30 @@ class _MonitorTileState extends State<MonitorTile> {
         ? parts.sublist(0, parts.length - 2).join(' ')
         : widget.data.manufacturer;
 
-    return Positioned(
-      left: position.dx,
-      top: position.dy,
-      width: tileWidth,
-      height: tileHeight,
-      child: Stack(
-        children: [
-          GestureDetector(
+      return Positioned(
+        left: position.dx,
+        top: position.dy,
+        width: tileWidth,
+        height: tileHeight,
+        child: Stack(
+          children: [
+            if (widget.exists && widget.data.modes.isNotEmpty)
+              Positioned(
+                right: 0,
+                top: 0,
+                child: PopupMenuButton<MonitorMode>(
+                  icon: const Icon(Icons.more_vert, size: 16),
+                  itemBuilder: (context) => [
+                    for (final m in widget.data.modes)
+                      PopupMenuItem<MonitorMode>(
+                        value: m,
+                        child: Text(m.label),
+                      )
+                  ],
+                  onSelected: widget.onModeChange,
+                ),
+              ),
+            GestureDetector(
             onPanStart: (_) => widget.onDragStart?.call(),
         onPanUpdate: (details) {
           setState(() => position += details.delta);
