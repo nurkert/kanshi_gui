@@ -74,6 +74,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       });
       double width = (best['width'] as num).toDouble();
       double height = (best['height'] as num).toDouble();
+      double scale = (output['scale'] as num?)?.toDouble() ?? 1.0;
       String transform = (output['transform'] ?? 'normal').toString();
       int rotation = switch (transform) {
         '90' || 'flipped-90' => 90,
@@ -91,6 +92,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         y: (output['rect']['y'] as num).toDouble(),
         width: width,
         height: height,
+        scale: scale,
         rotation: rotation,
         resolution: '${width.toInt()}x${height.toInt()}',
         orientation: orientation,
@@ -195,8 +197,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
     double minX = mons.map((m) => m.x).reduce(min);
     double minY = mons.map((m) => m.y).reduce(min);
-    double maxX = mons.map((m) => m.x + m.width).reduce(max);
-    double maxY = mons.map((m) => m.y + m.height).reduce(max);
+    double maxX =
+        mons.map((m) => m.x + m.width / m.scale).reduce(max);
+    double maxY =
+        mons.map((m) => m.y + m.height / m.scale).reduce(max);
     double boundingWidth = maxX - minX;
     double boundingHeight = maxY - minY;
     double allowedW = constraints.maxWidth * 0.8;
@@ -212,8 +216,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _displayMonitors = mons.map((m) {
       double dx = (m.x - minX) * _scaleFactor + _offsetX;
       double dy = (m.y - minY) * _scaleFactor + _offsetY;
-      double dw = m.width * _scaleFactor;
-      double dh = m.height * _scaleFactor;
+      double dw = (m.width / m.scale) * _scaleFactor;
+      double dh = (m.height / m.scale) * _scaleFactor;
       return m.copyWith(x: dx, y: dy, width: dw, height: dh);
     }).toList();
   }
@@ -246,6 +250,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       y: newAbsY,
       width: newWidth,
       height: newHeight,
+      scale: oldMonitor.scale,
       rotation: newRotation,
       resolution: newOrientation == 'landscape'
           ? '${newWidth.toInt()}x${newHeight.toInt()}'
@@ -286,34 +291,79 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     });
   }
 
+  void _onMonitorScale(String id, double newScale, BoxConstraints constraints) {
+    if (activeProfileIndex == null) return;
+    final mons = activeMonitors;
+    final index = mons.indexWhere((m) => m.id == id);
+    if (index == -1) return;
+    final updated = mons[index].copyWith(scale: newScale);
+
+    // Neighbour adjustment
+    for (int i = 0; i < mons.length; i++) {
+      if (i == index) continue;
+      var other = mons[i];
+      if ((other.x - (mons[index].x + mons[index].width / mons[index].scale))
+              .abs() <= snapThreshold) {
+        other = other.copyWith(x: mons[index].x + mons[index].width / newScale);
+      } else if (((other.x + other.width / other.scale) - mons[index].x)
+              .abs() <= snapThreshold) {
+        other =
+            other.copyWith(x: mons[index].x - other.width / other.scale);
+      }
+      if ((other.y - (mons[index].y + mons[index].height / mons[index].scale))
+              .abs() <= snapThreshold) {
+        other = other.copyWith(y: mons[index].y + mons[index].height / newScale);
+      } else if (((other.y + other.height / other.scale) - mons[index].y)
+              .abs() <= snapThreshold) {
+        other =
+            other.copyWith(y: mons[index].y - other.height / other.scale);
+      }
+      mons[i] = other;
+    }
+
+    mons[index] = updated;
+    setState(() {
+      profiles[activeProfileIndex!] =
+          Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
+      _buildAndSave(constraints);
+    });
+  }
+
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
     double newX = m.x;
     double newY = m.y;
     for (var other in all) {
       if (other.id == m.id) continue;
       final left = m.x;
-      final right = m.x + m.width;
+      final right = m.x + m.width / m.scale;
       final top = m.y;
-      final bottom = m.y + m.height;
+      final bottom = m.y + m.height / m.scale;
       final oLeft = other.x;
-      final oRight = other.x + other.width;
+      final oRight = other.x + other.width / other.scale;
       final oTop = other.y;
-      final oBottom = other.y + other.height;
+      final oBottom = other.y + other.height / other.scale;
       if ((left - oRight).abs() <= snapThreshold) newX = oRight;
-      if ((right - oLeft).abs() <= snapThreshold) newX = oLeft - m.width;
+      if ((right - oLeft).abs() <= snapThreshold)
+        newX = oLeft - m.width / m.scale;
       if ((top - oBottom).abs() <= snapThreshold) newY = oBottom;
-      if ((bottom - oTop).abs() <= snapThreshold) newY = oTop - m.height;
+      if ((bottom - oTop).abs() <= snapThreshold)
+        newY = oTop - m.height / m.scale;
     }
     return m.copyWith(x: newX, y: newY);
   }
 
   bool _hasOverlap(
       MonitorTileData updated, List<MonitorTileData> all, int idx) {
-    final a = Rect.fromLTWH(updated.x, updated.y, updated.width, updated.height);
+    final a = Rect.fromLTWH(
+        updated.x,
+        updated.y,
+        updated.width / updated.scale,
+        updated.height / updated.scale);
     for (int i = 0; i < all.length; i++) {
       if (i == idx) continue;
       final o = all[i];
-      final b = Rect.fromLTWH(o.x, o.y, o.width, o.height);
+      final b = Rect.fromLTWH(
+          o.x, o.y, o.width / o.scale, o.height / o.scale);
       if (a.overlaps(b)) return true;
     }
     return false;
@@ -434,6 +484,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                   _updateDisplayMonitors(constraints);
                   return Stack(
                     children: _displayMonitors.map((tile) {
+                      final original = activeMonitors
+                          .firstWhere((m) => m.id == tile.id);
                       return MonitorTile(
                         key: ValueKey(tile.id),
                         data: tile,
@@ -447,10 +499,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         offsetY: _offsetY,
                         originX: 0,
                         originY: 0,
+                        originalWidth: original.width,
+                        originalHeight: original.height,
                         onDragStart: () => _onMonitorDragStart(tile),
                         onUpdate: (updated) =>
                             _onMonitorUpdate(updated, constraints),
                         onDragEnd: () => _onMonitorDragEnd(tile, constraints),
+                        onScale: (s) => _onMonitorScale(tile.id, s, constraints),
                       );
                     }).toList(),
                   );

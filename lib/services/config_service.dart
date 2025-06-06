@@ -35,19 +35,21 @@ class ConfigService {
        */
       final outputRE = RegExp(
         r"output\s+'([^']+)'\s+enable"           // 1: Voller Name
-        r"(?:\s+scale\s+\S+)?"                   // scale optional
-        r"\s+mode\s+(\d+)x(\d+)(?:@\S+)?\s+"     // 2: W, 3: H, Hz ignorieren
-        r"transform\s+(\S+)\s+"                  // 4: transform
-        r"position\s+(-?\d+),(-?\d+)",           // 5: X, 6: Y
+        r"(?:\s+scale\s+([\d.]+))?"             // 2: scale optional
+        r"\s+mode\s+(\d+)x(\d+)(?:@\S+)?\s+"    // 3: W, 4: H, Hz ignorieren
+        r"transform\s+(\S+)\s+"                 // 5: transform
+        r"position\s+(-?\d+),(-?\d+)",           // 6: X, 7: Y
       );
 
       for (final outMatch in outputRE.allMatches(block)) {
         final fullName = outMatch.group(1)!.trim();
-        final modeW = double.parse(outMatch.group(2)!);
-        final modeH = double.parse(outMatch.group(3)!);
-        final transform = outMatch.group(4)!.trim();
-        final posX = double.parse(outMatch.group(5)!);
-        final posY = double.parse(outMatch.group(6)!);
+        final scaleStr = outMatch.group(2);
+        final modeW = double.parse(outMatch.group(3)!);
+        final modeH = double.parse(outMatch.group(4)!);
+        final transform = outMatch.group(5)!.trim();
+        final posX = double.parse(outMatch.group(6)!);
+        final posY = double.parse(outMatch.group(7)!);
+        final scale = scaleStr != null ? double.parse(scaleStr) : 1.0;
 
         final rotation = switch (transform) {
           '90' => 90,
@@ -72,6 +74,7 @@ class ConfigService {
             y: posY,
             width: width,
             height: height,
+            scale: scale,
             rotation: rotation,
             resolution: resolution,
             orientation: orientation,
@@ -117,7 +120,7 @@ class ConfigService {
         final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
         buffer.writeln(
-          "    output '${m.id}' enable scale 1 "
+          "    output '${m.id}' enable scale ${m.scale} "
           "mode ${baseW.toInt()}x${baseH.toInt()} "
           "transform $transform position $posX,$posY",
         );
