@@ -1,6 +1,7 @@
 // lib/main.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'pages/home_page.dart';
 
 /*
@@ -20,6 +21,10 @@ import 'pages/home_page.dart';
  * along with kanshi_gui. If not, see <https://www.gnu.org/licenses/>.
  */
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Reset any leftover keyboard state that might cause assertion errors
+  // when a key down event is received while considered already pressed.
+  HardwareKeyboard.instance.clearState();
   runApp(const KanshiApp());
 }
 
