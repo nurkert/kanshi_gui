@@ -85,22 +85,6 @@ class _MonitorTileState extends State<MonitorTile> {
         height: tileHeight,
         child: Stack(
           children: [
-            if (widget.exists && widget.data.modes.isNotEmpty)
-              Positioned(
-                right: 0,
-                top: 0,
-                child: PopupMenuButton<MonitorMode>(
-                  icon: const Icon(Icons.more_vert, size: 16),
-                  itemBuilder: (context) => [
-                    for (final m in widget.data.modes)
-                      PopupMenuItem<MonitorMode>(
-                        value: m,
-                        child: Text(m.label),
-                      )
-                  ],
-                  onSelected: widget.onModeChange,
-                ),
-              ),
             GestureDetector(
             onPanStart: (_) => widget.onDragStart?.call(),
         onPanUpdate: (details) {
@@ -200,6 +184,22 @@ class _MonitorTileState extends State<MonitorTile> {
               ),
             ),
           ),
+          if (widget.exists && widget.data.modes.isNotEmpty)
+            Positioned(
+              right: 0,
+              top: 0,
+              child: PopupMenuButton<MonitorMode>(
+                icon: const Icon(Icons.more_vert, size: 16),
+                itemBuilder: (context) => [
+                  for (final m in widget.data.modes)
+                    PopupMenuItem<MonitorMode>(
+                      value: m,
+                      child: Text(m.label),
+                    )
+                ],
+                onSelected: widget.onModeChange,
+              ),
+            ),
         ],
       ),
     );
