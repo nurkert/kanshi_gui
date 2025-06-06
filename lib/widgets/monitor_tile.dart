@@ -14,10 +14,13 @@ class MonitorTile extends StatefulWidget {
   final double offsetY;
   final double originX;
   final double originY;
+  final double originalWidth;
+  final double originalHeight;
 
   final Function(MonitorTileData) onUpdate; // beim Drag oder Rotation
-  final VoidCallback onDragEnd;             
-  final Function()? onDragStart;           
+  final VoidCallback onDragEnd;
+  final Function()? onDragStart;
+  final ValueChanged<double>? onScale;
 
   const MonitorTile({
     super.key,
@@ -30,9 +33,12 @@ class MonitorTile extends StatefulWidget {
     required this.offsetY,
     required this.originX,
     required this.originY,
+    required this.originalWidth,
+    required this.originalHeight,
     required this.onUpdate,
     required this.onDragEnd,
     this.onDragStart,
+    this.onScale,
   });
 
   @override
@@ -41,11 +47,15 @@ class MonitorTile extends StatefulWidget {
 
 class _MonitorTileState extends State<MonitorTile> {
   late Offset position; // Position innerhalb der Stack (skaliert)
+  late double tileWidth;
+  late double tileHeight;
 
   @override
   void initState() {
     super.initState();
     position = Offset(widget.data.x, widget.data.y);
+    tileWidth = widget.data.width;
+    tileHeight = widget.data.height;
   }
 
   @override
@@ -53,6 +63,8 @@ class _MonitorTileState extends State<MonitorTile> {
     super.didUpdateWidget(oldWidget);
     // Falls sich die Koordinaten ändern, aktualisieren wir die Position.
     position = Offset(widget.data.x, widget.data.y);
+    tileWidth = widget.data.width;
+    tileHeight = widget.data.height;
   }
 
   @override
@@ -66,10 +78,12 @@ class _MonitorTileState extends State<MonitorTile> {
     return Positioned(
       left: position.dx,
       top: position.dy,
-      width: widget.data.width,
-      height: widget.data.height,
-      child: GestureDetector(
-        onPanStart: (_) => widget.onDragStart?.call(),
+      width: tileWidth,
+      height: tileHeight,
+      child: Stack(
+        children: [
+          GestureDetector(
+            onPanStart: (_) => widget.onDragStart?.call(),
         onPanUpdate: (details) {
           setState(() => position += details.delta);
           widget.onUpdate(widget.data.copyWith(
@@ -82,9 +96,9 @@ class _MonitorTileState extends State<MonitorTile> {
           final newRotation = (widget.data.rotation + 90) % 360;
           widget.onUpdate(widget.data.copyWith(rotation: newRotation));
         },
-        child: ClipRRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+            child: ClipRRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
             child: Container(
               decoration: BoxDecoration(
                 color: (widget.exists
@@ -129,7 +143,37 @@ class _MonitorTileState extends State<MonitorTile> {
               ),
             ),
           ),
-        ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeUpLeftDownRight,
+              child: GestureDetector(
+                onPanUpdate: (details) {
+                  setState(() {
+                    tileWidth += details.delta.dx;
+                    tileHeight += details.delta.dy;
+                    if (tileWidth < 20) tileWidth = 20;
+                    if (tileHeight < 20) tileHeight = 20;
+                  });
+                  final newScale = widget.originalWidth /
+                      ((tileWidth) / widget.scaleFactor);
+                  widget.onScale?.call(newScale);
+                },
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.5),
+                    border: Border.all(color: Colors.black),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
