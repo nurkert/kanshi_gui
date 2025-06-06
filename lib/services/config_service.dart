@@ -121,7 +121,7 @@ class ConfigService {
         final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
         buffer.writeln(
-          "    output '${m.id}' enable scale ${m.scale} "
+          "    output '${m.id}' enable scale ${m.scale.toStringAsFixed(2)} "
           "mode ${baseW.toInt()}x${baseH.toInt()} "
           "transform $transform position $posX,$posY",
         );

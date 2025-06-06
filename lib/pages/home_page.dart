@@ -172,7 +172,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Future<void> _updateConnectedMonitors() async {
     try {
       List<MonitorTileData> monitors = await getConnectedMonitors();
-      setState(() => currentMonitors = monitors);
+      setState(() {
+        currentMonitors = monitors;
+        for (final profile in profiles) {
+          for (var i = 0; i < profile.monitors.length; i++) {
+            final connected = monitors.firstWhere(
+              (m) => m.manufacturer.trim() ==
+                  profile.monitors[i].manufacturer.trim(),
+              orElse: () => profile.monitors[i],
+            );
+            profile.monitors[i] =
+                profile.monitors[i].copyWith(modes: connected.modes);
+          }
+        }
+      });
     } catch (e) {
       debugPrint('Error getting connected monitors: $e');
     }
@@ -304,6 +317,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   void _onMonitorScale(String id, double newScale, BoxConstraints constraints) {
     if (activeProfileIndex == null) return;
     final mons = activeMonitors;
+    for (int n = 1; n <= 8; n++) {
+      if ((newScale - n).abs() < 0.05) {
+        newScale = n.toDouble();
+        break;
+      }
+    }
+    newScale = double.parse(newScale.toStringAsFixed(2));
     final index = mons.indexWhere((m) => m.id == id);
     if (index == -1) return;
     final updated = mons[index].copyWith(scale: newScale);

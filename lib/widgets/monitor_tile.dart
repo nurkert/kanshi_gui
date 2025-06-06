@@ -171,15 +171,23 @@ class _MonitorTileState extends State<MonitorTile> {
               cursor: SystemMouseCursors.resizeUpLeftDownRight,
               child: GestureDetector(
                 onPanUpdate: (details) {
-                  setState(() {
-                    tileWidth += details.delta.dx;
-                    tileHeight += details.delta.dy;
-                    if (tileWidth < 20) tileWidth = 20;
-                    if (tileHeight < 20) tileHeight = 20;
-                  });
-                  final newScale = widget.originalWidth /
-                      ((tileWidth) / widget.scaleFactor);
-                  widget.onScale?.call(newScale);
+                    setState(() {
+                      tileWidth += details.delta.dx;
+                      tileHeight += details.delta.dy;
+                      if (tileWidth < 20) tileWidth = 20;
+                      if (tileHeight < 20) tileHeight = 20;
+                    });
+                    var newScale = widget.originalWidth / ((tileWidth) / widget.scaleFactor);
+                    for (int n = 1; n <= 8; n++) {
+                      if ((newScale - n).abs() < 0.05) {
+                        newScale = n.toDouble();
+                        tileWidth = widget.originalWidth / newScale * widget.scaleFactor;
+                        tileHeight = widget.originalHeight / newScale * widget.scaleFactor;
+                        break;
+                      }
+                    }
+                    newScale = double.parse(newScale.toStringAsFixed(2));
+                    widget.onScale?.call(newScale);
                 },
                 child: Container(
                   width: 16,
