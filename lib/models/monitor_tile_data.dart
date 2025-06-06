@@ -5,9 +5,10 @@ class MonitorTileData {
   final String manufacturer; // Neuer Herstellerstring
   final double x;       
   final double y;       
-  final double width;   
-  final double height;  
-  final int rotation;   
+  final double width;
+  final double height;
+  final double scale;
+  final int rotation;
   final String resolution;
   final String orientation; 
 
@@ -18,6 +19,7 @@ class MonitorTileData {
     required this.y,
     required this.width,
     required this.height,
+    this.scale = 1.0,
     required this.rotation,
     required this.resolution,
     required this.orientation,
@@ -30,6 +32,7 @@ class MonitorTileData {
     double? y,
     double? width,
     double? height,
+    double? scale,
     int? rotation,
     String? resolution,
     String? orientation,
@@ -41,6 +44,7 @@ class MonitorTileData {
       y: y ?? this.y,
       width: width ?? this.width,
       height: height ?? this.height,
+      scale: scale ?? this.scale,
       rotation: rotation ?? this.rotation,
       resolution: resolution ?? this.resolution,
       orientation: orientation ?? this.orientation,
