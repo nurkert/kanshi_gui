@@ -78,6 +78,7 @@ class ConfigService {
             rotation: rotation,
             resolution: resolution,
             orientation: orientation,
+            modes: const [],
           ),
         );
       }
