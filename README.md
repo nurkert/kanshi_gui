@@ -48,6 +48,20 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
    kanshi_gui
    ```
 
+2. **Create a Debian package**:
+   The repository ships with a helper script that bundles the application
+   into a `.deb` file. Run it from the project root and then install the
+   resulting package with `dpkg`:
+   ```bash
+   ./scripts/build_deb.sh
+   sudo dpkg -i build/kanshi_gui_*.deb
+   ```
+   After installation the `kanshi_gui` command is available globally. To
+   remove the package again use:
+   ```bash
+   sudo dpkg -r kanshi_gui
+   ```
+
 # License
 
 Copyright (C) 2025 nurkert - This project is licensed under the terms of the [GNU General Public License v3.0](LICENSE).
