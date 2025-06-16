@@ -95,6 +95,7 @@ class ConfigService {
     final buffer = StringBuffer();
 
     for (final profile in profiles) {
+      if (profile.monitors.isEmpty) continue;
       // Negative Koordinaten zu Null klappen
       final minX =
           profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
