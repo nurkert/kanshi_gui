@@ -23,6 +23,7 @@ class MonitorTile extends StatefulWidget {
   final Function()? onDragStart;
   final ValueChanged<double>? onScale;
   final ValueChanged<MonitorMode>? onModeChange;
+  final ValueChanged<bool>? onToggleEnabled;
 
   const MonitorTile({
     super.key,
@@ -42,6 +43,7 @@ class MonitorTile extends StatefulWidget {
     this.onDragStart,
     this.onScale,
     this.onModeChange,
+    this.onToggleEnabled,
   });
 
   @override
@@ -78,74 +80,93 @@ class _MonitorTileState extends State<MonitorTile> {
         ? parts.sublist(0, parts.length - 2).join(' ')
         : widget.data.manufacturer;
 
-      return Positioned(
-        left: position.dx,
-        top: position.dy,
-        width: tileWidth,
-        height: tileHeight,
-        child: Stack(
-          children: [
-            GestureDetector(
-            onPanStart: (_) => widget.onDragStart?.call(),
-        onPanUpdate: (details) {
-          setState(() => position += details.delta);
-          widget.onUpdate(widget.data.copyWith(
-            x: position.dx,
-            y: position.dy,
-          ));
-        },
-        onPanEnd: (_) => widget.onDragEnd(),
-        onSecondaryTap: () {
-          final newRotation = (widget.data.rotation + 90) % 360;
-          widget.onUpdate(widget.data.copyWith(rotation: newRotation));
-        },
+    final isEnabled = widget.data.enabled;
+    final backgroundColor = isEnabled
+        ? (widget.exists
+            ? Colors.green.withOpacity(0.3)
+            : Colors.red.withOpacity(0.3))
+        : Colors.grey.withOpacity(0.4);
+    final borderColor = isEnabled
+        ? (widget.exists ? Colors.greenAccent : Colors.redAccent)
+        : Colors.grey;
+    final textColor = isEnabled ? Colors.white : Colors.white70;
+
+    return Positioned(
+      left: position.dx,
+      top: position.dy,
+      width: tileWidth,
+      height: tileHeight,
+      child: Stack(
+        children: [
+          GestureDetector(
+            onPanStart: isEnabled ? (_) => widget.onDragStart?.call() : null,
+            onPanUpdate: isEnabled
+                ? (details) {
+                    setState(() => position += details.delta);
+                    widget.onUpdate(
+                      widget.data.copyWith(
+                        x: position.dx,
+                        y: position.dy,
+                      ),
+                    );
+                  }
+                : null,
+            onPanEnd: isEnabled ? (_) => widget.onDragEnd() : null,
+            onSecondaryTap: isEnabled
+                ? () {
+                    final newRotation =
+                        (widget.data.rotation + 90) % 360;
+                    widget.onUpdate(
+                      widget.data.copyWith(rotation: newRotation),
+                    );
+                  }
+                : null,
             child: ClipRRect(
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-            child: Container(
-              decoration: BoxDecoration(
-                color: (widget.exists
-                        ? Colors.green.withOpacity(0.3)
-                        : Colors.red.withOpacity(0.3)),
-                border: Border.all(
-                  color: widget.exists ? Colors.greenAccent : Colors.redAccent,
-                  width: 2,
-                ),
-              ),
-              padding: const EdgeInsets.all(8),
-              child: Center(
-                child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      displayName,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                      softWrap: true,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    border: Border.all(
+                      color: borderColor,
+                      width: 2,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.data.resolution,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 14),
+                  padding: const EdgeInsets.all(8),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            displayName,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: textColor,
+                            ),
+                            softWrap: true,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.data.resolution,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 14, color: textColor),
+                        ),
+                        Text(
+                          "${widget.data.orientation} (${widget.data.rotation}°)",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 14, color: textColor),
+                        ),
+                      ],
+                    ),
                   ),
-                  Text(
-                    "${widget.data.orientation} (${widget.data.rotation}°)",
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ],
-              )
+                ),
               ),
-            ),
-          ),
             ),
           ),
           Positioned(
@@ -154,25 +175,31 @@ class _MonitorTileState extends State<MonitorTile> {
             child: MouseRegion(
               cursor: SystemMouseCursors.resizeUpLeftDownRight,
               child: GestureDetector(
-                onPanUpdate: (details) {
-                    setState(() {
-                      tileWidth += details.delta.dx;
-                      tileHeight += details.delta.dy;
-                      if (tileWidth < 20) tileWidth = 20;
-                      if (tileHeight < 20) tileHeight = 20;
-                    });
-                    var newScale = widget.originalWidth / ((tileWidth) / widget.scaleFactor);
-                    for (int n = 1; n <= 8; n++) {
-                      if ((newScale - n).abs() < 0.05) {
-                        newScale = n.toDouble();
-                        tileWidth = widget.originalWidth / newScale * widget.scaleFactor;
-                        tileHeight = widget.originalHeight / newScale * widget.scaleFactor;
-                        break;
+                onPanUpdate: isEnabled
+                    ? (details) {
+                        setState(() {
+                          tileWidth += details.delta.dx;
+                          tileHeight += details.delta.dy;
+                          if (tileWidth < 20) tileWidth = 20;
+                          if (tileHeight < 20) tileHeight = 20;
+                        });
+                        var newScale = widget.originalWidth /
+                            ((tileWidth) / widget.scaleFactor);
+                        for (int n = 1; n <= 8; n++) {
+                          if ((newScale - n).abs() < 0.05) {
+                            newScale = n.toDouble();
+                            tileWidth = widget.originalWidth /
+                                newScale * widget.scaleFactor;
+                            tileHeight = widget.originalHeight /
+                                newScale * widget.scaleFactor;
+                            break;
+                          }
+                        }
+                        newScale =
+                            double.parse(newScale.toStringAsFixed(2));
+                        widget.onScale?.call(newScale);
                       }
-                    }
-                    newScale = double.parse(newScale.toStringAsFixed(2));
-                    widget.onScale?.call(newScale);
-                },
+                    : null,
                 child: Container(
                   width: 16,
                   height: 16,
@@ -184,20 +211,62 @@ class _MonitorTileState extends State<MonitorTile> {
               ),
             ),
           ),
-          if (widget.exists && widget.data.modes.isNotEmpty)
+          if (widget.data.modes.isNotEmpty || widget.onToggleEnabled != null)
             Positioned(
               right: 0,
               top: 0,
-              child: PopupMenuButton<MonitorMode>(
-                icon: const Icon(Icons.more_vert, size: 16),
-                itemBuilder: (context) => [
-                  for (final m in widget.data.modes)
-                    PopupMenuItem<MonitorMode>(
-                      value: m,
-                      child: Text(m.label),
-                    )
+              child: MenuAnchor(
+                builder: (context, controller, child) {
+                  return IconButton(
+                    padding: EdgeInsets.zero,
+                    icon: Icon(Icons.more_vert, size: 16, color: textColor),
+                    onPressed: () {
+                      if (controller.isOpen) {
+                        controller.close();
+                      } else {
+                        controller.open();
+                      }
+                    },
+                  );
+                },
+                menuChildren: [
+                  if (widget.onToggleEnabled != null)
+                    MenuItemButton(
+                      onPressed: () =>
+                          widget.onToggleEnabled!.call(!widget.data.enabled),
+                      leadingIcon: Icon(
+                        widget.data.enabled
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      child: Text(
+                        widget.data.enabled
+                            ? 'Display deaktivieren'
+                            : 'Display aktivieren',
+                      ),
+                    ),
+                  if (widget.data.modes.isNotEmpty)
+                    SubmenuButton(
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Auflösung'),
+                          SizedBox(width: 8),
+                          Icon(Icons.chevron_right, size: 16),
+                        ],
+                      ),
+                      menuChildren: [
+                        for (final m in widget.data.modes)
+                          MenuItemButton(
+                            onPressed: widget.onModeChange != null &&
+                                    widget.data.enabled
+                                ? () => widget.onModeChange!(m)
+                                : null,
+                            child: Text(m.label),
+                          ),
+                      ],
+                    ),
                 ],
-                onSelected: widget.onModeChange,
               ),
             ),
         ],

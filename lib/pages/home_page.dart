@@ -105,6 +105,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         resolution: '${width.toInt()}x${height.toInt()}',
         orientation: orientation,
         modes: modes,
+        enabled: true,
       ));
     }
     return monitors;
@@ -217,12 +218,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       _displayMonitors = [];
       return;
     }
-    double minX = mons.map((m) => m.x).reduce(min);
-    double minY = mons.map((m) => m.y).reduce(min);
-    double maxX =
-        mons.map((m) => m.x + m.width / m.scale).reduce(max);
-    double maxY =
-        mons.map((m) => m.y + m.height / m.scale).reduce(max);
+    final activeForBounds = mons.where((m) => m.enabled).toList();
+    final boundsSource =
+        activeForBounds.isNotEmpty ? activeForBounds : mons;
+    double minX = boundsSource.map((m) => m.x).reduce(min);
+    double minY = boundsSource.map((m) => m.y).reduce(min);
+    double maxX = boundsSource
+        .map((m) => m.x + m.width / m.scale)
+        .reduce(max);
+    double maxY = boundsSource
+        .map((m) => m.y + m.height / m.scale)
+        .reduce(max);
     double boundingWidth = maxX - minX;
     double boundingHeight = maxY - minY;
     double allowedW = constraints.maxWidth * 0.8;
@@ -240,7 +246,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       double dy = (m.y - minY) * _scaleFactor + _offsetY;
       double dw = (m.width / m.scale) * _scaleFactor;
       double dh = (m.height / m.scale) * _scaleFactor;
-      return m.copyWith(x: dx, y: dy, width: dw, height: dh);
+      return m.copyWith(
+        x: dx,
+        y: dy,
+        width: dw,
+        height: dh,
+      );
     }).toList();
   }
 
@@ -250,6 +261,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final index = mons.indexWhere((m) => m.id == updatedTile.id);
     if (index == -1) return;
     final oldMonitor = mons[index];
+    if (!oldMonitor.enabled) return;
     final oldRotation = oldMonitor.rotation;
     final newRotation = updatedTile.rotation;
     double newWidth = oldMonitor.width;
@@ -279,6 +291,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           : '${newHeight.toInt()}x${newWidth.toInt()}',
       orientation: newOrientation,
       modes: oldMonitor.modes,
+      enabled: oldMonitor.enabled,
     );
     setState(() {
       profiles[activeProfileIndex!].monitors[index] = newAbsMonitor;
@@ -290,6 +303,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (activeProfileIndex == null) return;
     final index = activeMonitors.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
+    if (!activeMonitors[index].enabled) return;
     _oldPositionsBeforeDrag[tile.id] = activeMonitors[index];
   }
 
@@ -298,6 +312,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final mons = [...activeMonitors];
     final index = mons.indexWhere((m) => m.id == tile.id);
     if (index == -1) return;
+    if (!mons[index].enabled) return;
     final snapped = _snapToEdges(mons[index], mons);
     mons[index] = snapped;
     if (_hasOverlap(snapped, mons, index)) {
@@ -326,6 +341,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     newScale = double.parse(newScale.toStringAsFixed(2));
     final index = mons.indexWhere((m) => m.id == id);
     if (index == -1) return;
+    if (!mons[index].enabled) return;
     final updated = mons[index].copyWith(scale: newScale);
 
     // Neighbour adjustment
@@ -366,15 +382,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final index = mons.indexWhere((m) => m.id == id);
     if (index == -1) return;
 
-    try {
-      await Process.run('swaymsg', [
-        'output',
-        id,
-        'mode',
-        '${mode.width.toInt()}x${mode.height.toInt()}@${mode.refresh}Hz'
-      ]);
-    } catch (e) {
-      debugPrint('Error setting mode: $e');
+    if (mons[index].enabled) {
+      try {
+        await Process.run('swaymsg', [
+          'output',
+          id,
+          'mode',
+          '${mode.width.toInt()}x${mode.height.toInt()}@${mode.refresh}Hz'
+        ]);
+      } catch (e) {
+        debugPrint('Error setting mode: $e');
+      }
     }
 
     final rotatedWidth =
@@ -395,6 +413,35 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
       _buildAndSave(constraints);
     });
+  }
+
+  Future<void> _onMonitorToggleEnabled(
+      String id, bool enabled, BoxConstraints constraints) async {
+    if (activeProfileIndex == null) return;
+    final mons = activeMonitors;
+    final index = mons.indexWhere((m) => m.id == id);
+    if (index == -1) return;
+
+    setState(() {
+      mons[index] = mons[index].copyWith(enabled: enabled);
+      profiles[activeProfileIndex!] =
+          Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
+      _buildAndSave(constraints);
+    });
+
+    try {
+      final result = await Process.run(
+        'swaymsg',
+        ['output', id, enabled ? 'enable' : 'disable'],
+      );
+      if (result.exitCode != 0) {
+        debugPrint('Error toggling output: ${result.stderr}');
+      }
+    } catch (e) {
+      debugPrint('Error toggling output: $e');
+    }
+
+    await _updateConnectedMonitors();
   }
 
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
@@ -440,10 +487,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   int? _findProfileWithAllCurrentMonitors() {
     for (int i = 0; i < profiles.length; i++) {
       final p = profiles[i];
-      if (p.monitors.length != currentMonitors.length) continue;
+      final enabledMonitors =
+          p.monitors.where((m) => m.enabled).toList();
+      if (enabledMonitors.length != currentMonitors.length) continue;
       bool allMatch = true;
       for (var cm in currentMonitors) {
-        if (!p.monitors.any((pm) =>
+        if (!enabledMonitors.any((pm) =>
             pm.manufacturer.trim() == cm.manufacturer.trim())) {
           allMatch = false;
           break;
@@ -576,6 +625,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         onScale: (s) => _onMonitorScale(tile.id, s, constraints),
                         onModeChange: (m) =>
                             _onMonitorModeChange(tile.id, m, constraints),
+                        onToggleEnabled: (enabled) =>
+                            _onMonitorToggleEnabled(
+                                tile.id, enabled, constraints),
                       );
                     }).toList(),
                   );
