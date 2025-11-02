@@ -34,37 +34,51 @@ class ConfigService {
        *        mode <W>x<H>[@Hz] transform <rot> position X,Y
        */
       final outputRE = RegExp(
-        r"output\s+'([^']+)'\s+enable"           // 1: Voller Name
-        r"(?:\s+scale\s+([\d.]+))?"             // 2: scale optional
-        r"\s+mode\s+(\d+)x(\d+)(?:@\S+)?\s+"    // 3: W, 4: H, Hz ignorieren
-        r"transform\s+(\S+)\s+"                 // 5: transform
-        r"position\s+(-?\d+),(-?\d+)",           // 6: X, 7: Y
+        r"output\s+'([^']+)'\s+(enable|disable)([^\n]*)",
+        caseSensitive: false,
       );
 
       for (final outMatch in outputRE.allMatches(block)) {
         final fullName = outMatch.group(1)!.trim();
-        final scaleStr = outMatch.group(2);
-        final modeW = double.parse(outMatch.group(3)!);
-        final modeH = double.parse(outMatch.group(4)!);
-        final transform = outMatch.group(5)!.trim();
-        final posX = double.parse(outMatch.group(6)!);
-        final posY = double.parse(outMatch.group(7)!);
-        final scale = scaleStr != null ? double.parse(scaleStr) : 1.0;
+        final state = outMatch.group(2)!.toLowerCase();
+        final rest = outMatch.group(3) ?? '';
+        final isEnabled = state == 'enable';
 
+        final scaleMatch = RegExp(r"scale\s+([\d.]+)").firstMatch(rest);
+        final modeMatch = RegExp(r"mode\s+(\d+)x(\d+)(?:@\S+)?").firstMatch(rest);
+        final transformMatch = RegExp(r"transform\s+(\S+)").firstMatch(rest);
+        final positionMatch = RegExp(r"position\s+(-?\d+),(-?\d+)").firstMatch(rest);
+
+        final scale =
+            scaleMatch != null ? double.parse(scaleMatch.group(1)!) : 1.0;
+
+        final baseW =
+            modeMatch != null ? double.parse(modeMatch.group(1)!) : 1920.0;
+        final baseH =
+            modeMatch != null ? double.parse(modeMatch.group(2)!) : 1080.0;
+
+        final transform = transformMatch?.group(1)?.trim() ?? 'normal';
         final rotation = switch (transform) {
           '90' => 90,
           '180' => 180,
           '270' => 270,
+          'flipped-90' => 90,
+          'flipped-180' => 180,
+          'flipped-270' => 270,
           _ => 0,
         };
 
-        // Breite/Höhe abhängig von Rotation drehen
-        final width  = (rotation % 180 == 0) ? modeW : modeH;
-        final height = (rotation % 180 == 0) ? modeH : modeW;
+        final width = (rotation % 180 == 0) ? baseW : baseH;
+        final height = (rotation % 180 == 0) ? baseH : baseW;
 
         final resolution = "${width.toInt()}x${height.toInt()}";
         final orientation =
             (rotation % 180 == 0) ? "landscape" : "portrait";
+
+        final posX =
+            positionMatch != null ? double.parse(positionMatch.group(1)!) : 0.0;
+        final posY =
+            positionMatch != null ? double.parse(positionMatch.group(2)!) : 0.0;
 
         outputs.add(
           MonitorTileData(
@@ -79,6 +93,7 @@ class ConfigService {
             resolution: resolution,
             orientation: orientation,
             modes: const [],
+            enabled: isEnabled,
           ),
         );
       }
@@ -96,16 +111,24 @@ class ConfigService {
 
     for (final profile in profiles) {
       if (profile.monitors.isEmpty) continue;
+      final referenceMonitors =
+          profile.monitors.where((m) => m.enabled).toList();
+      final baseForOffsets =
+          referenceMonitors.isNotEmpty ? referenceMonitors : profile.monitors;
+
       // Negative Koordinaten zu Null klappen
       final minX =
-          profile.monitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
+          baseForOffsets.map((m) => m.x).reduce((a, b) => a < b ? a : b);
       final minY =
-          profile.monitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
+          baseForOffsets.map((m) => m.y).reduce((a, b) => a < b ? a : b);
       final offsetX = (minX < 0) ? -minX : 0;
       final offsetY = (minY < 0) ? -minY : 0;
 
       final mons = profile.monitors
-          .map((m) => m.copyWith(x: m.x + offsetX, y: m.y + offsetY))
+          .map((m) => m.copyWith(
+                x: m.x + offsetX,
+                y: m.y + offsetY,
+              ))
           .toList()
         ..sort((a, b) => a.x.compareTo(b.x));
 
@@ -113,6 +136,11 @@ class ConfigService {
 
       /*── 1. Outputs ──────────────────────────────────────────*/
       for (final m in mons) {
+        if (!m.enabled) {
+          buffer.writeln("    output '${m.id}' disable");
+          continue;
+        }
+
         // Breite/Höhe immer landscape‑orientiert in mode‑Zeile
         final baseW = (m.rotation % 180 == 0) ? m.width : m.height;
         final baseH = (m.rotation % 180 == 0) ? m.height : m.width;
@@ -129,15 +157,16 @@ class ConfigService {
       }
 
       /*── 2. Workspace‑Moves (erst hoch, dann final) ─────────*/
-      final tmpBase = mons.length + 1; // z. B. 4–6 bei 3 Monitoren
-      for (var i = 0; i < mons.length; i++) {
-        final m = mons[i];
+      final enabledMons = mons.where((m) => m.enabled).toList();
+      final tmpBase = enabledMons.length + 1; // z. B. 4–6 bei 3 Monitoren
+      for (var i = 0; i < enabledMons.length; i++) {
+        final m = enabledMons[i];
         buffer.writeln(
           "    exec swaymsg \"workspace ${tmpBase + i} output '${m.manufacturer}'; workspace ${tmpBase + i}\"",
         );
       }
-      for (var i = 0; i < mons.length; i++) {
-        final m = mons[i];
+      for (var i = 0; i < enabledMons.length; i++) {
+        final m = enabledMons[i];
         buffer.writeln(
           "    exec swaymsg \"workspace ${i + 1} output '${m.manufacturer}'; workspace ${i + 1}\"",
         );
