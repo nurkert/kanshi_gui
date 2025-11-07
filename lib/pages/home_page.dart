@@ -165,6 +165,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   final Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
   Timer? _saveTimer;
 
+  String _normalizeOutputId(String value) {
+    return value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+  }
+
+  bool _matchesOutput(String a, String b) {
+    return _normalizeOutputId(a) == _normalizeOutputId(b);
+  }
+
   List<MonitorTileData> get activeMonitors {
     if (activeProfileIndex == null) return [];
     return profiles[activeProfileIndex!].monitors;
@@ -173,13 +181,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Future<void> _updateConnectedMonitors() async {
     try {
       List<MonitorTileData> monitors = await getConnectedMonitors();
+      if (!mounted) return;
       setState(() {
         currentMonitors = monitors;
         for (final profile in profiles) {
           for (var i = 0; i < profile.monitors.length; i++) {
             final connected = monitors.firstWhere(
-              (m) => m.manufacturer.trim() ==
-                  profile.monitors[i].manufacturer.trim(),
+              (m) =>
+                  _matchesOutput(m.manufacturer, profile.monitors[i].manufacturer),
               orElse: () => profile.monitors[i],
             );
             profile.monitors[i] =
@@ -189,6 +198,29 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       });
     } catch (e) {
       debugPrint('Error getting connected monitors: $e');
+    }
+  }
+
+  Future<void> _waitForOutputState(String id,
+      {required bool shouldExist}) async {
+    const pollInterval = Duration(milliseconds: 250);
+    const timeout = Duration(seconds: 5);
+    final normalizedId = _normalizeOutputId(id);
+    final deadline = DateTime.now().add(timeout);
+
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      final exists = currentMonitors
+          .any((m) => _normalizeOutputId(m.id) == normalizedId);
+      if (exists == shouldExist) {
+        return;
+      }
+      await Future.delayed(pollInterval);
+      await _updateConnectedMonitors();
+    }
+
+    if (mounted) {
+      debugPrint(
+          'Timeout waiting for output "$id" to ${shouldExist ? 'appear' : 'disappear'}.');
     }
   }
 
@@ -440,11 +472,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
 
     await _updateConnectedMonitors();
-    if (enabled && mounted) {
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (!mounted) return;
-      await _updateConnectedMonitors();
-    }
+    if (!mounted) return;
+    await _waitForOutputState(id, shouldExist: enabled);
   }
 
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
@@ -495,8 +524,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (enabledMonitors.length != currentMonitors.length) continue;
       bool allMatch = true;
       for (var cm in currentMonitors) {
-        if (!enabledMonitors.any((pm) =>
-            pm.manufacturer.trim() == cm.manufacturer.trim())) {
+        if (!enabledMonitors.any(
+            (pm) => _matchesOutput(pm.manufacturer, cm.manufacturer))) {
           allMatch = false;
           break;
         }
@@ -610,7 +639,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         key: ValueKey(tile.id),
                         data: tile,
                         exists: currentMonitors
-                            .any((m) => m.id.trim() == tile.id.trim()),
+                            .any((m) => _matchesOutput(m.id, tile.id)),
                         snapThreshold: snapThreshold,
                         containerSize: Size(
                             constraints.maxWidth, constraints.maxHeight),
