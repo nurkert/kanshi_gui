@@ -218,9 +218,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       _displayMonitors = [];
       return;
     }
-    final activeForBounds = mons.where((m) => m.enabled).toList();
-    final boundsSource =
-        activeForBounds.isNotEmpty ? activeForBounds : mons;
+    final boundsSource = mons;
     double minX = boundsSource.map((m) => m.x).reduce(min);
     double minY = boundsSource.map((m) => m.y).reduce(min);
     double maxX = boundsSource
@@ -442,6 +440,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
 
     await _updateConnectedMonitors();
+    if (enabled && mounted) {
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      await _updateConnectedMonitors();
+    }
   }
 
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
@@ -607,7 +610,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         key: ValueKey(tile.id),
                         data: tile,
                         exists: currentMonitors
-                            .any((m) => m.manufacturer == tile.manufacturer),
+                            .any((m) => m.id.trim() == tile.id.trim()),
                         snapThreshold: snapThreshold,
                         containerSize: Size(
                             constraints.maxWidth, constraints.maxHeight),
