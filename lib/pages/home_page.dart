@@ -17,7 +17,7 @@ class HomePage extends StatefulWidget {
   _HomePageState createState() => _HomePageState();
 }
 
-enum _SidebarSection { profiles, repair }
+enum _SidebarSection { profiles, repair, help }
 
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   final ConfigService _configService = ConfigService();
@@ -167,9 +167,88 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   final Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
   Timer? _saveTimer;
   _SidebarSection _sidebarSection = _SidebarSection.profiles;
+  bool _isEnablingOutputs = false;
 
   String _normalizeOutputId(String value) {
     return value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+  }
+
+  Future<void> _enableAllOutputs() async {
+    if (_isEnablingOutputs) return;
+    if (!mounted) return;
+
+    setState(() {
+      _isEnablingOutputs = true;
+    });
+
+    try {
+      final result = await Process.run('swaymsg', ['-t', 'get_outputs']);
+      if (result.exitCode != 0) {
+        throw Exception('swaymsg failed: ${result.stderr}');
+      }
+
+      final outputs = (jsonDecode(result.stdout) as List).cast<Map<String, dynamic>>();
+      int successCount = 0;
+      final List<String> failures = [];
+
+      for (final output in outputs) {
+        final make = (output['make'] ?? 'Unknown').toString().trim();
+        final model = (output['model'] ?? 'Unknown').toString().trim();
+        final serial = (output['serial'] ?? 'Unknown').toString().trim();
+        final fullName = '$make $model $serial'
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+
+        try {
+          final enableResult =
+              await Process.run('swaymsg', ['output', fullName, 'enable']);
+          if (enableResult.exitCode != 0) {
+            final rawError = '${enableResult.stderr}'.trim();
+            final errorMessage =
+                rawError.isEmpty || rawError == 'null' ? 'Unknown error' : rawError;
+            debugPrint('Failed to enable output $fullName: $errorMessage');
+            failures.add('$fullName ($errorMessage)');
+          } else {
+            successCount++;
+          }
+        } catch (e) {
+          debugPrint('Error enabling output $fullName: $e');
+          failures.add('$fullName ($e)');
+        }
+      }
+
+      String message;
+      if (outputs.isEmpty) {
+        message = 'Keine Ausgänge gefunden.';
+      } else if (failures.isEmpty) {
+        message =
+            'Alle ${outputs.length} Ausgänge wurden erfolgreich aktiviert.';
+      } else {
+        message =
+            'Aktiviert: $successCount/${outputs.length}. Fehler: ${failures.join(', ')}';
+      }
+
+      await _updateConnectedMonitors();
+      if (mounted) {
+        await ensureCurrentSetupMatchesConnectedMonitors();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error enabling all outputs: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ausgänge konnten nicht aktiviert werden: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isEnablingOutputs = false;
+        });
+      }
+    }
   }
 
   bool _matchesOutput(String a, String b) {
@@ -701,6 +780,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                           label: Text('Repair'),
                           icon: Icon(Icons.build),
                         ),
+                        ButtonSegment<_SidebarSection>(
+                          value: _SidebarSection.help,
+                          label: Text('Help'),
+                          icon: Icon(Icons.help_outline),
+                        ),
                       ],
                       selected: <_SidebarSection>{_sidebarSection},
                       onSelectionChanged: (newSelection) {
@@ -757,9 +841,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         child: ElevatedButton(
                           onPressed: _createCurrentSetup,
                           child: const Text('Create Current Setup'),
-                        ),
                       ),
-                  ] else ...[
+                    ),
+                  ] else if (_sidebarSection == _SidebarSection.repair) ...[
                     Expanded(
                       child: ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -775,6 +859,33 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                             title: Text('Clean temporary files'),
                             subtitle: Text(
                                 'Placeholder for future repair utilities.'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.monitor_heart),
+                            title: const Text('Alle Ausgänge aktivieren'),
+                            subtitle: const Text(
+                                'Aktiviert alle bekannten Monitore mittels swaymsg.'),
+                            enabled: !_isEnablingOutputs,
+                            onTap:
+                                _isEnablingOutputs ? null : () => _enableAllOutputs(),
+                            trailing: _isEnablingOutputs
+                                ? const SizedBox(
+                                    height: 24,
+                                    width: 24,
+                                    child: CircularProgressIndicator(),
+                                  )
+                                : FilledButton(
+                                    onPressed: () => _enableAllOutputs(),
+                                    child: const Text('Aktivieren'),
+                                  ),
                           ),
                         ],
                       ),
