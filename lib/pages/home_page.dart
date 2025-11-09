@@ -59,7 +59,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final outputs = jsonDecode(result.stdout) as List;
     List<MonitorTileData> monitors = [];
     for (final output in outputs) {
-      if (output['active'] != true) continue;
+      final isActive = output['active'] == true;
       final make = (output['make'] ?? 'Unknown').toString().trim();
       final model = (output['model'] ?? 'Unknown').toString().trim();
       final serial = (output['serial'] ?? 'Unknown').toString().trim();
@@ -105,7 +105,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         resolution: '${width.toInt()}x${height.toInt()}',
         orientation: orientation,
         modes: modes,
-        enabled: true,
+        enabled: isActive,
       ));
     }
     return monitors;
@@ -209,9 +209,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final deadline = DateTime.now().add(timeout);
 
     while (mounted && DateTime.now().isBefore(deadline)) {
-      final exists = currentMonitors
-          .any((m) => _normalizeOutputId(m.id) == normalizedId);
-      if (exists == shouldExist) {
+      final matches = currentMonitors
+          .where((m) => _normalizeOutputId(m.id) == normalizedId)
+          .toList();
+      final exists = matches.isNotEmpty;
+      final isEnabled = matches.any((m) => m.enabled);
+      if ((shouldExist && isEnabled) ||
+          (!shouldExist && (!exists || !isEnabled))) {
         return;
       }
       await Future.delayed(pollInterval);
@@ -517,13 +521,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   int? _findProfileWithAllCurrentMonitors() {
+    final currentEnabled =
+        currentMonitors.where((m) => m.enabled).toList();
     for (int i = 0; i < profiles.length; i++) {
       final p = profiles[i];
       final enabledMonitors =
           p.monitors.where((m) => m.enabled).toList();
-      if (enabledMonitors.length != currentMonitors.length) continue;
+      if (enabledMonitors.length != currentEnabled.length) continue;
       bool allMatch = true;
-      for (var cm in currentMonitors) {
+      for (var cm in currentEnabled) {
         if (!enabledMonitors.any(
             (pm) => _matchesOutput(pm.manufacturer, cm.manufacturer))) {
           allMatch = false;
