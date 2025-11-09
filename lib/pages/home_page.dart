@@ -17,6 +17,8 @@ class HomePage extends StatefulWidget {
   _HomePageState createState() => _HomePageState();
 }
 
+enum _SidebarSection { profiles, repair }
+
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   final ConfigService _configService = ConfigService();
 
@@ -164,6 +166,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   List<MonitorTileData> _displayMonitors = [];
   final Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
   Timer? _saveTimer;
+  _SidebarSection _sidebarSection = _SidebarSection.profiles;
 
   String _normalizeOutputId(String value) {
     return value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
@@ -684,54 +687,99 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               color: Colors.grey[850],
               child: Column(
                 children: [
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: profiles.length,
-                      itemBuilder: (context, i) {
-                        return ProfileListItem(
-                          profile: profiles[i],
-                          isActive: activeProfileIndex == i,
-                          onSelect: () =>
-                              setState(() => activeProfileIndex = i),
-                          onNameChanged: (newName) {
-                            bool exists = profiles.any((p) =>
-                                p.name.toLowerCase() ==
-                                    newName.toLowerCase() &&
-                                p != profiles[i]);
-                            if (exists) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content:
-                                        Text('Profile name already exists!')),
-                              );
-                            } else {
-                              setState(() {
-                                profiles[i].name = newName;
-                                _autoSave();
-                              });
-                            }
-                          },
-                          onDelete: () {
-                            setState(() {
-                              if (activeProfileIndex == i)
-                                activeProfileIndex = null;
-                              profiles.removeAt(i);
-                              _autoSave();
-                            });
-                          },
-                          exists: true,
-                        );
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: SegmentedButton<_SidebarSection>(
+                      segments: const [
+                        ButtonSegment<_SidebarSection>(
+                          value: _SidebarSection.profiles,
+                          label: Text('Profiles'),
+                          icon: Icon(Icons.person),
+                        ),
+                        ButtonSegment<_SidebarSection>(
+                          value: _SidebarSection.repair,
+                          label: Text('Repair'),
+                          icon: Icon(Icons.build),
+                        ),
+                      ],
+                      selected: <_SidebarSection>{_sidebarSection},
+                      onSelectionChanged: (newSelection) {
+                        setState(() {
+                          _sidebarSection = newSelection.first;
+                        });
                       },
                     ),
                   ),
-                  if (_findProfileWithAllCurrentMonitors() == null)
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: ElevatedButton(
-                        onPressed: _createCurrentSetup,
-                        child: const Text('Create Current Setup'),
+                  if (_sidebarSection == _SidebarSection.profiles) ...[
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: profiles.length,
+                        itemBuilder: (context, i) {
+                          return ProfileListItem(
+                            profile: profiles[i],
+                            isActive: activeProfileIndex == i,
+                            onSelect: () =>
+                                setState(() => activeProfileIndex = i),
+                            onNameChanged: (newName) {
+                              bool exists = profiles.any((p) =>
+                                  p.name.toLowerCase() ==
+                                      newName.toLowerCase() &&
+                                  p != profiles[i]);
+                              if (exists) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Profile name already exists!')),
+                                );
+                              } else {
+                                setState(() {
+                                  profiles[i].name = newName;
+                                  _autoSave();
+                                });
+                              }
+                            },
+                            onDelete: () {
+                              setState(() {
+                                if (activeProfileIndex == i)
+                                  activeProfileIndex = null;
+                                profiles.removeAt(i);
+                                _autoSave();
+                              });
+                            },
+                            exists: true,
+                          );
+                        },
                       ),
                     ),
+                    if (_findProfileWithAllCurrentMonitors() == null)
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: ElevatedButton(
+                          onPressed: _createCurrentSetup,
+                          child: const Text('Create Current Setup'),
+                        ),
+                      ),
+                  ] else ...[
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        children: const [
+                          ListTile(
+                            leading: Icon(Icons.restart_alt),
+                            title: Text('Restart kanshi'),
+                            subtitle: Text(
+                                'Run repair actions for kanshi configuration.'),
+                          ),
+                          ListTile(
+                            leading: Icon(Icons.cleaning_services),
+                            title: Text('Clean temporary files'),
+                            subtitle: Text(
+                                'Placeholder for future repair utilities.'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
