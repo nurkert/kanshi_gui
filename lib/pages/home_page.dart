@@ -251,6 +251,67 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  Future<void> _repairActiveLayout() async {
+    if (activeProfileIndex == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kein aktives Profil zum Entwirren.')),
+      );
+      return;
+    }
+
+    final profile = profiles[activeProfileIndex!];
+    final activeMonitors = profile.monitors.where((m) => m.enabled).toList()
+      ..sort((a, b) => a.x.compareTo(b.x));
+    final inactiveMonitors =
+        profile.monitors.where((m) => !m.enabled).toList()
+          ..sort((a, b) => a.x.compareTo(b.x));
+
+    if (activeMonitors.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Keine aktiven Monitore zum Entwirren.')),
+      );
+      return;
+    }
+
+    const double spacing = 100.0;
+    double currentX = 0.0;
+    final List<MonitorTileData> rearranged = [];
+
+    double _nextPosition(MonitorTileData monitor) {
+      final scale = monitor.scale == 0 ? 1.0 : monitor.scale;
+      return monitor.width / scale;
+    }
+
+    for (final monitor in activeMonitors) {
+      rearranged.add(monitor.copyWith(x: currentX, y: 0));
+      currentX += _nextPosition(monitor) + spacing;
+    }
+
+    for (final monitor in inactiveMonitors) {
+      rearranged.add(monitor.copyWith(x: currentX, y: 0));
+      currentX += _nextPosition(monitor) + spacing;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      profiles[activeProfileIndex!] =
+          Profile(name: profile.name, monitors: rearranged);
+    });
+
+    _autoSave();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+            'Layout für ${activeMonitors.length} aktive Monitor${activeMonitors.length == 1 ? '' : 'e'} neu angeordnet.'),
+      ),
+    );
+  }
+
   bool _matchesOutput(String a, String b) {
     return _normalizeOutputId(a) == _normalizeOutputId(b);
   }
@@ -868,6 +929,21 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                       child: ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 8.0),
                         children: [
+                          ListTile(
+                            leading: const Icon(Icons.auto_fix_high),
+                            title: const Text('Layout entwirren'),
+                            subtitle: const Text(
+                                'Ordnet aktive Monitore in einer horizontalen Reihe mit Standardabstand an.'),
+                            onTap: () => _repairActiveLayout(),
+                            trailing: Tooltip(
+                              message:
+                                  'Aktive Monitore werden in einer Reihe mit Standardabstand platziert.',
+                              child: FilledButton(
+                                onPressed: () => _repairActiveLayout(),
+                                child: const Text('Layout entwirren'),
+                              ),
+                            ),
+                          ),
                           ListTile(
                             leading: const Icon(Icons.monitor_heart),
                             title: const Text('Alle Ausgänge aktivieren'),
