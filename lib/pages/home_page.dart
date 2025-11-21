@@ -68,6 +68,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       String fullName = '$make $model $serial'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
+      final outputName = (output['name'] ?? fullName).toString().trim();
       final modeMaps = (output['modes'] as List).cast<Map<String, dynamic>>();
       final modes = modeMaps
           .map((m) => MonitorMode(
@@ -96,7 +97,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           ? (width >= height ? 'landscape' : 'portrait')
           : (width >= height ? 'portrait' : 'landscape');
       monitors.add(MonitorTileData(
-        id: fullName,
+        id: outputName,
         manufacturer: fullName,
         x: (output['rect']['x'] as num).toDouble(),
         y: (output['rect']['y'] as num).toDouble(),
@@ -173,6 +174,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
   }
 
+  bool _monitorsMatch(MonitorTileData a, MonitorTileData b) {
+    return _matchesOutput(a.id, b.id) ||
+        _matchesOutput(a.manufacturer, b.manufacturer);
+  }
+
   Future<void> _enableAllOutputs() async {
     if (_isEnablingOutputs) return;
     if (!mounted) return;
@@ -198,10 +204,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         final fullName = '$make $model $serial'
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim();
+        final outputName = (output['name'] ?? fullName).toString().trim();
 
         try {
           final enableResult =
-              await Process.run('swaymsg', ['output', fullName, 'enable']);
+              await Process.run('swaymsg', ['output', outputName, 'enable']);
           if (enableResult.exitCode != 0) {
             final rawError = '${enableResult.stderr}'.trim();
             final errorMessage =
@@ -330,12 +337,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         for (final profile in profiles) {
           for (var i = 0; i < profile.monitors.length; i++) {
             final connected = monitors.firstWhere(
-              (m) =>
-                  _matchesOutput(m.manufacturer, profile.monitors[i].manufacturer),
+              (m) => _monitorsMatch(m, profile.monitors[i]),
               orElse: () => profile.monitors[i],
             );
-            profile.monitors[i] =
-                profile.monitors[i].copyWith(modes: connected.modes);
+            profile.monitors[i] = profile.monitors[i].copyWith(
+              id: connected.id,
+              manufacturer: connected.manufacturer,
+              modes: connected.modes,
+            );
           }
         }
       });
@@ -673,8 +682,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (enabledMonitors.length != currentEnabled.length) continue;
       bool allMatch = true;
       for (var cm in currentEnabled) {
-        if (!enabledMonitors.any(
-            (pm) => _matchesOutput(pm.manufacturer, cm.manufacturer))) {
+        if (!enabledMonitors.any((pm) => _monitorsMatch(pm, cm))) {
           allMatch = false;
           break;
         }
