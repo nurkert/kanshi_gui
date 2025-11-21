@@ -162,13 +162,13 @@ class ConfigService {
       for (var i = 0; i < enabledMons.length; i++) {
         final m = enabledMons[i];
         buffer.writeln(
-          "    exec swaymsg \"workspace ${tmpBase + i} output '${m.manufacturer}'; workspace ${tmpBase + i}\"",
+          "    exec swaymsg \"workspace ${tmpBase + i} output '${m.id}'; workspace ${tmpBase + i}\"",
         );
       }
       for (var i = 0; i < enabledMons.length; i++) {
         final m = enabledMons[i];
         buffer.writeln(
-          "    exec swaymsg \"workspace ${i + 1} output '${m.manufacturer}'; workspace ${i + 1}\"",
+          "    exec swaymsg \"workspace ${i + 1} output '${m.id}'; workspace ${i + 1}\"",
         );
       }
 
