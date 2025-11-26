@@ -246,13 +246,13 @@ class _MonitorTileState extends State<MonitorTile> {
                       ),
                       child: Text(
                         widget.data.enabled
-                            ? 'Display deaktivieren'
-                            : 'Display aktivieren',
+                            ? 'Disable display'
+                            : 'Enable display',
                       ),
                     ),
                   if (widget.data.modes.isNotEmpty)
                     SubmenuButton(
-                      child: const Text('Auflösung / Hz'),
+                      child: const Text('Resolution / Hz'),
                       menuChildren: _buildModeMenuItems(),
                     ),
                   if (widget.onCustomMode != null || widget.onCustomModeRevert != null)
@@ -267,7 +267,7 @@ class _MonitorTileState extends State<MonitorTile> {
                         if (widget.onCustomModeRevert != null)
                           MenuItemButton(
                             onPressed: widget.onCustomModeRevert,
-                            child: const Text('Letzten Custom Mode zurücksetzen'),
+                            child: const Text('Revert last custom mode'),
                           ),
                       ],
                     ),
