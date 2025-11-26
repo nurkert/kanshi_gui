@@ -19,7 +19,7 @@ jobs:
           - arch: amd64
             runner: ubuntu-latest
           - arch: arm64
-            runner: ubuntu-22.04-arm64
+            runner: ubuntu-22.04-arm   # <- wichtig: ohne "64"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
