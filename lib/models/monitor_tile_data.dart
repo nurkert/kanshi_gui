@@ -11,6 +11,7 @@ class MonitorTileData {
   final double height;
   final double scale;
   final int rotation;
+  final double refresh;
   final String resolution;
   final String orientation;
   final List<MonitorMode> modes;
@@ -25,6 +26,7 @@ class MonitorTileData {
     required this.height,
     this.scale = 1.0,
     required this.rotation,
+    required this.refresh,
     required this.resolution,
     required this.orientation,
     this.modes = const [],
@@ -40,6 +42,7 @@ class MonitorTileData {
     double? height,
     double? scale,
     int? rotation,
+    double? refresh,
     String? resolution,
     String? orientation,
     List<MonitorMode>? modes,
@@ -54,6 +57,7 @@ class MonitorTileData {
       height: height ?? this.height,
       scale: scale ?? this.scale,
       rotation: rotation ?? this.rotation,
+      refresh: refresh ?? this.refresh,
       resolution: resolution ?? this.resolution,
       orientation: orientation ?? this.orientation,
       modes: modes ?? this.modes,

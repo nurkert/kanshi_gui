@@ -1,0 +1,30 @@
+display_name: "Kanshi GUI"
+package_name: kanshi-gui
+
+maintainer:
+  name: Nurkert
+  email: nurkert@example.com
+
+priority: optional
+section: x11
+
+installed_size: 1024
+essential: false
+
+icon: assets/kanshi_gui.png
+
+# wichtig für "Depends:"
+dependencies: []
+
+generic_name: "Kanshi GUI"
+keywords: []
+categories:
+  - Utility
+
+startup_notify: true
+
+postinstall_scripts:
+  - echo "Kanshi GUI installiert!"
+postuninstall_scripts:
+  - echo "Kanshi GUI entfernt!"
+
