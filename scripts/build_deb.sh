@@ -5,13 +5,21 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="kanshi_gui"
 DEB_PACKAGE_NAME="${APP_NAME//_/-}"
 
-command -v flutter >/dev/null 2>&1 || { echo "flutter not found in PATH." >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || { echo "dpkg-deb not found (install dpkg-dev)." >&2; exit 1; }
 
 # Determine architectures
+BUNDLE_DIR_OVERRIDE=""
 ARCH_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --bundle-dir)
+      if [[ -z ${2:-} ]]; then
+        echo "Missing value for --bundle-dir" >&2
+        exit 1
+      fi
+      BUNDLE_DIR_OVERRIDE="$2"
+      shift 2
+      ;;
     --arch)
       if [[ -z ${2:-} ]]; then
         echo "Missing value for --arch" >&2
@@ -70,20 +78,36 @@ case "$HOST_ARCH" in
 esac
 
 if [[ "$HOST_ARCH_NORM" != "$DEB_ARCH" ]]; then
-  cat <<EOF >&2
+  if [[ -z "$BUNDLE_DIR_OVERRIDE" ]]; then
+    cat <<EOF >&2
 Requested architecture ($DEB_ARCH) does not match host architecture ($HOST_ARCH).
 Flutter does not support cross-building Linux desktop binaries. Please run the
 build on a $DEB_ARCH host (or an emulated container/VM for that architecture)
-before packaging the .deb file.
+before packaging the .deb file, or supply --bundle-dir with a prebuilt
+Flutter bundle for the target architecture.
 EOF
-  exit 1
+    exit 1
+  else
+    echo "Using prebuilt Flutter bundle from $BUNDLE_DIR_OVERRIDE for cross-architecture packaging." >&2
+  fi
 fi
 
 VERSION="$(awk -F': ' '/^version:/{print $2}' "$ROOT_DIR/pubspec.yaml")"
 PKG_DIR="$ROOT_DIR/build/debian/${DEB_PACKAGE_NAME}_${VERSION}"
 
-echo "Building Flutter bundle for ${TARGET_PLATFORM}…"
-flutter build linux --target-platform="$TARGET_PLATFORM"
+if [[ -n "$BUNDLE_DIR_OVERRIDE" ]]; then
+  if [[ ! -d "$BUNDLE_DIR_OVERRIDE" ]]; then
+    echo "Provided bundle directory does not exist: $BUNDLE_DIR_OVERRIDE" >&2
+    exit 1
+  fi
+  echo "Skipping Flutter build and using bundle from $BUNDLE_DIR_OVERRIDE"
+  BUILD_BUNDLE_DIR="$BUNDLE_DIR_OVERRIDE"
+else
+  command -v flutter >/dev/null 2>&1 || { echo "flutter not found in PATH." >&2; exit 1; }
+  echo "Building Flutter bundle for ${TARGET_PLATFORM}…"
+  flutter build linux --target-platform="$TARGET_PLATFORM"
+  BUILD_BUNDLE_DIR="$ROOT_DIR/build/linux/$FLUTTER_ARCH/release/bundle"
+fi
 
 echo "Assembling Debian package payload…"
 rm -rf "$PKG_DIR"
@@ -95,7 +119,6 @@ mkdir -p \
   "$PKG_DIR/usr/share/pixmaps" \
   "$PKG_DIR/usr/share/icons/hicolor/512x512/apps"
 
-BUILD_BUNDLE_DIR="$ROOT_DIR/build/linux/$FLUTTER_ARCH/release/bundle"
 if [ ! -d "$BUILD_BUNDLE_DIR" ]; then
   echo "Flutter build output not found for architecture $FLUTTER_ARCH at $BUILD_BUNDLE_DIR" >&2
   exit 1
