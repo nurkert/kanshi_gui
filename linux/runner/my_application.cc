@@ -40,23 +40,23 @@ static void setup_menu(MyApplication* self, GtkWindow* window, GtkHeaderBar* hea
   g_action_map_add_action_entries(G_ACTION_MAP(self), entries, G_N_ELEMENTS(entries), self);
 
   g_autoptr(GMenu) file_menu = g_menu_new();
-  g_menu_append(file_menu, "Speichern & kanshi neu starten", "app.saveRestart");
-  g_menu_append(file_menu, "Nur Profile speichern", "app.saveProfiles");
+  g_menu_append(file_menu, "Save & restart kanshi", "app.saveRestart");
+  g_menu_append(file_menu, "Save profiles only", "app.saveProfiles");
   g_menu_append(file_menu, "Reload Outputs & Profiles", "app.reload");
 
   g_autoptr(GMenu) actions_menu = g_menu_new();
-  g_menu_append(actions_menu, "Alle Displays aktivieren", "app.enableAll");
-  g_menu_append(actions_menu, "kanshi neu starten", "app.restartKanshi");
-  g_menu_append(actions_menu, "Backup wiederherstellen & anwenden", "app.restoreBackup");
-  g_menu_append(actions_menu, "Logs anzeigen", "app.showLogs");
+  g_menu_append(actions_menu, "Enable all displays", "app.enableAll");
+  g_menu_append(actions_menu, "Restart kanshi", "app.restartKanshi");
+  g_menu_append(actions_menu, "Restore & apply backup", "app.restoreBackup");
+  g_menu_append(actions_menu, "Show logs", "app.showLogs");
 
   g_autoptr(GMenu) help_menu = g_menu_new();
-  g_menu_append(help_menu, "Tipps anzeigen", "app.showHelp");
+  g_menu_append(help_menu, "Show tips", "app.showHelp");
 
   g_autoptr(GMenu) menubar = g_menu_new();
-  g_menu_append_submenu(menubar, "Datei", G_MENU_MODEL(file_menu));
-  g_menu_append_submenu(menubar, "Aktionen", G_MENU_MODEL(actions_menu));
-  g_menu_append_submenu(menubar, "Hilfe", G_MENU_MODEL(help_menu));
+  g_menu_append_submenu(menubar, "File", G_MENU_MODEL(file_menu));
+  g_menu_append_submenu(menubar, "Actions", G_MENU_MODEL(actions_menu));
+  g_menu_append_submenu(menubar, "Help", G_MENU_MODEL(help_menu));
 
   GtkWidget* menu_bar_widget = gtk_menu_bar_new_from_model(G_MENU_MODEL(menubar));
   gtk_widget_show(menu_bar_widget);

@@ -24,7 +24,23 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 ### Installation
 
-1. **Build it yourself**:
+1. **Install from the APT repository (recommended)**:
+   ```bash
+   # Add Nurkert APT key
+   sudo mkdir -p /usr/share/keyrings
+   curl -fsSL https://apt.nurkert.de/KEY.gpg \
+     | sudo gpg --dearmor -o /usr/share/keyrings/nurkert-archive-keyring.gpg
+
+   # Add repository
+   echo "deb [signed-by=/usr/share/keyrings/nurkert-archive-keyring.gpg] https://apt.nurkert.de stable main" \
+     | sudo tee /etc/apt/sources.list.d/nurkert.list
+
+   # Install kanshi-gui (pulls kanshi automatically)
+   sudo apt update
+   sudo apt install kanshi-gui
+   ```
+
+2. **Build it yourself**:
    ```bash
    git clone https://github.com/nurkert/kanshi_gui
    cd kanshi_gui
@@ -48,13 +64,13 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
    kanshi_gui
    ```
 
-2. **Create a Debian package**:
+3. **Create a Debian package**:
    The repository ships with a helper script that bundles the application
    into a `.deb` file. Run it from the project root and then install the
    resulting package with `dpkg`:
    ```bash
    ./scripts/build_deb.sh
-   sudo dpkg -i build/kanshi_gui_*.deb
+   sudo dpkg -i build/kanshi-gui_*_$(dpkg --print-architecture).deb
    ```
    After installation the `kanshi_gui` command is available globally. To
    remove the package again use:
