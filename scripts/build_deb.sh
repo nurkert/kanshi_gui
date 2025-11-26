@@ -50,6 +50,20 @@ case "$DEB_ARCH" in
     ;;
 esac
 
+# Flutter cannot cross-compile Linux desktop binaries, so ensure the host
+# architecture matches the requested target. This check keeps the script from
+# failing deep in the Flutter tool with a less actionable error message.
+HOST_ARCH=$(uname -m)
+if [[ "$HOST_ARCH" != "$DEB_ARCH" ]]; then
+  cat <<EOF >&2
+Requested architecture ($DEB_ARCH) does not match host architecture ($HOST_ARCH).
+Flutter does not support cross-building Linux desktop binaries. Please run the
+build on a $DEB_ARCH host (or an emulated container/VM for that architecture)
+before packaging the .deb file.
+EOF
+  exit 1
+fi
+
 VERSION="$(awk -F': ' '/^version:/{print $2}' "$ROOT_DIR/pubspec.yaml")"
 PKG_DIR="$ROOT_DIR/build/debian/${DEB_PACKAGE_NAME}_${VERSION}"
 
