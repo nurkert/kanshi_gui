@@ -54,7 +54,22 @@ esac
 # architecture matches the requested target. This check keeps the script from
 # failing deep in the Flutter tool with a less actionable error message.
 HOST_ARCH=$(uname -m)
-if [[ "$HOST_ARCH" != "$DEB_ARCH" ]]; then
+case "$HOST_ARCH" in
+  x86_64|amd64)
+    HOST_ARCH_NORM="amd64"
+    ;;
+  aarch64|arm64)
+    HOST_ARCH_NORM="arm64"
+    ;;
+  armv7l|armhf)
+    HOST_ARCH_NORM="armhf"
+    ;;
+  *)
+    HOST_ARCH_NORM="$HOST_ARCH"
+    ;;
+esac
+
+if [[ "$HOST_ARCH_NORM" != "$DEB_ARCH" ]]; then
   cat <<EOF >&2
 Requested architecture ($DEB_ARCH) does not match host architecture ($HOST_ARCH).
 Flutter does not support cross-building Linux desktop binaries. Please run the
