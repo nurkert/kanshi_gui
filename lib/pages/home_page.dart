@@ -27,6 +27,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   /// Aktuell verbundene Monitore.
   List<MonitorTileData> currentMonitors = [];
+  final Map<String, MonitorMode> _lastModeBeforeCustom = {};
+  final Map<String, Timer> _customModeRevertTimers = {};
 
   /// Controller für das Menü‑Icon.
   late final AnimationController _iconController;
@@ -44,6 +46,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void dispose() {
     _iconController.dispose();
+    for (final t in _customModeRevertTimers.values) {
+      t.cancel();
+    }
     super.dispose();
   }
 
@@ -69,22 +74,32 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
       final outputName = (output['name'] ?? fullName).toString().trim();
+
       final modeMaps = (output['modes'] as List).cast<Map<String, dynamic>>();
       final modes = modeMaps
           .map((m) => MonitorMode(
                 width: (m['width'] as num).toDouble(),
                 height: (m['height'] as num).toDouble(),
-                refresh: ((m['refresh'] as num).toInt() / 1000).round(),
+                refresh: ((m['refresh'] as num).toDouble() / 1000.0),
               ))
           .toList();
-      Map<String, dynamic> best = modeMaps.reduce((a, b) {
-        int aPx = a['width'] * a['height'];
-        int bPx = b['width'] * b['height'];
-        if (aPx != bPx) return aPx > bPx ? a : b;
-        return (a['refresh'] > b['refresh']) ? a : b;
-      });
-      double width = (best['width'] as num).toDouble();
-      double height = (best['height'] as num).toDouble();
+
+      Map<String, dynamic>? currentMode =
+          (output['current_mode'] as Map<String, dynamic>?);
+      if (currentMode == null && modeMaps.isNotEmpty) {
+        // Fallback: best mode by resolution then refresh
+        currentMode = modeMaps.reduce((a, b) {
+          int aPx = a['width'] * a['height'];
+          int bPx = b['width'] * b['height'];
+          if (aPx != bPx) return aPx > bPx ? a : b;
+          return (a['refresh'] > b['refresh']) ? a : b;
+        });
+      }
+
+      final width = (currentMode?['width'] as num?)?.toDouble() ?? 1920.0;
+      final height = (currentMode?['height'] as num?)?.toDouble() ?? 1080.0;
+      final refresh =
+          ((currentMode?['refresh'] as num?)?.toDouble() ?? 60000.0) / 1000.0;
       double scale = (output['scale'] as num?)?.toDouble() ?? 1.0;
       String transform = (output['transform'] ?? 'normal').toString();
       int rotation = switch (transform) {
@@ -105,6 +120,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         height: height,
         scale: scale,
         rotation: rotation,
+        refresh: refresh,
         resolution: '${width.toInt()}x${height.toInt()}',
         orientation: orientation,
         modes: modes,
@@ -177,6 +193,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   bool _monitorsMatch(MonitorTileData a, MonitorTileData b) {
     return _matchesOutput(a.id, b.id) ||
         _matchesOutput(a.manufacturer, b.manufacturer);
+  }
+
+  String _resolveOutputName(String idOrManufacturer) {
+    final norm = _normalizeOutputId(idOrManufacturer);
+    for (final m in currentMonitors) {
+      if (_normalizeOutputId(m.id) == norm ||
+          _normalizeOutputId(m.manufacturer) == norm) {
+        return m.id;
+      }
+    }
+    return idOrManufacturer;
   }
 
   Future<void> _enableAllOutputs() async {
@@ -343,6 +370,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             profile.monitors[i] = profile.monitors[i].copyWith(
               id: connected.id,
               manufacturer: connected.manufacturer,
+              refresh: connected.refresh,
               modes: connected.modes,
             );
           }
@@ -472,6 +500,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       height: newHeight,
       scale: oldMonitor.scale,
       rotation: newRotation,
+      refresh: oldMonitor.refresh,
       resolution: newOrientation == 'landscape'
           ? '${newWidth.toInt()}x${newHeight.toInt()}'
           : '${newHeight.toInt()}x${newWidth.toInt()}',
@@ -569,16 +598,34 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (index == -1) return;
 
     if (mons[index].enabled) {
+      final target = _resolveOutputName(id);
       try {
-        await Process.run('swaymsg', [
+        final result = await Process.run('/usr/bin/swaymsg', [
           'output',
-          id,
+          target,
           'mode',
-          '${mode.width.toInt()}x${mode.height.toInt()}@${mode.refresh}Hz'
+          '${mode.width.toInt()}x${mode.height.toInt()}@${_formatHz(mode.refresh)}Hz'
         ]);
+        if (result.exitCode != 0) {
+          debugPrint('Error setting mode: ${result.stderr}');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Mode konnte nicht gesetzt werden: ${result.stderr}')),
+            );
+          }
+          return;
+        }
       } catch (e) {
         debugPrint('Error setting mode: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error setting mode: $e')),
+          );
+        }
+        return;
       }
+      // Nach erfolgreichem Setzen State nachziehen
+      await _updateConnectedMonitors();
     }
 
     final rotatedWidth =
@@ -588,6 +635,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final updated = mons[index].copyWith(
       width: rotatedWidth,
       height: rotatedHeight,
+      refresh: mode.refresh,
       resolution: '${rotatedWidth.toInt()}x${rotatedHeight.toInt()}',
       orientation: (mons[index].rotation % 180 == 0)
           ? (mode.width >= mode.height ? 'landscape' : 'portrait')
@@ -608,28 +656,367 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final index = mons.indexWhere((m) => m.id == id);
     if (index == -1) return;
 
-    setState(() {
-      mons[index] = mons[index].copyWith(enabled: enabled);
-      profiles[activeProfileIndex!] =
-          Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
-      _buildAndSave(constraints);
-    });
-
     try {
-      final result = await Process.run(
-        'swaymsg',
-        ['output', id, enabled ? 'enable' : 'disable'],
-      );
-      if (result.exitCode != 0) {
-        debugPrint('Error toggling output: ${result.stderr}');
+      final target = _resolveOutputName(id);
+      // Stelle sicher, dass der Output laut Sway existiert.
+      final currentOutput = _currentModeForOutput(target);
+      if (currentOutput == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Output $target nicht gefunden.')),
+          );
+        }
+        return;
+      }
+
+      if (!enabled) {
+        final result = await Process.run(
+          '/usr/bin/swaymsg',
+          ['output', target, 'disable'],
+        );
+        if (result.exitCode != 0) {
+          debugPrint('Error toggling output: ${result.stderr}');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content:
+                      Text('Konnte Output $target nicht toggeln: ${result.stderr}')),
+            );
+          }
+          return;
+        }
+      } else {
+        // Beim Aktivieren: erst enable, dann (falls möglich) Mode/Scale/Transform/Position setzen.
+        final monitor = mons[index];
+        final mode = _bestModeForWithFallback(
+          monitor,
+          monitor.modes,
+        );
+        final transform = switch (monitor.rotation % 360) {
+          90 => '90',
+          180 => '180',
+          270 => '270',
+          _ => 'normal',
+        };
+        final posX = monitor.x.toInt();
+        final posY = monitor.y.toInt();
+
+        // Zuerst nur enable
+        var result = await Process.run('/usr/bin/swaymsg', [
+          'output',
+          target,
+          'enable',
+        ]);
+        if (result.exitCode != 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content:
+                      Text('Konnte Output $target nicht aktivieren: ${result.stderr}')),
+            );
+          }
+          return;
+        }
+
+        // Dann Konfiguration, falls Mode vorhanden
+        if (mode != null) {
+          result = await Process.run('/usr/bin/swaymsg', [
+            'output',
+            target,
+            'scale',
+            monitor.scale.toStringAsFixed(2),
+            'mode',
+            '${mode.width.toInt()}x${mode.height.toInt()}@${_formatHz(mode.refresh)}Hz',
+            'transform',
+            transform,
+            'position',
+            '$posX,$posY',
+          ]);
+          if (result.exitCode != 0 && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content: Text(
+                      'Aktiviert, aber Mode konnte nicht gesetzt werden: ${result.stderr}')),
+            );
+          }
+        }
       }
     } catch (e) {
       debugPrint('Error toggling output: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fehler beim Togglen: $e')),
+        );
+      }
+      return;
     }
 
     await _updateConnectedMonitors();
     if (!mounted) return;
-    await _waitForOutputState(id, shouldExist: enabled);
+
+    // Nur bei Erfolg den lokalen Zustand dauerhaft setzen, sonst zurückrollen.
+    final current = currentMonitors.any((m) =>
+        _normalizeOutputId(m.id) == _normalizeOutputId(_resolveOutputName(id)) &&
+        m.enabled == enabled);
+    if (current) {
+      setState(() {
+        mons[index] = mons[index].copyWith(enabled: enabled);
+        profiles[activeProfileIndex!] =
+            Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
+        _buildAndSave(constraints);
+      });
+      if (enabled) {
+        _maybeWarnBandwidth(mons);
+      }
+      await _waitForOutputState(_resolveOutputName(id), shouldExist: enabled);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Output ${enabled ? 'nicht aktiviert' : 'nicht deaktiviert'} – Status bleibt unverändert.')),
+        );
+      }
+    }
+  }
+
+  MonitorMode _bestModeFor(MonitorTileData monitor) {
+    if (monitor.modes.isEmpty) {
+      return MonitorMode(
+        width: monitor.width,
+        height: monitor.height,
+        refresh: monitor.refresh > 0 ? monitor.refresh : 60,
+      );
+    }
+    final modes = [...monitor.modes]
+      ..sort((a, b) {
+        final areaA = a.width * a.height;
+        final areaB = b.width * b.height;
+        if (areaA != areaB) return areaB.compareTo(areaA);
+        return b.refresh.compareTo(a.refresh);
+      });
+    return modes.first;
+  }
+
+  MonitorMode? _bestModeForWithFallback(
+      MonitorTileData monitor, List<MonitorMode> modes) {
+    if (modes.isEmpty) {
+      return MonitorMode(
+        width: monitor.width,
+        height: monitor.height,
+        refresh: monitor.refresh > 0 ? monitor.refresh : 60,
+      );
+    }
+    final sorted = [...modes]
+      ..sort((a, b) {
+        final areaA = a.width * a.height;
+        final areaB = b.width * b.height;
+        if (areaA != areaB) return areaB.compareTo(areaA);
+        return b.refresh.compareTo(a.refresh);
+      });
+    return sorted.first;
+  }
+
+  Future<void> _promptCustomMode(
+      String id, BoxConstraints constraints) async {
+    final current = _currentModeForOutput(id);
+    final widthController = TextEditingController(
+        text: current != null ? current.width.toInt().toString() : '1920');
+    final heightController = TextEditingController(
+        text: current != null ? current.height.toInt().toString() : '1080');
+    final refreshController = TextEditingController(
+        text: current != null ? _formatHz(current.refresh) : '60');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Custom Mode (Advanced)'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: widthController,
+                decoration: const InputDecoration(labelText: 'Breite (px)'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: heightController,
+                decoration: const InputDecoration(labelText: 'Höhe (px)'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: refreshController,
+                decoration: const InputDecoration(labelText: 'Hz'),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Achtung: Custom Modes können fehlschlagen. Du kannst danach über "Letzten Custom Mode zurücksetzen" zurückrollen.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Abbrechen'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Anwenden'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    final w = double.tryParse(widthController.text.trim());
+    final h = double.tryParse(heightController.text.trim());
+    final hz = double.tryParse(refreshController.text.trim());
+    if (w == null || h == null || hz == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ungültige Eingabe für Custom Mode.')),
+        );
+      }
+      return;
+    }
+    await _applyCustomMode(id, w, h, hz, constraints);
+  }
+
+  Future<void> _applyCustomMode(String id, double w, double h, double hz,
+      BoxConstraints constraints) async {
+    final target = _resolveOutputName(id);
+    final current = _currentModeForOutput(target);
+    if (current != null) {
+      _lastModeBeforeCustom[target] = current;
+    }
+
+    bool applied = false;
+    String? error;
+    final cmdRandr = File('/usr/bin/wlr-randr');
+
+    try {
+      ProcessResult result;
+      if (cmdRandr.existsSync()) {
+        result = await Process.run(cmdRandr.path, [
+          '--output',
+          target,
+          '--mode',
+          '${w.toInt()}x${h.toInt()}@${_formatHz(hz)}'
+        ]);
+      } else {
+        result = await Process.run('/usr/bin/swaymsg', [
+          'output',
+          target,
+          'mode',
+          '${w.toInt()}x${h.toInt()}@${_formatHz(hz)}Hz'
+        ]);
+      }
+      if (result.exitCode == 0) {
+        applied = true;
+      } else {
+        error = '${result.stderr}'.trim();
+      }
+    } catch (e) {
+      error = '$e';
+    }
+
+    await _updateConnectedMonitors();
+
+    if (!applied) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Custom Mode fehlgeschlagen: ${error ?? 'unbekannter Fehler'}',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    // UI/Profil updaten
+    if (activeProfileIndex != null) {
+      final mons = activeMonitors;
+      final idx = mons.indexWhere(
+          (m) => _normalizeOutputId(m.id) == _normalizeOutputId(target));
+      if (idx != -1) {
+        final rotation = mons[idx].rotation;
+        final rotatedW = rotation % 180 == 0 ? w : h;
+        final rotatedH = rotation % 180 == 0 ? h : w;
+        final updated = mons[idx].copyWith(
+          width: rotatedW,
+          height: rotatedH,
+          refresh: hz,
+          resolution: '${rotatedW.toInt()}x${rotatedH.toInt()}',
+          orientation: rotation % 180 == 0
+              ? (w >= h ? 'landscape' : 'portrait')
+              : (w >= h ? 'portrait' : 'landscape'),
+        );
+        mons[idx] = updated;
+        setState(() {
+          profiles[activeProfileIndex!] =
+              Profile(name: profiles[activeProfileIndex!].name, monitors: mons);
+          _buildAndSave(constraints);
+        });
+        _maybeWarnBandwidth(mons);
+      }
+    }
+
+    final modeLabel = '${w.toInt()}x${h.toInt()}@${_formatHz(hz)}Hz';
+    _scheduleCustomRevert(target, modeLabel, constraints);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Custom Mode angewendet: $modeLabel auf $target'),
+          action: SnackBarAction(
+            label: 'Behalten',
+            onPressed: () => _cancelCustomRevert(target),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _revertCustomMode(
+      String id, BoxConstraints constraints) async {
+    final target = _resolveOutputName(id);
+    final last = _lastModeBeforeCustom[target];
+    if (last == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kein gespeicherter Custom-Mode zum Zurücksetzen.')),
+        );
+      }
+      return;
+    }
+    await _onMonitorModeChange(id, last, constraints);
+    _lastModeBeforeCustom.remove(target);
+    _cancelCustomRevert(target);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Custom Mode zurückgesetzt.')),
+      );
+    }
+  }
+
+  void _scheduleCustomRevert(
+      String target, String label, BoxConstraints constraints) {
+    _cancelCustomRevert(target);
+    _customModeRevertTimers[target] = Timer(
+      const Duration(seconds: 10),
+      () => _revertCustomMode(target, constraints),
+    );
+  }
+
+  void _cancelCustomRevert(String target) {
+    _customModeRevertTimers[target]?.cancel();
+    _customModeRevertTimers.remove(target);
   }
 
   MonitorTileData _snapToEdges(MonitorTileData m, List<MonitorTileData> all) {
@@ -692,6 +1079,40 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return null;
   }
 
+  MonitorMode? _currentModeForOutput(String id) {
+    final norm = _normalizeOutputId(id);
+    final m = currentMonitors
+        .where((o) => _normalizeOutputId(o.id) == norm)
+        .toList();
+    if (m.isEmpty) return null;
+    return MonitorMode(
+      width: m.first.width,
+      height: m.first.height,
+      refresh: m.first.refresh,
+    );
+  }
+
+  double _totalPixelRate(List<MonitorTileData> mons) {
+    double sum = 0;
+    for (final m in mons.where((m) => m.enabled)) {
+      sum += m.width * m.height * (m.refresh > 0 ? m.refresh : 60);
+    }
+    return sum;
+  }
+
+  void _maybeWarnBandwidth(List<MonitorTileData> mons) {
+    // Grober Schwellenwert; anpassbar falls nötig.
+    const double threshold = 700000000; // Pixel*Hz
+    if (_totalPixelRate(mons) > threshold && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Hohe Gesamtlast (Pixel*Hz). Ein Monitor könnte schwarz bleiben – ggf. Hz/Auflösung reduzieren.'),
+        ),
+      );
+    }
+  }
+
   void _createCurrentSetup() {
     final newProfile = Profile(
       name: 'Current Setup',
@@ -730,10 +1151,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   void _restartKanshi() async {
     try {
-      final result = await Process.run(
-        'bash',
-        ['-c', '[ ! "\$(pgrep kanshi)" ] && pkill kanshi; kanshi &'],
-      );
+      final result = await Process.run('bash', [
+        '-c',
+        'pkill -x kanshi; sleep 0.2; setsid /usr/bin/kanshi -c ~/.config/kanshi/config >/tmp/kanshi_gui.log 2>&1 &'
+      ]);
 
       if (result.exitCode != 0) {
         debugPrint('Fehler beim Ausführen von kanshi: ${result.stderr}');
@@ -753,6 +1174,216 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  Future<void> _reloadData() async {
+    try {
+      await _updateConnectedMonitors();
+      await _loadConfig();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Aktuelle Ausgänge und Profile geladen.')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Reload failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Reload fehlgeschlagen: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _reloadAndApply() async {
+    try {
+      await _configService.saveProfiles(profiles);
+      final result = await Process.run('bash', [
+        '-c',
+        'pkill -x kanshi; sleep 0.2; setsid /usr/bin/kanshi -c ~/.config/kanshi/config >/tmp/kanshi_gui.log 2>&1 &'
+      ]);
+      if (result.exitCode != 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('kanshi restart fehlgeschlagen: ${result.stderr}')),
+          );
+        }
+      } else {
+        await _reloadData();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Reload & kanshi neu gestartet.')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('reload/apply failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Reload fehlgeschlagen: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveProfilesOnly() async {
+    try {
+      await _configService.saveProfiles(profiles);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile gespeichert.')),
+        );
+      }
+    } catch (e) {
+      debugPrint('saveProfiles failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Speichern fehlgeschlagen: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _restoreBackupAndApply() async {
+    try {
+      final backup = File(_configService.backupPath);
+      if (!await backup.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Kein Backup gefunden.')),
+          );
+        }
+        return;
+      }
+      await backup.copy(_configService.configPath);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Backup wiederhergestellt.')),
+        );
+      }
+      await _reloadAndApply();
+    } catch (e) {
+      debugPrint('restore/apply failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Backup-Reset fehlgeschlagen: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showKanshiLog() async {
+    final logFile = File('/tmp/kanshi_gui.log');
+    String content;
+    if (await logFile.exists()) {
+      content = await logFile.readAsString();
+      if (content.length > 6000) {
+        content = content.substring(content.length - 6000);
+      }
+    } else {
+      content = 'Logfile /tmp/kanshi_gui.log existiert nicht.';
+    }
+    if (!mounted) return;
+    // ignore: use_build_context_synchronously
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('kanshi GUI Log'),
+          content: SizedBox(
+            width: 600,
+            height: 400,
+            child: SingleChildScrollView(
+              child: Text(
+                content,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Schließen'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuBar(BoxConstraints constraints) {
+    return MenuBar(
+      children: [
+        SubmenuButton(
+          menuChildren: [
+            MenuItemButton(
+              onPressed: _reloadAndApply,
+              child: const Text('Speichern & kanshi neu starten'),
+            ),
+            MenuItemButton(
+              onPressed: _saveProfilesOnly,
+              child: const Text('Nur Profile speichern'),
+            ),
+            MenuItemButton(
+              onPressed: _reloadData,
+              child: const Text('Reload Outputs & Profiles'),
+            ),
+          ],
+          child: const Text('Datei'),
+        ),
+        SubmenuButton(
+          menuChildren: [
+            MenuItemButton(
+              onPressed: _restartKanshi,
+              child: const Text('kanshi neu starten'),
+            ),
+            MenuItemButton(
+              onPressed: _restoreBackupAndApply,
+              child: const Text('Backup wiederherstellen & anwenden'),
+            ),
+            MenuItemButton(
+              onPressed: _showKanshiLog,
+              child: const Text('Logs anzeigen'),
+            ),
+          ],
+          child: const Text('Aktionen'),
+        ),
+        SubmenuButton(
+          menuChildren: [
+            MenuItemButton(
+              onPressed: () {
+                setState(() {
+                  _sidebarSection = _SidebarSection.profiles;
+                });
+              },
+              child: const Text('Zu Profiles'),
+            ),
+            MenuItemButton(
+              onPressed: () {
+                setState(() {
+                  _sidebarSection = _SidebarSection.repair;
+                });
+              },
+              child: const Text('Zu Repair'),
+            ),
+            MenuItemButton(
+              onPressed: () {
+                setState(() {
+                  _sidebarSection = _SidebarSection.help;
+                });
+              },
+              child: const Text('Zu Help'),
+            ),
+          ],
+          child: const Text('Ansicht'),
+        ),
+      ],
+    );
+  }
+
+  String _formatHz(double hz) {
+    final isInt = (hz - hz.round()).abs() < 0.01;
+    return isInt ? hz.round().toString() : hz.toStringAsFixed(3);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -767,216 +1398,220 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ),
         title: const Text('Kanshi GUI'),
         actions: [
+          PopupMenuButton<_SidebarSection>(
+            tooltip: 'Bereich wählen',
+            onSelected: (s) {
+              setState(() {
+                _sidebarSection = s;
+              });
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _SidebarSection.profiles,
+                child: Text('Profiles'),
+              ),
+              PopupMenuItem(
+                value: _SidebarSection.repair,
+                child: Text('Repair'),
+              ),
+              PopupMenuItem(
+                value: _SidebarSection.help,
+                child: Text('Help'),
+              ),
+            ],
+            icon: const Icon(Icons.menu),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Restart kanshi',
-            onPressed: _restartKanshi,
+            tooltip: 'Reload & kanshi neu starten',
+            onPressed: _reloadAndApply,
           ),
         ],
       ),
-      body: Stack(
+      body: Column(
         children: [
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-            left: _isSidebarOpen ? 320 : 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              color: Colors.black,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  _updateDisplayMonitors(constraints);
-                  return Stack(
-                    children: _displayMonitors.map((tile) {
-                      final original = activeMonitors
-                          .firstWhere((m) => m.id == tile.id);
-                      return MonitorTile(
-                        key: ValueKey(tile.id),
-                        data: tile,
-                        exists: currentMonitors
-                            .any((m) => _matchesOutput(m.id, tile.id)),
-                        snapThreshold: snapThreshold,
-                        containerSize: Size(
-                            constraints.maxWidth, constraints.maxHeight),
-                        scaleFactor: _scaleFactor,
-                        offsetX: _offsetX,
-                        offsetY: _offsetY,
-                        originX: 0,
-                        originY: 0,
-                        originalWidth: original.width,
-                        originalHeight: original.height,
-                        onDragStart: () => _onMonitorDragStart(tile),
-                        onUpdate: (updated) =>
-                            _onMonitorUpdate(updated, constraints),
-                        onDragEnd: () => _onMonitorDragEnd(tile, constraints),
-                        onScale: (s) => _onMonitorScale(tile.id, s, constraints),
-                        onModeChange: (m) =>
-                            _onMonitorModeChange(tile.id, m, constraints),
-                        onToggleEnabled: (enabled) =>
-                            _onMonitorToggleEnabled(
-                                tile.id, enabled, constraints),
-                      );
-                    }).toList(),
-                  );
-                },
-              ),
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) => _buildMenuBar(constraints),
           ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-            left: _isSidebarOpen ? 0 : -320,
-            top: 0,
-            bottom: 0,
-            width: 320,
-            child: Container(
-              color: Colors.grey[850],
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: SegmentedButton<_SidebarSection>(
-                      segments: const [
-                        ButtonSegment<_SidebarSection>(
-                          value: _SidebarSection.profiles,
-                          label: Text('Profiles'),
-                          icon: Icon(Icons.person),
-                        ),
-                        ButtonSegment<_SidebarSection>(
-                          value: _SidebarSection.repair,
-                          label: Text('Repair'),
-                          icon: Icon(Icons.build),
-                        ),
-                        ButtonSegment<_SidebarSection>(
-                          value: _SidebarSection.help,
-                          label: Text('Help'),
-                          icon: Icon(Icons.help_outline),
-                        ),
-                      ],
-                      selected: <_SidebarSection>{_sidebarSection},
-                      onSelectionChanged: (newSelection) {
-                        setState(() {
-                          _sidebarSection = newSelection.first;
-                        });
+          Expanded(
+            child: Stack(
+              children: [
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  left: _isSidebarOpen ? 320 : 0,
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    color: Colors.black,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        _updateDisplayMonitors(constraints);
+                        return Stack(
+                          children: _displayMonitors.map((tile) {
+                            final original =
+                                activeMonitors.firstWhere((m) => m.id == tile.id);
+                            return MonitorTile(
+                              key: ValueKey(tile.id),
+                              data: tile,
+                              exists: currentMonitors
+                                  .any((m) => _matchesOutput(m.id, tile.id)),
+                              snapThreshold: snapThreshold,
+                              containerSize: Size(constraints.maxWidth,
+                                  constraints.maxHeight),
+                              scaleFactor: _scaleFactor,
+                              offsetX: _offsetX,
+                              offsetY: _offsetY,
+                              originX: 0,
+                              originY: 0,
+                              originalWidth: original.width,
+                              originalHeight: original.height,
+                              onDragStart: () => _onMonitorDragStart(tile),
+                              onUpdate: (updated) =>
+                                  _onMonitorUpdate(updated, constraints),
+                              onDragEnd: () =>
+                                  _onMonitorDragEnd(tile, constraints),
+                              onScale: (s) =>
+                                  _onMonitorScale(tile.id, s, constraints),
+                              onModeChange: (m) =>
+                                  _onMonitorModeChange(tile.id, m, constraints),
+                              onToggleEnabled: (enabled) =>
+                                  _onMonitorToggleEnabled(
+                                      tile.id, enabled, constraints),
+                              onCustomMode: () =>
+                                  _promptCustomMode(tile.id, constraints),
+                              onCustomModeRevert: () =>
+                                  _revertCustomMode(tile.id, constraints),
+                            );
+                          }).toList(),
+                        );
                       },
                     ),
                   ),
-                  if (_sidebarSection == _SidebarSection.profiles) ...[
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: profiles.length,
-                        itemBuilder: (context, i) {
-                          return ProfileListItem(
-                            profile: profiles[i],
-                            isActive: activeProfileIndex == i,
-                            onSelect: () =>
-                                setState(() => activeProfileIndex = i),
-                            onNameChanged: (newName) {
-                              bool exists = profiles.any((p) =>
-                                  p.name.toLowerCase() ==
-                                      newName.toLowerCase() &&
-                                  p != profiles[i]);
-                              if (exists) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          'Profile name already exists!')),
+                ),
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  left: _isSidebarOpen ? 0 : -320,
+                  top: 0,
+                  bottom: 0,
+                  width: 320,
+                  child: Container(
+                    color: Colors.grey[850],
+                    child: Column(
+                      children: [
+                        if (_sidebarSection == _SidebarSection.profiles) ...[
+                          Expanded(
+                            child: ListView.builder(
+                              itemCount: profiles.length,
+                              itemBuilder: (context, i) {
+                                return ProfileListItem(
+                                  profile: profiles[i],
+                                  isActive: activeProfileIndex == i,
+                                  onSelect: () =>
+                                      setState(() => activeProfileIndex = i),
+                                  onNameChanged: (newName) {
+                                    final exists = profiles.any((p) =>
+                                        p.name.toLowerCase() ==
+                                            newName.toLowerCase() &&
+                                        p != profiles[i]);
+                                    if (exists) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content: Text(
+                                                'Profile name already exists!')),
+                                      );
+                                    } else {
+                                      setState(() {
+                                        profiles[i].name = newName;
+                                        _autoSave();
+                                      });
+                                    }
+                                  },
+                                  onDelete: () {
+                                    setState(() {
+                                      if (activeProfileIndex == i) {
+                                        activeProfileIndex = null;
+                                      }
+                                      profiles.removeAt(i);
+                                      _autoSave();
+                                    });
+                                  },
+                                  exists: true,
                                 );
-                              } else {
-                                setState(() {
-                                  profiles[i].name = newName;
-                                  _autoSave();
-                                });
-                              }
-                            },
-                            onDelete: () {
-                              setState(() {
-                                if (activeProfileIndex == i)
-                                  activeProfileIndex = null;
-                                profiles.removeAt(i);
-                                _autoSave();
-                              });
-                            },
-                            exists: true,
-                          );
-                        },
-                      ),
-                    ),
-                    if (_findProfileWithAllCurrentMonitors() == null)
-                      Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: ElevatedButton(
-                          onPressed: _createCurrentSetup,
-                          child: const Text('Create Current Setup'),
-                      ),
-                    ),
-                  ] else if (_sidebarSection == _SidebarSection.repair) ...[
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                        children: const [
-                          ListTile(
-                            leading: Icon(Icons.restart_alt),
-                            title: Text('Restart kanshi'),
-                            subtitle: Text(
-                                'Run repair actions for kanshi configuration.'),
-                          ),
-                          ListTile(
-                            leading: Icon(Icons.cleaning_services),
-                            title: Text('Clean temporary files'),
-                            subtitle: Text(
-                                'Placeholder for future repair utilities.'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else ...[
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.auto_fix_high),
-                            title: const Text('Layout entwirren'),
-                            subtitle: const Text(
-                                'Ordnet aktive Monitore in einer horizontalen Reihe mit Standardabstand an.'),
-                            onTap: () => _repairActiveLayout(),
-                            trailing: Tooltip(
-                              message:
-                                  'Aktive Monitore werden in einer Reihe mit Standardabstand platziert.',
-                              child: FilledButton(
-                                onPressed: () => _repairActiveLayout(),
-                                child: const Text('Layout entwirren'),
-                              ),
+                              },
                             ),
                           ),
-                          ListTile(
-                            leading: const Icon(Icons.monitor_heart),
-                            title: const Text('Alle Ausgänge aktivieren'),
-                            subtitle: const Text(
-                                'Aktiviert alle bekannten Monitore mittels swaymsg.'),
-                            enabled: !_isEnablingOutputs,
-                            onTap:
-                                _isEnablingOutputs ? null : () => _enableAllOutputs(),
-                            trailing: _isEnablingOutputs
-                                ? const SizedBox(
-                                    height: 24,
-                                    width: 24,
-                                    child: CircularProgressIndicator(),
-                                  )
-                                : FilledButton(
-                                    onPressed: () => _enableAllOutputs(),
-                                    child: const Text('Aktivieren'),
-                                  ),
+                        if (_findProfileWithAllCurrentMonitors() == null)
+                          Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: ElevatedButton(
+                              onPressed: _createCurrentSetup,
+                              child: const Text('Create Current Setup'),
+                            ),
+                          ),
+                      ] else if (_sidebarSection ==
+                          _SidebarSection.repair) ...[
+                        Expanded(
+                          child: ListView(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8.0),
+                            children: [
+                              ListTile(
+                                leading: const Icon(Icons.select_all),
+                                title: const Text('Alle Displays aktivieren'),
+                                subtitle: const Text(
+                                    'Führt swaymsg enable für alle Outputs aus.'),
+                                trailing: FilledButton(
+                                  onPressed: _enableAllOutputs,
+                                  child: const Text('Aktivieren'),
+                                ),
+                                onTap: _enableAllOutputs,
+                              ),
+                              const ListTile(
+                                leading: Icon(Icons.restart_alt),
+                                title: Text('Restart kanshi'),
+                                subtitle:
+                                    Text('Run repair actions for kanshi configuration.'),
+                              ),
+                              const ListTile(
+                                leading: Icon(Icons.cleaning_services),
+                                title: Text('Clean temporary files'),
+                                subtitle:
+                                    Text('Placeholder for future repair utilities.'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ] else ...[
+                          const Padding(
+                            padding: EdgeInsets.all(12.0),
+                            child: Text(
+                              'Tipps:\n- Monitor-Menü: Auflösung/Hz direkt setzen oder Custom Mode testen (Auto-Revert nach 10s, wenn du nicht „Behalten“ klickst).\n- Reload-Button oben: Speichern & kanshi neu starten.\n- Bandbreiten-Warnung beachten, wenn sehr viele Pixel/Hz aktiv sind.',
+                              style: TextStyle(fontSize: 13),
+                            ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                  ],
-                ],
-              ),
+                  ),
+                ),
+                Positioned(
+                  left: _isSidebarOpen ? 320 : 0,
+                  top: 16,
+                  child: IconButton(
+                    icon: Icon(
+                      _isSidebarOpen
+                          ? Icons.arrow_back_ios
+                          : Icons.arrow_forward_ios,
+                      color: Colors.white70,
+                    ),
+                    onPressed: _toggleSidebar,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

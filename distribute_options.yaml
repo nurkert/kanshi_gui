@@ -1,13 +1,9 @@
-name: kanshi_gui
-version: 1.0.0
-targets:
-  - linux
-jobs:
-  - appimage
-
-linux:
-  package:
-    appimage:
-      output: kanshi_gui.AppImage
-      description: "Kanshi GUI – Manage Wayland display profiles"
-      icon: assets/kanshi_gui.png
+output: dist/               # Ausgabeordner für alle Builds
+releases:
+  - name: release-linux     # frei wählbarer Name
+    jobs:
+      - name: build-appimage        # auch frei wählbar
+        package:
+          platform: linux           # Zielplattform
+          target: appimage          # Maker-Target
+        publish_to: none            # zwingend ein String, hier: kein Publish

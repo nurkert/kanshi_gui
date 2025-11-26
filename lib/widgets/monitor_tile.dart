@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
+import 'package:collection/collection.dart';
 
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
 /// Rechtsklick (onSecondaryTap) erhöht rotation um +90°.
@@ -24,6 +25,8 @@ class MonitorTile extends StatefulWidget {
   final ValueChanged<double>? onScale;
   final ValueChanged<MonitorMode>? onModeChange;
   final ValueChanged<bool>? onToggleEnabled;
+  final VoidCallback? onCustomMode;
+  final VoidCallback? onCustomModeRevert;
 
   const MonitorTile({
     super.key,
@@ -44,6 +47,8 @@ class MonitorTile extends StatefulWidget {
     this.onScale,
     this.onModeChange,
     this.onToggleEnabled,
+    this.onCustomMode,
+    this.onCustomModeRevert,
   });
 
   @override
@@ -247,22 +252,22 @@ class _MonitorTileState extends State<MonitorTile> {
                     ),
                   if (widget.data.modes.isNotEmpty)
                     SubmenuButton(
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('Auflösung'),
-                          SizedBox(width: 8),
-                          Icon(Icons.chevron_right, size: 16),
-                        ],
-                      ),
+                      child: const Text('Auflösung / Hz'),
+                      menuChildren: _buildModeMenuItems(),
+                    ),
+                  if (widget.onCustomMode != null || widget.onCustomModeRevert != null)
+                    SubmenuButton(
+                      child: const Text('Advanced'),
                       menuChildren: [
-                        for (final m in widget.data.modes)
+                        if (widget.onCustomMode != null)
                           MenuItemButton(
-                            onPressed: widget.onModeChange != null &&
-                                    widget.data.enabled
-                                ? () => widget.onModeChange!(m)
-                                : null,
-                            child: Text(m.label),
+                            onPressed: widget.onCustomMode,
+                            child: const Text('Custom Mode...'),
+                          ),
+                        if (widget.onCustomModeRevert != null)
+                          MenuItemButton(
+                            onPressed: widget.onCustomModeRevert,
+                            child: const Text('Letzten Custom Mode zurücksetzen'),
                           ),
                       ],
                     ),
@@ -272,5 +277,74 @@ class _MonitorTileState extends State<MonitorTile> {
         ],
       ),
     );
+  }
+
+  List<Widget> _buildModeMenuItems() {
+    // Gruppiere nach Auflösung, sortiere absteigend nach Fläche, dann Hz.
+    final grouped = groupBy<MonitorMode, String>(
+      widget.data.modes,
+      (m) => '${m.width.toInt()}x${m.height.toInt()}',
+    );
+
+    List<String> keys = grouped.keys.toList()
+      ..sort((a, b) {
+        final partsA = a.split('x').map(int.parse).toList();
+        final partsB = b.split('x').map(int.parse).toList();
+        final areaA = partsA[0] * partsA[1];
+        final areaB = partsB[0] * partsB[1];
+        if (areaA != areaB) return areaB.compareTo(areaA); // absteigend Fläche
+        return b.compareTo(a);
+      });
+
+    List<Widget> items = [];
+    for (final res in keys) {
+      final modesForRes = [...grouped[res] ?? []]
+        ..sort((a, b) => b.refresh.compareTo(a.refresh)); // Hz absteigend
+      final best = modesForRes.first;
+
+      items.add(
+        MenuAnchor(
+          menuChildren: [
+            for (final m in modesForRes)
+              MenuItemButton(
+                onPressed: widget.onModeChange != null && widget.data.enabled
+                    ? () => widget.onModeChange!(m)
+                    : null,
+                child: Text(m.label),
+              ),
+          ],
+          builder: (context, controller, child) {
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: widget.onModeChange != null &&
+                            widget.data.enabled
+                        ? () => widget.onModeChange!(best)
+                        : null,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(res),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right, size: 16),
+                  onPressed: () {
+                    if (controller.isOpen) {
+                      controller.close();
+                    } else {
+                      controller.open();
+                    }
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    }
+    return items;
   }
 }
