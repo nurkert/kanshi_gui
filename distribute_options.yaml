@@ -2,6 +2,11 @@ output: dist/               # Ausgabeordner für alle Builds
 releases:
   - name: release-linux     # frei wählbarer Name
     jobs:
+      - name: build-deb
+        package:
+          platform: linux
+          target: deb
+        publish_to: none
       - name: build-appimage        # auch frei wählbar
         package:
           platform: linux           # Zielplattform

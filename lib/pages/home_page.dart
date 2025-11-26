@@ -254,13 +254,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
       String message;
       if (outputs.isEmpty) {
-        message = 'Keine Ausgänge gefunden.';
+        message = 'No outputs found.';
       } else if (failures.isEmpty) {
         message =
-            'Alle ${outputs.length} Ausgänge wurden erfolgreich aktiviert.';
+            'All ${outputs.length} outputs were enabled successfully.';
       } else {
         message =
-            'Aktiviert: $successCount/${outputs.length}. Fehler: ${failures.join(', ')}';
+            'Enabled: $successCount/${outputs.length}. Errors: ${failures.join(', ')}';
       }
 
       await _updateConnectedMonitors();
@@ -274,7 +274,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       debugPrint('Error enabling all outputs: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ausgänge konnten nicht aktiviert werden: $e')),
+          SnackBar(content: Text('Failed to enable outputs: $e')),
         );
       }
     } finally {
@@ -290,7 +290,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (activeProfileIndex == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kein aktives Profil zum Entwirren.')),
+        const SnackBar(content: Text('No active profile to rearrange.')),
       );
       return;
     }
@@ -305,7 +305,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (activeMonitors.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Keine aktiven Monitore zum Entwirren.')),
+        const SnackBar(content: Text('No active monitors to rearrange.')),
       );
       return;
     }
@@ -342,7 +342,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-            'Layout für ${activeMonitors.length} aktive Monitor${activeMonitors.length == 1 ? '' : 'e'} neu angeordnet.'),
+            'Rearranged layout for ${activeMonitors.length} active monitor${activeMonitors.length == 1 ? '' : 's'}.'),
       ),
     );
   }
@@ -611,7 +611,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           debugPrint('Error setting mode: ${result.stderr}');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Mode konnte nicht gesetzt werden: ${result.stderr}')),
+              SnackBar(content: Text('Failed to set mode: ${result.stderr}')),
             );
           }
           return;
@@ -664,7 +664,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (currentOutput == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Output $target nicht gefunden.')),
+            SnackBar(content: Text('Output $target not found.')),
           );
         }
         return;
@@ -681,7 +681,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                   content:
-                      Text('Konnte Output $target nicht toggeln: ${result.stderr}')),
+                      Text('Could not toggle output $target: ${result.stderr}')),
             );
           }
           return;
@@ -713,7 +713,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                   content:
-                      Text('Konnte Output $target nicht aktivieren: ${result.stderr}')),
+                      Text('Could not enable output $target: ${result.stderr}')),
             );
           }
           return;
@@ -737,7 +737,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                   content: Text(
-                      'Aktiviert, aber Mode konnte nicht gesetzt werden: ${result.stderr}')),
+                      'Enabled, but failed to set mode: ${result.stderr}')),
             );
           }
         }
@@ -746,7 +746,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       debugPrint('Error toggling output: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fehler beim Togglen: $e')),
+          SnackBar(content: Text('Error while toggling: $e')),
         );
       }
       return;
@@ -773,7 +773,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Output ${enabled ? 'nicht aktiviert' : 'nicht deaktiviert'} – Status bleibt unverändert.')),
+          SnackBar(content: Text("Output ${enabled ? 'not enabled' : 'not disabled'} - status unchanged.")),
         );
       }
     }
@@ -836,12 +836,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             children: [
               TextField(
                 controller: widthController,
-                decoration: const InputDecoration(labelText: 'Breite (px)'),
+                decoration: const InputDecoration(labelText: 'Width (px)'),
                 keyboardType: TextInputType.number,
               ),
               TextField(
                 controller: heightController,
-                decoration: const InputDecoration(labelText: 'Höhe (px)'),
+                decoration: const InputDecoration(labelText: 'Height (px)'),
                 keyboardType: TextInputType.number,
               ),
               TextField(
@@ -852,7 +852,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               ),
               const SizedBox(height: 8),
               const Text(
-                'Achtung: Custom Modes können fehlschlagen. Du kannst danach über "Letzten Custom Mode zurücksetzen" zurückrollen.',
+                'Warning: custom modes can fail. You can revert afterwards via "Revert last custom mode".',
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -860,11 +860,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Abbrechen'),
+              child: const Text('Cancel'),
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Anwenden'),
+              child: const Text('Apply'),
             ),
           ],
         );
@@ -879,7 +879,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (w == null || h == null || hz == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ungültige Eingabe für Custom Mode.')),
+          const SnackBar(content: Text('Invalid input for custom mode.')),
         );
       }
       return;
@@ -932,7 +932,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Custom Mode fehlgeschlagen: ${error ?? 'unbekannter Fehler'}',
+              'Custom mode failed: ${error ?? 'unknown error'}',
             ),
           ),
         );
@@ -974,9 +974,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Custom Mode angewendet: $modeLabel auf $target'),
+          content: Text('Applied custom mode: $modeLabel on $target'),
           action: SnackBarAction(
-            label: 'Behalten',
+            label: 'Keep',
             onPressed: () => _cancelCustomRevert(target),
           ),
         ),
@@ -991,7 +991,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (last == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kein gespeicherter Custom-Mode zum Zurücksetzen.')),
+          const SnackBar(content: Text('No saved custom mode to revert.')),
         );
       }
       return;
@@ -1001,7 +1001,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _cancelCustomRevert(target);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Custom Mode zurückgesetzt.')),
+        const SnackBar(content: Text('Custom mode reverted.')),
       );
     }
   }
@@ -1108,7 +1108,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-              'Hohe Gesamtlast (Pixel*Hz). Ein Monitor könnte schwarz bleiben – ggf. Hz/Auflösung reduzieren.'),
+              'High total load (pixels*Hz). A monitor might stay black - try lowering refresh/resolution.'),
         ),
       );
     }
@@ -1158,17 +1158,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       ]);
 
       if (result.exitCode != 0) {
-        debugPrint('Fehler beim Ausführen von kanshi: ${result.stderr}');
+        debugPrint('Error running kanshi: ${result.stderr}');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fehler: ${result.stderr}')),
+          SnackBar(content: Text('Error: ${result.stderr}')),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('kanshi wurde (neu) gestartet.')),
+          const SnackBar(content: Text('kanshi has been (re)started.')),
         );
       }
     } catch (e) {
-      debugPrint('Exception beim Starten von kanshi: $e');
+      debugPrint('Exception while starting kanshi: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Exception: $e')),
       );
@@ -1181,14 +1181,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       await _loadConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Aktuelle Ausgänge und Profile geladen.')),
+          const SnackBar(content: Text('Outputs and profiles refreshed.')),
         );
       }
     } catch (e) {
       debugPrint('Reload failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Reload fehlgeschlagen: $e')),
+          SnackBar(content: Text('Reload failed: $e')),
         );
       }
     }
@@ -1204,14 +1204,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (result.exitCode != 0) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('kanshi restart fehlgeschlagen: ${result.stderr}')),
+            SnackBar(content: Text('kanshi restart failed: ${result.stderr}')),
           );
         }
       } else {
         await _reloadData();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Reload & kanshi neu gestartet.')),
+            const SnackBar(content: Text('Reloaded and restarted kanshi.')),
           );
         }
       }
@@ -1219,7 +1219,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       debugPrint('reload/apply failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Reload fehlgeschlagen: $e')),
+          SnackBar(content: Text('Reload failed: $e')),
         );
       }
     }
@@ -1230,14 +1230,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       await _configService.saveProfiles(profiles);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Profile gespeichert.')),
+          const SnackBar(content: Text('Profiles saved.')),
         );
       }
     } catch (e) {
       debugPrint('saveProfiles failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Speichern fehlgeschlagen: $e')),
+          SnackBar(content: Text('Save failed: $e')),
         );
       }
     }
@@ -1249,7 +1249,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (!await backup.exists()) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Kein Backup gefunden.')),
+            const SnackBar(content: Text('No backup found.')),
           );
         }
         return;
@@ -1257,7 +1257,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       await backup.copy(_configService.configPath);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Backup wiederhergestellt.')),
+          const SnackBar(content: Text('Backup restored.')),
         );
       }
       await _reloadAndApply();
@@ -1265,7 +1265,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       debugPrint('restore/apply failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Backup-Reset fehlgeschlagen: $e')),
+          SnackBar(content: Text('Backup restore failed: $e')),
         );
       }
     }
@@ -1280,7 +1280,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         content = content.substring(content.length - 6000);
       }
     } else {
-      content = 'Logfile /tmp/kanshi_gui.log existiert nicht.';
+      content = 'Log file /tmp/kanshi_gui.log does not exist.';
     }
     if (!mounted) return;
     // ignore: use_build_context_synchronously
@@ -1302,7 +1302,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Schließen'),
+              child: const Text('Close'),
             ),
           ],
         );
@@ -1316,14 +1316,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Tipps'),
+          title: const Text('Tips'),
           content: const Text(
-            'Tipps:\n- Monitor-Menü: Auflösung/Hz direkt setzen oder Custom Mode testen (Auto-Revert nach 10s, wenn du nicht "Behalten" klickst).\n- Reload-Button oben: Speichern & kanshi neu starten.\n- Bandbreiten-Warnung beachten, wenn sehr viele Pixel/Hz aktiv sind.',
+            'Tips:\n- Monitor menu: set resolution/Hz directly or test a custom mode (auto-revert after 10s unless you click "Keep").\n- Reload button at the top: save and restart kanshi.\n- Watch the bandwidth warning if many pixels/Hz are active.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Schließen'),
+              child: const Text('Close'),
             ),
           ],
         );
@@ -1367,48 +1367,48 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   List<PlatformMenuItem> _buildPlatformMenus() {
     return [
       PlatformMenu(
-        label: 'Datei',
+        label: 'File',
         menus: [
           PlatformMenuItem(
-            label: 'Speichern & kanshi neu starten',
+            label: 'Save & restart kanshi',
             onSelected: () => _reloadAndApply(),
           ),
           PlatformMenuItem(
-            label: 'Nur Profile speichern',
+            label: 'Save profiles only',
             onSelected: () => _saveProfilesOnly(),
           ),
           PlatformMenuItem(
-            label: 'Reload Outputs & Profiles',
+            label: 'Reload outputs & profiles',
             onSelected: () => _reloadData(),
           ),
         ],
       ),
       PlatformMenu(
-        label: 'Aktionen',
+        label: 'Actions',
         menus: [
           PlatformMenuItem(
-            label: 'Alle Displays aktivieren',
+            label: 'Enable all displays',
             onSelected: () => _enableAllOutputs(),
           ),
           PlatformMenuItem(
-            label: 'kanshi neu starten',
+            label: 'Restart kanshi',
             onSelected: () => _restartKanshi(),
           ),
           PlatformMenuItem(
-            label: 'Backup wiederherstellen & anwenden',
+            label: 'Restore backup & apply',
             onSelected: () => _restoreBackupAndApply(),
           ),
           PlatformMenuItem(
-            label: 'Logs anzeigen',
+            label: 'Show logs',
             onSelected: () => _showKanshiLog(),
           ),
         ],
       ),
       PlatformMenu(
-        label: 'Hilfe',
+        label: 'Help',
         menus: [
           PlatformMenuItem(
-            label: 'Tipps anzeigen',
+            label: 'Show tips',
             onSelected: () => _showHelpDialog(),
           ),
         ],
@@ -1440,7 +1440,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh),
-              tooltip: 'Reload & kanshi neu starten',
+              tooltip: 'Reload & restart kanshi',
               onPressed: _reloadAndApply,
             ),
           ],
