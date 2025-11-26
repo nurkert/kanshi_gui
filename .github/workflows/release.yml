@@ -54,7 +54,9 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "value=$(awk -F': ' '/^version:/{print $2}' pubspec.yaml)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(awk -F': ' '/^version:/{print $2}' pubspec.yaml)
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
