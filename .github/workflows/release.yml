@@ -11,15 +11,11 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }} package
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+        arch: [amd64, arm64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
