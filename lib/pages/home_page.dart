@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -17,10 +18,10 @@ class HomePage extends StatefulWidget {
   _HomePageState createState() => _HomePageState();
 }
 
-enum _SidebarSection { profiles, repair, help }
-
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   final ConfigService _configService = ConfigService();
+  static const MethodChannel _nativeMenuChannel =
+      MethodChannel('kanshi_gui/native_menu');
 
   /// Geladene Profile aus der Konfiguration.
   List<Profile> profiles = [];
@@ -40,6 +41,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
+    _nativeMenuChannel.setMethodCallHandler(_handleNativeMenuSelect);
     _initSetup();
   }
 
@@ -183,7 +185,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   List<MonitorTileData> _displayMonitors = [];
   final Map<String, MonitorTileData> _oldPositionsBeforeDrag = {};
   Timer? _saveTimer;
-  _SidebarSection _sidebarSection = _SidebarSection.profiles;
   bool _isEnablingOutputs = false;
 
   String _normalizeOutputId(String value) {
@@ -1309,74 +1310,110 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildMenuBar(BoxConstraints constraints) {
-    return MenuBar(
-      children: [
-        SubmenuButton(
-          menuChildren: [
-            MenuItemButton(
-              onPressed: _reloadAndApply,
-              child: const Text('Speichern & kanshi neu starten'),
-            ),
-            MenuItemButton(
-              onPressed: _saveProfilesOnly,
-              child: const Text('Nur Profile speichern'),
-            ),
-            MenuItemButton(
-              onPressed: _reloadData,
-              child: const Text('Reload Outputs & Profiles'),
+  Future<void> _showHelpDialog() async {
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Tipps'),
+          content: const Text(
+            'Tipps:\n- Monitor-Menü: Auflösung/Hz direkt setzen oder Custom Mode testen (Auto-Revert nach 10s, wenn du nicht "Behalten" klickst).\n- Reload-Button oben: Speichern & kanshi neu starten.\n- Bandbreiten-Warnung beachten, wenn sehr viele Pixel/Hz aktiv sind.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Schließen'),
             ),
           ],
-          child: const Text('Datei'),
-        ),
-        SubmenuButton(
-          menuChildren: [
-            MenuItemButton(
-              onPressed: _restartKanshi,
-              child: const Text('kanshi neu starten'),
-            ),
-            MenuItemButton(
-              onPressed: _restoreBackupAndApply,
-              child: const Text('Backup wiederherstellen & anwenden'),
-            ),
-            MenuItemButton(
-              onPressed: _showKanshiLog,
-              child: const Text('Logs anzeigen'),
-            ),
-          ],
-          child: const Text('Aktionen'),
-        ),
-        SubmenuButton(
-          menuChildren: [
-            MenuItemButton(
-              onPressed: () {
-                setState(() {
-                  _sidebarSection = _SidebarSection.profiles;
-                });
-              },
-              child: const Text('Zu Profiles'),
-            ),
-            MenuItemButton(
-              onPressed: () {
-                setState(() {
-                  _sidebarSection = _SidebarSection.repair;
-                });
-              },
-              child: const Text('Zu Repair'),
-            ),
-            MenuItemButton(
-              onPressed: () {
-                setState(() {
-                  _sidebarSection = _SidebarSection.help;
-                });
-              },
-              child: const Text('Zu Help'),
-            ),
-          ],
-          child: const Text('Ansicht'),
-        ),
-      ],
+        );
+      },
     );
+  }
+
+  Future<void> _handleNativeMenuSelect(MethodCall call) async {
+    if (call.method != 'select') return;
+    final action = call.arguments as String?;
+    switch (action) {
+      case 'saveRestart':
+        await _reloadAndApply();
+        break;
+      case 'saveProfiles':
+        await _saveProfilesOnly();
+        break;
+      case 'reload':
+        await _reloadData();
+        break;
+      case 'enableAll':
+        await _enableAllOutputs();
+        break;
+      case 'restartKanshi':
+        _restartKanshi();
+        break;
+      case 'restoreBackup':
+        await _restoreBackupAndApply();
+        break;
+      case 'showLogs':
+        await _showKanshiLog();
+        break;
+      case 'showHelp':
+        await _showHelpDialog();
+        break;
+      default:
+        break;
+    }
+  }
+
+  List<PlatformMenuItem> _buildPlatformMenus() {
+    return [
+      PlatformMenu(
+        label: 'Datei',
+        menus: [
+          PlatformMenuItem(
+            label: 'Speichern & kanshi neu starten',
+            onSelected: () => _reloadAndApply(),
+          ),
+          PlatformMenuItem(
+            label: 'Nur Profile speichern',
+            onSelected: () => _saveProfilesOnly(),
+          ),
+          PlatformMenuItem(
+            label: 'Reload Outputs & Profiles',
+            onSelected: () => _reloadData(),
+          ),
+        ],
+      ),
+      PlatformMenu(
+        label: 'Aktionen',
+        menus: [
+          PlatformMenuItem(
+            label: 'Alle Displays aktivieren',
+            onSelected: () => _enableAllOutputs(),
+          ),
+          PlatformMenuItem(
+            label: 'kanshi neu starten',
+            onSelected: () => _restartKanshi(),
+          ),
+          PlatformMenuItem(
+            label: 'Backup wiederherstellen & anwenden',
+            onSelected: () => _restoreBackupAndApply(),
+          ),
+          PlatformMenuItem(
+            label: 'Logs anzeigen',
+            onSelected: () => _showKanshiLog(),
+          ),
+        ],
+      ),
+      PlatformMenu(
+        label: 'Hilfe',
+        menus: [
+          PlatformMenuItem(
+            label: 'Tipps anzeigen',
+            onSelected: () => _showHelpDialog(),
+          ),
+        ],
+      ),
+    ];
   }
 
   String _formatHz(double hz) {
@@ -1384,237 +1421,152 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return isInt ? hz.round().toString() : hz.toStringAsFixed(3);
   }
 
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: AnimatedIcon(
-            icon: AnimatedIcons.menu_close,
-            progress: _iconController,
-          ),
-          tooltip: 'Toggle Sidebar',
-          onPressed: _toggleSidebar,
-        ),
-        title: const Text('Kanshi GUI'),
-        actions: [
-          PopupMenuButton<_SidebarSection>(
-            tooltip: 'Bereich wählen',
-            onSelected: (s) {
-              setState(() {
-                _sidebarSection = s;
-              });
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _SidebarSection.profiles,
-                child: Text('Profiles'),
-              ),
-              PopupMenuItem(
-                value: _SidebarSection.repair,
-                child: Text('Repair'),
-              ),
-              PopupMenuItem(
-                value: _SidebarSection.help,
-                child: Text('Help'),
-              ),
-            ],
-            icon: const Icon(Icons.menu),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Reload & kanshi neu starten',
-            onPressed: _reloadAndApply,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          LayoutBuilder(
-            builder: (context, constraints) => _buildMenuBar(constraints),
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  left: _isSidebarOpen ? 320 : 0,
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    color: Colors.black,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        _updateDisplayMonitors(constraints);
-                        return Stack(
-                          children: _displayMonitors.map((tile) {
-                            final original =
-                                activeMonitors.firstWhere((m) => m.id == tile.id);
-                            return MonitorTile(
-                              key: ValueKey(tile.id),
-                              data: tile,
-                              exists: currentMonitors
-                                  .any((m) => _matchesOutput(m.id, tile.id)),
-                              snapThreshold: snapThreshold,
-                              containerSize: Size(constraints.maxWidth,
-                                  constraints.maxHeight),
-                              scaleFactor: _scaleFactor,
-                              offsetX: _offsetX,
-                              offsetY: _offsetY,
-                              originX: 0,
-                              originY: 0,
-                              originalWidth: original.width,
-                              originalHeight: original.height,
-                              onDragStart: () => _onMonitorDragStart(tile),
-                              onUpdate: (updated) =>
-                                  _onMonitorUpdate(updated, constraints),
-                              onDragEnd: () =>
-                                  _onMonitorDragEnd(tile, constraints),
-                              onScale: (s) =>
-                                  _onMonitorScale(tile.id, s, constraints),
-                              onModeChange: (m) =>
-                                  _onMonitorModeChange(tile.id, m, constraints),
-                              onToggleEnabled: (enabled) =>
-                                  _onMonitorToggleEnabled(
-                                      tile.id, enabled, constraints),
-                              onCustomMode: () =>
-                                  _promptCustomMode(tile.id, constraints),
-                              onCustomModeRevert: () =>
-                                  _revertCustomMode(tile.id, constraints),
-                            );
-                          }).toList(),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  left: _isSidebarOpen ? 0 : -320,
-                  top: 0,
-                  bottom: 0,
-                  width: 320,
-                  child: Container(
-                    color: Colors.grey[850],
-                    child: Column(
-                      children: [
-                        if (_sidebarSection == _SidebarSection.profiles) ...[
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: profiles.length,
-                              itemBuilder: (context, i) {
-                                return ProfileListItem(
-                                  profile: profiles[i],
-                                  isActive: activeProfileIndex == i,
-                                  onSelect: () =>
-                                      setState(() => activeProfileIndex = i),
-                                  onNameChanged: (newName) {
-                                    final exists = profiles.any((p) =>
-                                        p.name.toLowerCase() ==
-                                            newName.toLowerCase() &&
-                                        p != profiles[i]);
-                                    if (exists) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                            content: Text(
-                                                'Profile name already exists!')),
-                                      );
-                                    } else {
-                                      setState(() {
-                                        profiles[i].name = newName;
-                                        _autoSave();
-                                      });
-                                    }
-                                  },
-                                  onDelete: () {
-                                    setState(() {
-                                      if (activeProfileIndex == i) {
-                                        activeProfileIndex = null;
-                                      }
-                                      profiles.removeAt(i);
-                                      _autoSave();
-                                    });
-                                  },
-                                  exists: true,
-                                );
-                              },
-                            ),
-                          ),
-                        if (_findProfileWithAllCurrentMonitors() == null)
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: ElevatedButton(
-                              onPressed: _createCurrentSetup,
-                              child: const Text('Create Current Setup'),
-                            ),
-                          ),
-                      ] else if (_sidebarSection ==
-                          _SidebarSection.repair) ...[
-                        Expanded(
-                          child: ListView(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8.0),
-                            children: [
-                              ListTile(
-                                leading: const Icon(Icons.select_all),
-                                title: const Text('Alle Displays aktivieren'),
-                                subtitle: const Text(
-                                    'Führt swaymsg enable für alle Outputs aus.'),
-                                trailing: FilledButton(
-                                  onPressed: _enableAllOutputs,
-                                  child: const Text('Aktivieren'),
-                                ),
-                                onTap: _enableAllOutputs,
-                              ),
-                              const ListTile(
-                                leading: Icon(Icons.restart_alt),
-                                title: Text('Restart kanshi'),
-                                subtitle:
-                                    Text('Run repair actions for kanshi configuration.'),
-                              ),
-                              const ListTile(
-                                leading: Icon(Icons.cleaning_services),
-                                title: Text('Clean temporary files'),
-                                subtitle:
-                                    Text('Placeholder for future repair utilities.'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ] else ...[
-                          const Padding(
-                            padding: EdgeInsets.all(12.0),
-                            child: Text(
-                              'Tipps:\n- Monitor-Menü: Auflösung/Hz direkt setzen oder Custom Mode testen (Auto-Revert nach 10s, wenn du nicht „Behalten“ klickst).\n- Reload-Button oben: Speichern & kanshi neu starten.\n- Bandbreiten-Warnung beachten, wenn sehr viele Pixel/Hz aktiv sind.',
-                              style: TextStyle(fontSize: 13),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: _isSidebarOpen ? 320 : 0,
-                  top: 16,
-                  child: IconButton(
-                    icon: Icon(
-                      _isSidebarOpen
-                          ? Icons.arrow_back_ios
-                          : Icons.arrow_forward_ios,
-                      color: Colors.white70,
-                    ),
-                    onPressed: _toggleSidebar,
-                  ),
-                ),
-              ],
+    return PlatformMenuBar(
+      menus: _buildPlatformMenus(),
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: AnimatedIcon(
+              icon: AnimatedIcons.menu_close,
+              progress: _iconController,
             ),
+            tooltip: 'Toggle Sidebar',
+            onPressed: _toggleSidebar,
           ),
-        ],
+          title: const Text('Kanshi GUI'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Reload & kanshi neu starten',
+              onPressed: _reloadAndApply,
+            ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              left: _isSidebarOpen ? 320 : 0,
+              top: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                color: Colors.black,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    _updateDisplayMonitors(constraints);
+                    return Stack(
+                      children: _displayMonitors.map((tile) {
+                        final original =
+                            activeMonitors.firstWhere((m) => m.id == tile.id);
+                        return MonitorTile(
+                          key: ValueKey(tile.id),
+                          data: tile,
+                          exists: currentMonitors
+                              .any((m) => _matchesOutput(m.id, tile.id)),
+                          snapThreshold: snapThreshold,
+                          containerSize: Size(
+                              constraints.maxWidth, constraints.maxHeight),
+                          scaleFactor: _scaleFactor,
+                          offsetX: _offsetX,
+                          offsetY: _offsetY,
+                          originX: 0,
+                          originY: 0,
+                          originalWidth: original.width,
+                          originalHeight: original.height,
+                          onDragStart: () => _onMonitorDragStart(tile),
+                          onUpdate: (updated) =>
+                              _onMonitorUpdate(updated, constraints),
+                          onDragEnd: () =>
+                              _onMonitorDragEnd(tile, constraints),
+                          onScale: (s) =>
+                              _onMonitorScale(tile.id, s, constraints),
+                          onModeChange: (m) =>
+                              _onMonitorModeChange(tile.id, m, constraints),
+                          onToggleEnabled: (enabled) =>
+                              _onMonitorToggleEnabled(
+                                  tile.id, enabled, constraints),
+                          onCustomMode: () =>
+                              _promptCustomMode(tile.id, constraints),
+                          onCustomModeRevert: () =>
+                              _revertCustomMode(tile.id, constraints),
+                        );
+                      }).toList(),
+                    );
+                  },
+                ),
+              ),
+            ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              left: _isSidebarOpen ? 0 : -320,
+              top: 0,
+              bottom: 0,
+              width: 320,
+              child: Container(
+                color: Colors.grey[850],
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: profiles.length,
+                        itemBuilder: (context, i) {
+                          return ProfileListItem(
+                            profile: profiles[i],
+                            isActive: activeProfileIndex == i,
+                            onSelect: () =>
+                                setState(() => activeProfileIndex = i),
+                            onNameChanged: (newName) {
+                              final exists = profiles.any((p) =>
+                                  p.name.toLowerCase() ==
+                                      newName.toLowerCase() &&
+                                  p != profiles[i]);
+                              if (exists) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Profile name already exists!')),
+                                );
+                              } else {
+                                setState(() {
+                                  profiles[i].name = newName;
+                                  _autoSave();
+                                });
+                              }
+                            },
+                            onDelete: () {
+                              setState(() {
+                                if (activeProfileIndex == i) {
+                                  activeProfileIndex = null;
+                                }
+                                profiles.removeAt(i);
+                                _autoSave();
+                              });
+                            },
+                            exists: true,
+                          );
+                        },
+                      ),
+                    ),
+                    if (_findProfileWithAllCurrentMonitors() == null)
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: ElevatedButton(
+                          onPressed: _createCurrentSetup,
+                          child: const Text('Create Current Setup'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

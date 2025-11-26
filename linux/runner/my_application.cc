@@ -10,15 +10,73 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* menu_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+static void menu_action_cb(GSimpleAction* action, GVariant* parameter, gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  if (self->menu_channel == nullptr) {
+    return;
+  }
+  const gchar* name = g_action_get_name(G_ACTION(action));
+  FlValue* value = fl_value_new_string(name);
+  fl_method_channel_invoke_method(self->menu_channel, "select", value, nullptr, nullptr, nullptr);
+  fl_value_unref(value);
+}
+
+static void setup_menu(MyApplication* self, GtkWindow* window, GtkHeaderBar* header_bar, FlView* view) {
+  GActionEntry entries[] = {
+      {"saveRestart", menu_action_cb, nullptr, nullptr, nullptr},
+      {"saveProfiles", menu_action_cb, nullptr, nullptr, nullptr},
+      {"reload", menu_action_cb, nullptr, nullptr, nullptr},
+      {"enableAll", menu_action_cb, nullptr, nullptr, nullptr},
+      {"restartKanshi", menu_action_cb, nullptr, nullptr, nullptr},
+      {"restoreBackup", menu_action_cb, nullptr, nullptr, nullptr},
+      {"showLogs", menu_action_cb, nullptr, nullptr, nullptr},
+      {"showHelp", menu_action_cb, nullptr, nullptr, nullptr},
+  };
+  g_action_map_add_action_entries(G_ACTION_MAP(self), entries, G_N_ELEMENTS(entries), self);
+
+  g_autoptr(GMenu) file_menu = g_menu_new();
+  g_menu_append(file_menu, "Speichern & kanshi neu starten", "app.saveRestart");
+  g_menu_append(file_menu, "Nur Profile speichern", "app.saveProfiles");
+  g_menu_append(file_menu, "Reload Outputs & Profiles", "app.reload");
+
+  g_autoptr(GMenu) actions_menu = g_menu_new();
+  g_menu_append(actions_menu, "Alle Displays aktivieren", "app.enableAll");
+  g_menu_append(actions_menu, "kanshi neu starten", "app.restartKanshi");
+  g_menu_append(actions_menu, "Backup wiederherstellen & anwenden", "app.restoreBackup");
+  g_menu_append(actions_menu, "Logs anzeigen", "app.showLogs");
+
+  g_autoptr(GMenu) help_menu = g_menu_new();
+  g_menu_append(help_menu, "Tipps anzeigen", "app.showHelp");
+
+  g_autoptr(GMenu) menubar = g_menu_new();
+  g_menu_append_submenu(menubar, "Datei", G_MENU_MODEL(file_menu));
+  g_menu_append_submenu(menubar, "Aktionen", G_MENU_MODEL(actions_menu));
+  g_menu_append_submenu(menubar, "Hilfe", G_MENU_MODEL(help_menu));
+
+  GtkWidget* menu_bar_widget = gtk_menu_bar_new_from_model(G_MENU_MODEL(menubar));
+  gtk_widget_show(menu_bar_widget);
+
+  if (header_bar != nullptr) {
+    gtk_header_bar_pack_start(header_bar, menu_bar_widget);
+  } else {
+    GtkWidget* content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(window), content_box);
+    gtk_box_pack_start(GTK_BOX(content_box), menu_bar_widget, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content_box), GTK_WIDGET(view), TRUE, TRUE, 0);
+  }
+}
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  GtkHeaderBar* header_bar = nullptr;
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
@@ -38,7 +96,7 @@ static void my_application_activate(GApplication* application) {
   }
 #endif
   if (use_header_bar) {
-    GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
+    header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
     gtk_header_bar_set_title(header_bar, "kanshi_gui");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
@@ -55,7 +113,17 @@ static void my_application_activate(GApplication* application) {
 
   FlView* view = fl_view_new(project);
   gtk_widget_show(GTK_WIDGET(view));
-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
+  FlStandardMethodCodec* codec = fl_standard_method_codec_new();
+  self->menu_channel = fl_method_channel_new(messenger, "kanshi_gui/native_menu",
+                                             FL_METHOD_CODEC(codec));
+  g_object_unref(codec);
+
+  setup_menu(self, window, use_header_bar ? header_bar : nullptr, view);
+
+  if (!gtk_widget_get_parent(GTK_WIDGET(view))) {
+    gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  }
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
@@ -103,6 +171,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->menu_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -114,7 +183,9 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication* self) {}
+static void my_application_init(MyApplication* self) {
+  self->menu_channel = nullptr;
+}
 
 MyApplication* my_application_new() {
   // Set the program name to the application ID, which helps various systems
