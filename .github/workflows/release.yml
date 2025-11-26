@@ -19,7 +19,8 @@ jobs:
           - arch: amd64
             runner: ubuntu-latest
           - arch: arm64
-            runner: ubuntu-22.04-arm   # <- wichtig: ohne "64"
+            runner: ubuntu-22.04-arm
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,13 +28,35 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev dpkg-dev
+          sudo apt-get install -y \
+            git \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            dpkg-dev
 
-      - name: Set up Flutter
+      # --- Flutter Setup für amd64 (x86_64 Host) ---
+      - name: Set up Flutter (amd64)
+        if: matrix.arch == 'amd64'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
+      # --- Flutter Setup für arm64 (ARM Host, ohne flutter-action) ---
+      - name: Set up Flutter (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          # Flutter aus dem offiziellen Repo klonen (stable-Branch)
+          git clone https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+
+          # einmal flutter laufen lassen, um Tooling zu initialisieren
+          "$HOME/flutter/bin/flutter" --version
+          "$HOME/flutter/bin/flutter" config --enable-linux-desktop
 
       - name: Flutter pub get
         run: flutter pub get
