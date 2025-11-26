@@ -9,7 +9,25 @@ command -v flutter >/dev/null 2>&1 || { echo "flutter not found in PATH." >&2; e
 command -v dpkg-deb >/dev/null 2>&1 || { echo "dpkg-deb not found (install dpkg-dev)." >&2; exit 1; }
 
 # Determine architectures
-DEB_ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+ARCH_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --arch)
+      if [[ -z ${2:-} ]]; then
+        echo "Missing value for --arch" >&2
+        exit 1
+      fi
+      ARCH_OVERRIDE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+DEB_ARCH=${ARCH_OVERRIDE:-$(dpkg --print-architecture 2>/dev/null || uname -m)}
 case "$DEB_ARCH" in
   amd64|x86_64)
     FLUTTER_ARCH="x64"
