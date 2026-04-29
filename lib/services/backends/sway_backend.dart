@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -153,13 +154,7 @@ class SwayBackend implements MonitorService {
       270 => '270',
       _ => 'normal',
     };
-    final mode = target.modes.isNotEmpty
-        ? _bestMode(target)
-        : MonitorMode(
-            width: target.width,
-            height: target.height,
-            refresh: target.refresh > 0 ? target.refresh : 60.0,
-          );
+    final mode = _modeMatchingTarget(target) ?? _bestMode(target);
     return _runner.run(bin, [
       'output',
       target.id,
@@ -193,7 +188,44 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  Stream<List<MonitorTileData>> watchOutputs() {
+    final controller = StreamController<List<MonitorTileData>>.broadcast();
+    ProcessStream? sub;
+    () async {
+      final bin = await _binary();
+      sub = _runner.stream(bin, ['-t', 'subscribe', '-m', '["output"]']);
+      // Emit the current state immediately so subscribers don't have to
+      // wait for the first event.
+      try {
+        controller.add(await getOutputs());
+      } catch (_) {/* ignore — initial state may not be available yet */}
+      sub!.lines.listen(
+        (_) async {
+          try {
+            controller.add(await getOutputs());
+          } catch (_) {/* swallow refresh errors */}
+        },
+        onDone: () => controller.close(),
+      );
+    }();
+    controller.onCancel = () async {
+      await sub?.kill();
+    };
+    return controller.stream;
+  }
+
+  @override
   Future<ProcessResult> restartCompositorProfileApply() async {
+    // Prefer kanshictl if available — it asks the running kanshi to reload
+    // its config without a full process restart, avoiding screen flicker.
+    if (await _runner.exists('kanshictl')) {
+      final pgrep = await _runner.run('pgrep', ['-x', 'kanshi']);
+      if (pgrep.exitCode == 0) {
+        final r = await _runner.run('kanshictl', ['reload']);
+        if (r.exitCode == 0) return r;
+        // Fall through to systemd / pkill on failure.
+      }
+    }
     // Prefer the systemd user unit if it's active.
     final check = await _runner.run('systemctl', [
       '--user',
@@ -213,6 +245,30 @@ class SwayBackend implements MonitorService {
           'setsid kanshi -c \$HOME/.config/kanshi/config '
           '>/tmp/kanshi_gui.log 2>&1 &'
     ]);
+  }
+
+  /// Returns the mode in [m.modes] that matches the tile's nominal
+  /// (unrotated) width/height/refresh — or null if none match. Prefer this
+  /// over [_bestMode] when applying state we already know about, otherwise
+  /// the user gets a surprise mode bump.
+  MonitorMode? _modeMatchingTarget(MonitorTileData m) {
+    if (m.modes.isEmpty) {
+      return MonitorMode(
+        width: m.width,
+        height: m.height,
+        refresh: m.refresh > 0 ? m.refresh : 60.0,
+      );
+    }
+    final landscapeW = m.rotation % 180 == 0 ? m.width : m.height;
+    final landscapeH = m.rotation % 180 == 0 ? m.height : m.width;
+    for (final mode in m.modes) {
+      if (mode.width.toInt() == landscapeW.toInt() &&
+          mode.height.toInt() == landscapeH.toInt() &&
+          (mode.refresh - m.refresh).abs() < 0.5) {
+        return mode;
+      }
+    }
+    return null;
   }
 
   MonitorMode _bestMode(MonitorTileData m) {

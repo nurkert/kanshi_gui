@@ -2,7 +2,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kanshi_gui/pages/first_run_wizard.dart';
 import 'package:kanshi_gui/pages/home_page.dart';
+import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
@@ -37,19 +39,42 @@ Future<void> main() async {
   );
   await controller.init();
 
-  runApp(KanshiApp(controller: controller));
+  final settings = await AppSettings.load();
+
+  runApp(KanshiApp(controller: controller, settings: settings));
 }
 
-class KanshiApp extends StatelessWidget {
+class KanshiApp extends StatefulWidget {
   final KanshiController controller;
-  const KanshiApp({super.key, required this.controller});
+  final AppSettings settings;
+  const KanshiApp(
+      {super.key, required this.controller, required this.settings});
+
+  @override
+  State<KanshiApp> createState() => _KanshiAppState();
+}
+
+class _KanshiAppState extends State<KanshiApp> {
+  late bool _showWizard;
+
+  @override
+  void initState() {
+    super.initState();
+    _showWizard = !widget.settings.firstRunDone;
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Kanshi GUI',
       theme: ThemeData.dark(),
-      home: HomePage(controller: controller),
+      home: _showWizard
+          ? FirstRunWizard(
+              controller: widget.controller,
+              settings: widget.settings,
+              onDone: () => setState(() => _showWizard = false),
+            )
+          : HomePage(controller: widget.controller),
     );
   }
 }

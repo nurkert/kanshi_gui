@@ -95,14 +95,15 @@ void main() {
 
   test('toggleEnabled flips state when the compositor confirms', () async {
     final cfg = _tmpConfig(tmp);
-    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    // Two enabled outputs so the hard-block doesn't trip.
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A'), _mon(id: 'B')]);
     final c = KanshiController(monitors: fake, config: cfg);
     await c.init();
-    fake.outputs = [_mon(id: 'A', enabled: false)];
+    fake.outputs = [_mon(id: 'A', enabled: false), _mon(id: 'B')];
     final r = await c.toggleEnabled('A', false);
     expect(r.success, isTrue);
     expect(fake.calls, contains('disable A'));
-    expect(c.activeMonitors.first.enabled, isFalse);
+    expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isFalse);
   });
 
   test('applyMode updates the active monitor and calls compositor when enabled',
@@ -130,6 +131,38 @@ void main() {
     final r = await c.reloadAndApply();
     expect(r.success, isFalse);
     expect(r.message, contains('boom'));
+  });
+
+  test('toggleEnabled refuses to disable the last enabled output', () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    final r = await c.toggleEnabled('A', false);
+    expect(r.success, isFalse);
+    expect(r.message, contains('last enabled'));
+    expect(fake.calls, isNot(contains('disable A')));
+  });
+
+  test('pushLiveApply forwards a single apply call to the backend', () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    final r = await c.pushLiveApply(c.activeMonitors.first);
+    expect(r.success, isTrue);
+    expect(fake.calls.where((s) => s.startsWith('apply A')), hasLength(1));
+  });
+
+  test('pushLiveApply is a no-op for disabled monitors', () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A', enabled: false)]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    final before = fake.calls.length;
+    final r = await c.pushLiveApply(c.activeMonitors.first);
+    expect(r.success, isTrue);
+    expect(fake.calls.length, equals(before));
   });
 
   test('controller propagates writeOptions from backend to ConfigService', () {

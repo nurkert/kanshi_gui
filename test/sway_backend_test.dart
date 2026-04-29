@@ -143,5 +143,25 @@ void main() {
         equals(['systemctl', '--user', 'restart', 'kanshi.service']),
       );
     });
+
+    test('uses kanshictl reload when available and kanshi is running',
+        () async {
+      fake = FakeProcessRunner(
+        installed: {'swaymsg', 'kanshictl'},
+        responses: {
+          'pgrep -x kanshi': ProcessResult(0, 0, '12345\n', ''),
+          'kanshictl reload': ProcessResult(0, 0, '', ''),
+        },
+      );
+      backend = SwayBackend(runner: fake);
+      await backend.restartCompositorProfileApply();
+      expect(
+        fake.calls.map((c) => c.first).toList(),
+        containsAllInOrder(['pgrep', 'kanshictl']),
+      );
+      // Did NOT fall through to systemctl/bash.
+      expect(fake.calls.any((c) => c.first == 'systemctl'), isFalse);
+      expect(fake.calls.any((c) => c.first == 'bash'), isFalse);
+    });
   });
 }
