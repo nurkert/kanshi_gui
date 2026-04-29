@@ -179,6 +179,6 @@ EOS
 chmod 755 "$PKG_DIR/DEBIAN/postrm"
 
 DEB_FILE="$ROOT_DIR/build/${DEB_PACKAGE_NAME}_${VERSION}_${DEB_ARCH}.deb"
-dpkg-deb --build "$PKG_DIR" "$DEB_FILE"
+dpkg-deb --root-owner-group --build "$PKG_DIR" "$DEB_FILE"
 
 echo "Package built: $DEB_FILE"
