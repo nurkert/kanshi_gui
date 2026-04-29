@@ -22,7 +22,7 @@ class ProfileListItem extends StatefulWidget {
   });
 
   @override
-  _ProfileListItemState createState() => _ProfileListItemState();
+  State<ProfileListItem> createState() => _ProfileListItemState();
 }
 
 class _ProfileListItemState extends State<ProfileListItem> {
