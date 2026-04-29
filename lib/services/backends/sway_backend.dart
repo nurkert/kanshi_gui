@@ -155,6 +155,8 @@ class SwayBackend implements MonitorService {
       _ => 'normal',
     };
     final mode = _modeMatchingTarget(target) ?? _bestMode(target);
+    // NB: swaymsg's `output … position` IPC takes two separate arguments
+    // (X Y), unlike the kanshi config syntax which is comma-joined ("X,Y").
     return _runner.run(bin, [
       'output',
       target.id,
@@ -166,7 +168,8 @@ class SwayBackend implements MonitorService {
       'transform',
       transform,
       'position',
-      '${target.x.toInt()},${target.y.toInt()}',
+      '${target.x.toInt()}',
+      '${target.y.toInt()}',
     ]);
   }
 
