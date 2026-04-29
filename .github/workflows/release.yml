@@ -12,6 +12,12 @@ jobs:
   build:
     name: Build ${{ matrix.arch }} package
     runs-on: ${{ matrix.runner }}
+    # Build inside Debian Bullseye so the resulting binaries link against
+    # glibc 2.31 — that makes the .deb run on Pi OS Bullseye, Debian 11,
+    # Ubuntu 20.04 and anything newer. Without this the runner's glibc
+    # (2.35 on ubuntu-22.04-arm, 2.39 on ubuntu-latest) leaks into the
+    # binary and breaks installs on older arm64 boards.
+    container: debian:bullseye-slim
     strategy:
       fail-fast: false
       matrix:
@@ -22,39 +28,32 @@ jobs:
             runner: ubuntu-22.04-arm
 
     steps:
+      # bullseye-slim ships without git/curl/etc., which actions/checkout
+      # and the Flutter installer both expect to be present.
+      - name: Bootstrap container tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git curl ca-certificates xz-utils unzip sudo
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # The container runs as root while the workspace is owned by a
+      # different uid — git refuses to operate on it without this opt-in.
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory '*'
+
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            clang \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libgtk-3-dev \
-            liblzma-dev \
-            dpkg-dev
+          apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev dpkg-dev libstdc++-10-dev
 
-      # --- Flutter Setup für amd64 (x86_64 Host) ---
-      - name: Set up Flutter (amd64)
-        if: matrix.arch == 'amd64'
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      # --- Flutter Setup für arm64 (ARM Host, ohne flutter-action) ---
-      - name: Set up Flutter (arm64)
-        if: matrix.arch == 'arm64'
+      - name: Install Flutter
         run: |
-          # Flutter aus dem offiziellen Repo klonen (stable-Branch)
-          git clone https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
+          git clone --depth 1 https://github.com/flutter/flutter.git -b stable "$HOME/flutter"
           echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
-
-          # einmal flutter laufen lassen, um Tooling zu initialisieren
           "$HOME/flutter/bin/flutter" --version
           "$HOME/flutter/bin/flutter" config --enable-linux-desktop
 
