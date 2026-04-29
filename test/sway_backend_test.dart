@@ -94,6 +94,29 @@ void main() {
           fake.calls.last, equals(['swaymsg', 'output', 'DP-1', 'disable']));
     });
 
+    test('apply() passes position as two separate arguments', () async {
+      const json = '''
+[{"name":"DP-1","make":"X","model":"Y","serial":"Z","active":true,
+  "scale":1.0,"transform":"normal","rect":{"x":0,"y":0,"width":2560,"height":1440},
+  "current_mode":{"width":2560,"height":1440,"refresh":60000},
+  "modes":[{"width":2560,"height":1440,"refresh":60000}]}]
+''';
+      fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_outputs': ProcessResult(0, 0, json, ''),
+      });
+      backend = SwayBackend(runner: fake);
+      final outs = await backend.getOutputs();
+      final m = outs.first.copyWith(x: 1920, y: 0);
+      await backend.apply(m);
+      // The position must be two args: "1920" and "0", NOT "1920,0".
+      final posIdx = fake.calls.last.indexOf('position');
+      expect(posIdx, greaterThanOrEqualTo(0));
+      expect(fake.calls.last[posIdx + 1], equals('1920'));
+      expect(fake.calls.last[posIdx + 2], equals('0'));
+      // And in particular, the "1920,0" form must not appear anywhere.
+      expect(fake.calls.last, isNot(contains('1920,0')));
+    });
+
     test('setMode() formats refresh correctly', () async {
       await backend.setMode(
           'DP-1', MonitorMode(width: 2560, height: 1440, refresh: 59.95));
