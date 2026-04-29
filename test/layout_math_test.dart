@@ -93,6 +93,20 @@ void main() {
       expect(r.tile.y, equals(8));
       expect(r.activeLines, isEmpty);
     });
+
+    test('yAlignmentEnabled=false keeps the edge snap but skips Y-align', () {
+      final a = _mon(id: 'A', x: 0, y: 0);
+      // Same Y as the X-edge alignment scenario, but alignment off.
+      final b = _mon(id: 'B', x: 1925, y: 8, w: 1920, h: 800);
+      final r = LayoutMath.snapToEdges(b, [a, b], 50,
+          yAlignmentEnabled: false);
+      // Edge still snaps.
+      expect(r.tile.x, equals(1920));
+      expect(r.xEdgeSnapped, isTrue);
+      // Y stays where the user put it; no alignment applied.
+      expect(r.tile.y, equals(8));
+      expect(r.yAlignmentApplied, isFalse);
+    });
   });
 
   group('LayoutMath.hasOverlap', () {

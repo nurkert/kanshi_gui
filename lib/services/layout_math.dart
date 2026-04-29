@@ -64,13 +64,26 @@ class SnapLine {
 }
 
 /// Outcome of [LayoutMath.snapToEdges]: the (possibly) repositioned tile,
-/// plus any snap guide lines that the snap engine engaged. The tile is
-/// always returned unchanged when no snap was applied.
+/// the active guide lines, and per-axis booleans telling the caller which
+/// snap categories actually engaged. The latter let stateful callers (the
+/// drag-session tracker in `KanshiController`) detect "user just escaped
+/// alignment" transitions without re-running the math.
 class SnapResult {
   final MonitorTileData tile;
   final List<SnapLine> activeLines;
+  final bool xEdgeSnapped;
+  final bool yEdgeSnapped;
+  final bool xAlignmentApplied;
+  final bool yAlignmentApplied;
 
-  const SnapResult({required this.tile, required this.activeLines});
+  const SnapResult({
+    required this.tile,
+    required this.activeLines,
+    this.xEdgeSnapped = false,
+    this.yEdgeSnapped = false,
+    this.xAlignmentApplied = false,
+    this.yAlignmentApplied = false,
+  });
 }
 
 /// Pure geometric helpers for monitor layout: snapping, overlap detection,
@@ -81,19 +94,26 @@ class LayoutMath {
 
   /// Snaps the top-left corner of [m] to the closest matching edge of any
   /// monitor in [all] (excluding itself), within [threshold]. When an axis
-  /// snap engages, the *other* axis is additionally snapped to one of three
-  /// alignment options (top/center/bottom or left/center/right) of the
-  /// neighbour, if within [threshold] — this is what gives the "macOS-style"
-  /// corner snap feeling. Returns a [SnapResult] with the (possibly)
-  /// repositioned tile and any guide lines that engaged.
+  /// snap engages and the corresponding alignment switch is on, the *other*
+  /// axis is additionally snapped to one of three alignment options
+  /// (top/center/bottom or left/center/right) of the neighbour. Edge snap
+  /// is always honoured (no-overlap / no-gap guarantee); alignment is the
+  /// switchable behaviour that callers turn off when the user has clearly
+  /// escaped it.
   static SnapResult snapToEdges(
     MonitorTileData m,
     Iterable<MonitorTileData> all,
-    double threshold,
-  ) {
+    double threshold, {
+    bool xAlignmentEnabled = true,
+    bool yAlignmentEnabled = true,
+  }) {
     double newX = m.x;
     double newY = m.y;
     final lines = <SnapLine>[];
+    bool xEdge = false;
+    bool yEdge = false;
+    bool yAlignApplied = false;
+    bool xAlignApplied = false;
     final width = m.width / m.scale;
     final height = m.height / m.scale;
 
@@ -109,6 +129,7 @@ class LayoutMath {
       if ((newX - oRight).abs() <= threshold) {
         newX = oRight;
         xSnapped = true;
+        xEdge = true;
         lines.add(SnapLine(
           x1: oRight, y1: oTop, x2: oRight, y2: oBottom,
           axis: SnapAxis.vertical,
@@ -116,12 +137,13 @@ class LayoutMath {
       } else if ((newX + width - oLeft).abs() <= threshold) {
         newX = oLeft - width;
         xSnapped = true;
+        xEdge = true;
         lines.add(SnapLine(
           x1: oLeft, y1: oTop, x2: oLeft, y2: oBottom,
           axis: SnapAxis.vertical,
         ));
       }
-      if (xSnapped) {
+      if (xSnapped && yAlignmentEnabled) {
         // Try Y-axis alignment: top, bottom, center.
         final candidates = <_AlignCandidate>[
           _AlignCandidate(target: oTop, newPos: oTop, type: _AlignType.top),
@@ -149,6 +171,7 @@ class LayoutMath {
         }
         if (best != null) {
           newY = best.newPos;
+          yAlignApplied = true;
           // Horizontal guide line at the alignment level.
           final guideY = best.type == _AlignType.top
               ? oTop
@@ -169,6 +192,7 @@ class LayoutMath {
       if ((newY - oBottom).abs() <= threshold) {
         newY = oBottom;
         ySnapped = true;
+        yEdge = true;
         lines.add(SnapLine(
           x1: oLeft, y1: oBottom, x2: oRight, y2: oBottom,
           axis: SnapAxis.horizontal,
@@ -176,12 +200,13 @@ class LayoutMath {
       } else if ((newY + height - oTop).abs() <= threshold) {
         newY = oTop - height;
         ySnapped = true;
+        yEdge = true;
         lines.add(SnapLine(
           x1: oLeft, y1: oTop, x2: oRight, y2: oTop,
           axis: SnapAxis.horizontal,
         ));
       }
-      if (ySnapped && !xSnapped) {
+      if (ySnapped && !xSnapped && xAlignmentEnabled) {
         // Try X-axis alignment: left, right, center.
         final candidates = <_AlignCandidate>[
           _AlignCandidate(target: oLeft, newPos: oLeft, type: _AlignType.top),
@@ -209,6 +234,7 @@ class LayoutMath {
         }
         if (best != null) {
           newX = best.newPos;
+          xAlignApplied = true;
           final guideX = best.type == _AlignType.top
               ? oLeft
               : best.type == _AlignType.bottom
@@ -224,7 +250,14 @@ class LayoutMath {
         }
       }
     }
-    return SnapResult(tile: m.copyWith(x: newX, y: newY), activeLines: lines);
+    return SnapResult(
+      tile: m.copyWith(x: newX, y: newY),
+      activeLines: lines,
+      xEdgeSnapped: xEdge,
+      yEdgeSnapped: yEdge,
+      xAlignmentApplied: xAlignApplied,
+      yAlignmentApplied: yAlignApplied,
+    );
   }
 
   /// True if [updated] (placed at index [idx] in [all]) overlaps any other

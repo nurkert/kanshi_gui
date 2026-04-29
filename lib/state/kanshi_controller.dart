@@ -48,6 +48,8 @@ class KanshiController extends ChangeNotifier {
   void Function(String message)? onHotplugToast;
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
+  final Map<String, _DragSession> _dragSessions = {};
+  static const _alignmentEscapeLimit = 2;
 
   /// Scale values the slider rasters onto on release. Chosen for real-world
   /// HiDPI scenarios; intentionally excludes integer scales > 3 because
@@ -339,7 +341,16 @@ class KanshiController extends ChangeNotifier {
     final mons = [..._profiles[_activeProfileIndex!].monitors];
     final idx = mons.indexWhere((m) => m.id == dragged.id);
     if (idx == -1 || !mons[idx].enabled) return;
-    final result = LayoutMath.snapToEdges(mons[idx], mons, snapThreshold);
+    final session = _dragSessions[dragged.id];
+    final result = LayoutMath.snapToEdges(
+      mons[idx],
+      mons,
+      snapThreshold,
+      yAlignmentEnabled:
+          (session?.yEscapeCount ?? 0) < _alignmentEscapeLimit,
+      xAlignmentEnabled:
+          (session?.xEscapeCount ?? 0) < _alignmentEscapeLimit,
+    );
     mons[idx] = result.tile;
     if (LayoutMath.hasOverlap(result.tile, mons, idx) && rollbackTo != null) {
       mons[idx] = rollbackTo;
@@ -351,9 +362,24 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// UI calls this when a fresh drag starts (mouse down on a tile). Resets
+  /// the per-monitor alignment-escape memory so the user gets the full
+  /// alignment hints again.
+  void beginDragSession(String id) {
+    _dragSessions[id] = _DragSession();
+  }
+
+  /// UI calls this when the drag ends (mouse up). Clears the session so the
+  /// next grab is fresh.
+  void endDragSession(String id) {
+    _dragSessions.remove(id);
+  }
+
   /// Computes the snap result for [dragged] without mutating any state and
   /// publishes the active snap lines so the UI can render guide lines while
-  /// the drag is in progress.
+  /// the drag is in progress. Tracks alignment-escape: if the user pulls
+  /// the tile out of an active alignment snap twice within the same drag
+  /// session, that axis's alignment magnet stays off until the next grab.
   void previewSnap(MonitorTileData dragged) {
     if (_activeProfileIndex == null) {
       if (_activeSnapLines.isNotEmpty) {
@@ -363,7 +389,35 @@ class KanshiController extends ChangeNotifier {
       return;
     }
     final mons = _profiles[_activeProfileIndex!].monitors;
-    final result = LayoutMath.snapToEdges(dragged, mons, snapThreshold);
+    final session = _dragSessions[dragged.id];
+    final result = LayoutMath.snapToEdges(
+      dragged,
+      mons,
+      snapThreshold,
+      yAlignmentEnabled:
+          (session?.yEscapeCount ?? 0) < _alignmentEscapeLimit,
+      xAlignmentEnabled:
+          (session?.xEscapeCount ?? 0) < _alignmentEscapeLimit,
+    );
+
+    if (session != null) {
+      // A *transition* from "y-alignment was applied" → "no longer applied
+      // even though the corresponding edge is still snapped" counts as
+      // the user pulling out of the alignment.
+      if (session.lastYAlignmentApplied &&
+          !result.yAlignmentApplied &&
+          result.xEdgeSnapped) {
+        session.yEscapeCount++;
+      }
+      if (session.lastXAlignmentApplied &&
+          !result.xAlignmentApplied &&
+          result.yEdgeSnapped) {
+        session.xEscapeCount++;
+      }
+      session.lastYAlignmentApplied = result.yAlignmentApplied;
+      session.lastXAlignmentApplied = result.xAlignmentApplied;
+    }
+
     if (!_snapLineListsEqual(_activeSnapLines, result.activeLines)) {
       _activeSnapLines = result.activeLines;
       notifyListeners();
@@ -853,4 +907,16 @@ class KanshiController extends ChangeNotifier {
 
   bool wouldExceedBandwidth(List<MonitorTileData> mons) =>
       LayoutMath.totalPixelRate(mons) > 700000000;
+}
+
+/// Per-drag bookkeeping for the alignment-escape heuristic. Keeps track of
+/// the previous frame's alignment state so the controller can detect when
+/// the user has "broken out" of an alignment snap, and counts those breakouts
+/// per axis. After [_alignmentEscapeLimit] escapes the alignment magnet on
+/// that axis stays off until the next [beginDragSession] call.
+class _DragSession {
+  bool lastYAlignmentApplied = false;
+  bool lastXAlignmentApplied = false;
+  int yEscapeCount = 0;
+  int xEscapeCount = 0;
 }
