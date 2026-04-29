@@ -8,11 +8,16 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 ## Features
 
-- **Display management**: Move, rotate and arrange displays as desired with simple drag and drop
-- **Profile Management**: Create, edit, and delete display profiles with ease.
-- **Automatic Detection**: Recognizes connected displays and adjusts configurations accordingly.
-- **User-Friendly Interface**: Intuitive design for seamless navigation and configuration.
-- **Save automatically**: After each graphical change, this is immediately and automatically stored in the config. (_A restart of kanshi is still required to actually apply the new config_)
+- **Live apply** — drag, scale or rotate a monitor and the change goes into the running compositor immediately. No more "save & restart" for every tweak.
+- **Safety net** — mode changes and output-disables come with a 15-second countdown banner; "Keep" cements them, otherwise the layout reverts itself.
+- **Hard block** against locking yourself out: the last enabled output cannot be disabled.
+- **Smart snapping** — Figma-style cyan guide lines, corner alignment (top / bottom / center) when an edge snaps, and a learning alignment magnet that backs off after you escape it twice in one drag.
+- **Hotplug aware** — connect or disconnect a monitor and the app refreshes itself instantly.
+- **Identify displays** — a light-bulb button flashes pulsing numbers on each tile so you know which one is which.
+- **First-run wizard** — picks up your detected layout and proposes a sensible profile name.
+- **Profile management** — create, rename, delete; switch with one click.
+- **kanshictl-aware reload** — uses `kanshictl reload` when available so re-applying a profile no longer flickers the screen.
+- **Compositor-agnostic** — auto-selects between `swaymsg` (Sway, full feature set) and `wlr-randr` (Hyprland / Wayfire / other wlroots) at startup; falls back to an offline editor when neither is installed.
 
 ## Getting Started
 
