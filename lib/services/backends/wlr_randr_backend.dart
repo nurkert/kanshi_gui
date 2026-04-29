@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -130,13 +131,7 @@ class WlrRandrBackend implements MonitorService {
       270 => '270',
       _ => 'normal',
     };
-    final mode = target.modes.isNotEmpty
-        ? _bestMode(target)
-        : MonitorMode(
-            width: target.width,
-            height: target.height,
-            refresh: target.refresh > 0 ? target.refresh : 60.0,
-          );
+    final mode = _modeMatchingTarget(target) ?? _bestMode(target);
     return _runner.run('wlr-randr', [
       '--output',
       target.id,
@@ -170,7 +165,43 @@ class WlrRandrBackend implements MonitorService {
   }
 
   @override
+  Stream<List<MonitorTileData>> watchOutputs() {
+    // wlr-randr has no native subscribe. Poll every 2 s — coarser than the
+    // Sway path but good enough for hot-plug awareness on Hyprland/Wayfire.
+    final controller = StreamController<List<MonitorTileData>>.broadcast();
+    Timer? timer;
+    String? lastSig;
+    Future<void> tick() async {
+      try {
+        final outs = await getOutputs();
+        final sig = outs
+            .map((o) => '${o.id}:${o.enabled}:${o.width}x${o.height}')
+            .join('|');
+        if (sig != lastSig) {
+          lastSig = sig;
+          controller.add(outs);
+        }
+      } catch (_) {/* ignore transient errors */}
+    }
+    controller.onListen = () {
+      tick();
+      timer = Timer.periodic(const Duration(seconds: 2), (_) => tick());
+    };
+    controller.onCancel = () {
+      timer?.cancel();
+    };
+    return controller.stream;
+  }
+
+  @override
   Future<ProcessResult> restartCompositorProfileApply() async {
+    if (await _runner.exists('kanshictl')) {
+      final pgrep = await _runner.run('pgrep', ['-x', 'kanshi']);
+      if (pgrep.exitCode == 0) {
+        final r = await _runner.run('kanshictl', ['reload']);
+        if (r.exitCode == 0) return r;
+      }
+    }
     final check = await _runner.run('systemctl', [
       '--user',
       'is-active',
@@ -188,6 +219,26 @@ class WlrRandrBackend implements MonitorService {
           'setsid kanshi -c \$HOME/.config/kanshi/config '
           '>/tmp/kanshi_gui.log 2>&1 &'
     ]);
+  }
+
+  MonitorMode? _modeMatchingTarget(MonitorTileData m) {
+    if (m.modes.isEmpty) {
+      return MonitorMode(
+        width: m.width,
+        height: m.height,
+        refresh: m.refresh > 0 ? m.refresh : 60.0,
+      );
+    }
+    final landscapeW = m.rotation % 180 == 0 ? m.width : m.height;
+    final landscapeH = m.rotation % 180 == 0 ? m.height : m.width;
+    for (final mode in m.modes) {
+      if (mode.width.toInt() == landscapeW.toInt() &&
+          mode.height.toInt() == landscapeH.toInt() &&
+          (mode.refresh - m.refresh).abs() < 0.5) {
+        return mode;
+      }
+    }
+    return null;
   }
 
   MonitorMode _bestMode(MonitorTileData m) {

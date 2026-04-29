@@ -27,43 +27,204 @@ class DisplayLayout {
   );
 }
 
+/// Which axis a snap line refers to.
+enum SnapAxis { vertical, horizontal }
+
+/// A guide line that a [LayoutMath.snapToEdges] call produced. The
+/// coordinates are in the *absolute* monitor space (same coordinate system
+/// as [MonitorTileData.x] / [MonitorTileData.y]); the painter is
+/// responsible for projecting them into viewport coordinates via the same
+/// mapping that [LayoutMath.computeDisplay] uses for the tiles.
+class SnapLine {
+  final double x1;
+  final double y1;
+  final double x2;
+  final double y2;
+  final SnapAxis axis;
+
+  const SnapLine({
+    required this.x1,
+    required this.y1,
+    required this.x2,
+    required this.y2,
+    required this.axis,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is SnapLine &&
+      other.x1 == x1 &&
+      other.y1 == y1 &&
+      other.x2 == x2 &&
+      other.y2 == y2 &&
+      other.axis == axis;
+
+  @override
+  int get hashCode => Object.hash(x1, y1, x2, y2, axis);
+}
+
+/// Outcome of [LayoutMath.snapToEdges]: the (possibly) repositioned tile,
+/// plus any snap guide lines that the snap engine engaged. The tile is
+/// always returned unchanged when no snap was applied.
+class SnapResult {
+  final MonitorTileData tile;
+  final List<SnapLine> activeLines;
+
+  const SnapResult({required this.tile, required this.activeLines});
+}
+
 /// Pure geometric helpers for monitor layout: snapping, overlap detection,
 /// viewport projection and total bandwidth estimation. No Flutter widget
 /// dependencies — easily unit-testable.
 class LayoutMath {
   LayoutMath._();
 
-  /// Returns a copy of [m] whose top-left corner is snapped to the closest
-  /// matching edge of any monitor in [all] (excluding itself), if within
-  /// [threshold]. Snaps independently on the x and y axes.
-  static MonitorTileData snapToEdges(
+  /// Snaps the top-left corner of [m] to the closest matching edge of any
+  /// monitor in [all] (excluding itself), within [threshold]. When an axis
+  /// snap engages, the *other* axis is additionally snapped to one of three
+  /// alignment options (top/center/bottom or left/center/right) of the
+  /// neighbour, if within [threshold] — this is what gives the "macOS-style"
+  /// corner snap feeling. Returns a [SnapResult] with the (possibly)
+  /// repositioned tile and any guide lines that engaged.
+  static SnapResult snapToEdges(
     MonitorTileData m,
     Iterable<MonitorTileData> all,
     double threshold,
   ) {
     double newX = m.x;
     double newY = m.y;
+    final lines = <SnapLine>[];
+    final width = m.width / m.scale;
+    final height = m.height / m.scale;
+
     for (final other in all) {
       if (other.id == m.id) continue;
-      final left = m.x;
-      final right = m.x + m.width / m.scale;
-      final top = m.y;
-      final bottom = m.y + m.height / m.scale;
       final oLeft = other.x;
       final oRight = other.x + other.width / other.scale;
       final oTop = other.y;
       final oBottom = other.y + other.height / other.scale;
 
-      if ((left - oRight).abs() <= threshold) newX = oRight;
-      if ((right - oLeft).abs() <= threshold) {
-        newX = oLeft - m.width / m.scale;
+      // ── Vertical (X-axis) edge snaps ────────────────────────────────────
+      bool xSnapped = false;
+      if ((newX - oRight).abs() <= threshold) {
+        newX = oRight;
+        xSnapped = true;
+        lines.add(SnapLine(
+          x1: oRight, y1: oTop, x2: oRight, y2: oBottom,
+          axis: SnapAxis.vertical,
+        ));
+      } else if ((newX + width - oLeft).abs() <= threshold) {
+        newX = oLeft - width;
+        xSnapped = true;
+        lines.add(SnapLine(
+          x1: oLeft, y1: oTop, x2: oLeft, y2: oBottom,
+          axis: SnapAxis.vertical,
+        ));
       }
-      if ((top - oBottom).abs() <= threshold) newY = oBottom;
-      if ((bottom - oTop).abs() <= threshold) {
-        newY = oTop - m.height / m.scale;
+      if (xSnapped) {
+        // Try Y-axis alignment: top, bottom, center.
+        final candidates = <_AlignCandidate>[
+          _AlignCandidate(target: oTop, newPos: oTop, type: _AlignType.top),
+          _AlignCandidate(
+              target: oBottom,
+              newPos: oBottom - height,
+              type: _AlignType.bottom),
+          _AlignCandidate(
+              target: (oTop + oBottom) / 2,
+              newPos: (oTop + oBottom) / 2 - height / 2,
+              type: _AlignType.center),
+        ];
+        _AlignCandidate? best;
+        var bestDist = double.infinity;
+        for (final c in candidates) {
+          final dist = c.type == _AlignType.top
+              ? (newY - c.target).abs()
+              : c.type == _AlignType.bottom
+                  ? (newY + height - c.target).abs()
+                  : (newY + height / 2 - c.target).abs();
+          if (dist <= threshold && dist < bestDist) {
+            best = c;
+            bestDist = dist;
+          }
+        }
+        if (best != null) {
+          newY = best.newPos;
+          // Horizontal guide line at the alignment level.
+          final guideY = best.type == _AlignType.top
+              ? oTop
+              : best.type == _AlignType.bottom
+                  ? oBottom
+                  : (oTop + oBottom) / 2;
+          final lineLeft = newX < oLeft ? newX : oLeft;
+          final lineRight = (newX + width) > oRight ? (newX + width) : oRight;
+          lines.add(SnapLine(
+            x1: lineLeft, y1: guideY, x2: lineRight, y2: guideY,
+            axis: SnapAxis.horizontal,
+          ));
+        }
+      }
+
+      // ── Horizontal (Y-axis) edge snaps ──────────────────────────────────
+      bool ySnapped = false;
+      if ((newY - oBottom).abs() <= threshold) {
+        newY = oBottom;
+        ySnapped = true;
+        lines.add(SnapLine(
+          x1: oLeft, y1: oBottom, x2: oRight, y2: oBottom,
+          axis: SnapAxis.horizontal,
+        ));
+      } else if ((newY + height - oTop).abs() <= threshold) {
+        newY = oTop - height;
+        ySnapped = true;
+        lines.add(SnapLine(
+          x1: oLeft, y1: oTop, x2: oRight, y2: oTop,
+          axis: SnapAxis.horizontal,
+        ));
+      }
+      if (ySnapped && !xSnapped) {
+        // Try X-axis alignment: left, right, center.
+        final candidates = <_AlignCandidate>[
+          _AlignCandidate(target: oLeft, newPos: oLeft, type: _AlignType.top),
+          _AlignCandidate(
+              target: oRight,
+              newPos: oRight - width,
+              type: _AlignType.bottom),
+          _AlignCandidate(
+              target: (oLeft + oRight) / 2,
+              newPos: (oLeft + oRight) / 2 - width / 2,
+              type: _AlignType.center),
+        ];
+        _AlignCandidate? best;
+        var bestDist = double.infinity;
+        for (final c in candidates) {
+          final dist = c.type == _AlignType.top
+              ? (newX - c.target).abs()
+              : c.type == _AlignType.bottom
+                  ? (newX + width - c.target).abs()
+                  : (newX + width / 2 - c.target).abs();
+          if (dist <= threshold && dist < bestDist) {
+            best = c;
+            bestDist = dist;
+          }
+        }
+        if (best != null) {
+          newX = best.newPos;
+          final guideX = best.type == _AlignType.top
+              ? oLeft
+              : best.type == _AlignType.bottom
+                  ? oRight
+                  : (oLeft + oRight) / 2;
+          final lineTop = newY < oTop ? newY : oTop;
+          final lineBottom =
+              (newY + height) > oBottom ? (newY + height) : oBottom;
+          lines.add(SnapLine(
+            x1: guideX, y1: lineTop, x2: guideX, y2: lineBottom,
+            axis: SnapAxis.vertical,
+          ));
+        }
       }
     }
-    return m.copyWith(x: newX, y: newY);
+    return SnapResult(tile: m.copyWith(x: newX, y: newY), activeLines: lines);
   }
 
   /// True if [updated] (placed at index [idx] in [all]) overlaps any other
@@ -148,4 +309,17 @@ class LayoutMath {
     }
     return sum;
   }
+}
+
+enum _AlignType { top, bottom, center }
+
+class _AlignCandidate {
+  final double target;
+  final double newPos;
+  final _AlignType type;
+  const _AlignCandidate({
+    required this.target,
+    required this.newPos,
+    required this.type,
+  });
 }

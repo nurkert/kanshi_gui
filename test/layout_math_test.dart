@@ -35,32 +35,63 @@ void main() {
     test('snaps left edge of B to right edge of A within threshold', () {
       final a = _mon(id: 'A', x: 0, y: 0);
       final b = _mon(id: 'B', x: 1925, y: 0); // 5 px to the right of A
-      final snapped = LayoutMath.snapToEdges(b, [a, b], 50);
-      expect(snapped.x, equals(1920));
-      expect(snapped.y, equals(0));
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.x, equals(1920));
+      expect(r.tile.y, equals(0));
+      expect(r.activeLines, isNotEmpty);
     });
 
     test('does not move when no neighbour is within threshold', () {
       final a = _mon(id: 'A', x: 0, y: 0);
       final b = _mon(id: 'B', x: 4000, y: 200);
-      final snapped = LayoutMath.snapToEdges(b, [a, b], 50);
-      expect(snapped.x, equals(4000));
-      expect(snapped.y, equals(200));
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.x, equals(4000));
+      expect(r.tile.y, equals(200));
+      expect(r.activeLines, isEmpty);
     });
 
     test('snaps top edge of B to bottom edge of A', () {
       final a = _mon(id: 'A', x: 0, y: 0);
       final b = _mon(id: 'B', x: 0, y: 1100); // 20 px below A
-      final snapped = LayoutMath.snapToEdges(b, [a, b], 50);
-      expect(snapped.y, equals(1080));
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.y, equals(1080));
     });
 
     test('respects scale when computing edges', () {
       final a = _mon(id: 'A', x: 0, y: 0, w: 3840, h: 2160, scale: 2.0);
       // A's right edge in logical coords is 3840/2 = 1920
       final b = _mon(id: 'B', x: 1925, y: 0);
-      final snapped = LayoutMath.snapToEdges(b, [a, b], 50);
-      expect(snapped.x, equals(1920));
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.x, equals(1920));
+    });
+
+    test('snaps Y to top-aligned when X edge is engaged', () {
+      // A is 1920×1080 at (0,0). B is 1920×800 dropped at (1925, 8) — X
+      // edge snaps and Y is within threshold of top alignment.
+      final a = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 1925, y: 8, w: 1920, h: 800);
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.x, equals(1920));
+      expect(r.tile.y, equals(0));
+      expect(r.activeLines.length, equals(2));
+    });
+
+    test('snaps Y to center-aligned when X edge is engaged', () {
+      final a = _mon(id: 'A', x: 0, y: 0); // height 1080, center 540
+      final b = _mon(id: 'B', x: 1925, y: 145, w: 1920, h: 800);
+      // B center would be at y + 400 = 545 → 5 px off centre 540, within 50
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.x, equals(1920));
+      expect(r.tile.y, equals(140)); // center: 540 - 400 = 140
+    });
+
+    test('does not Y-snap when X is not snapped', () {
+      // B's X is far from A's edges → no X snap, so no Y alignment kicks in.
+      final a = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 5000, y: 8);
+      final r = LayoutMath.snapToEdges(b, [a, b], 50);
+      expect(r.tile.y, equals(8));
+      expect(r.activeLines, isEmpty);
     });
   });
 

@@ -45,6 +45,14 @@ abstract class MonitorService {
   /// config takes effect. Implementations may use systemd if available.
   Future<ProcessResult> restartCompositorProfileApply();
 
+  /// Live stream of output state changes. Emits a fresh full output list
+  /// each time the compositor reports a hotplug, a transform/mode change,
+  /// or any other relevant output event. Backends that can't subscribe
+  /// natively may fall back to polling; the [NoopBackend] returns
+  /// [Stream.empty]. The returned [Stream] is broadcast — multiple
+  /// listeners are safe.
+  Stream<List<MonitorTileData>> watchOutputs();
+
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway (via SWAYSOCK or `swaymsg` in PATH) → wlr-randr → noop.
   static Future<MonitorService> detect({ProcessRunner? runner}) async {
