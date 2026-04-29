@@ -1,0 +1,71 @@
+# Changelog
+
+## 1.1.0 — 2026-04-29
+
+### Added
+
+- **Live apply on release** — drag, scale or rotate a monitor and the change
+  is pushed to the running compositor immediately, no more "Save & restart"
+  click for every layout tweak.
+- **Safety-net for risky ops** — mode changes and output-disables get a
+  15-second countdown banner with Keep / Revert buttons; chained changes
+  share a single banner that always reverts to the pre-chain state.
+- **Hard block** against disabling the last enabled output.
+- **Snap guides à la Figma** — visible cyan lines while dragging show
+  exactly which edge or alignment is engaging.
+- **Corner snap with axis alignment** — when an edge snaps, the orthogonal
+  axis additionally rasters onto top / bottom / center of the neighbour.
+- **Smarter alignment magnet** — after the user pulls out of an alignment
+  twice in the same drag, that axis stays free for the rest of the grab;
+  a fresh grab restores the full snap help.
+- **Scale snap reform** — sensible target values (1.0 / 1.25 / 1.333 / 1.5
+  / 1.75 / 2.0 / 2.5 / 3.0), commit-on-release only, direction-aware so
+  you never feel "glued" to integer scales.
+- **Hotplug listener** — the app reacts to monitor connects/disconnects
+  without a manual refresh and shows a toast.
+- **`kanshictl reload`** is preferred over `pkill kanshi` when available
+  — no flicker on save & restart.
+- **Identify Displays** button (light-bulb icon) flashes pulsing numbers
+  on each tile for three seconds.
+- **First-run wizard** — three-step onboarding that detects the backend,
+  lists outputs and proposes a sensible profile name.
+- Compositor-agnostic backend abstraction (Sway, wlr-randr, Noop) with
+  auto-detection at startup.
+- Headless probe tool: `dart run tool/probe_outputs.dart`.
+
+### Changed
+
+- `swaymsg output … position` now correctly receives space-separated X Y
+  arguments (was comma-joined, which Sway rejected).
+- `apply()` picks the mode that matches the current width/height/refresh
+  rather than blindly using the largest mode in the list.
+- `kanshi config` writer makes the Sway-specific `exec swaymsg "workspace …"`
+  injection opt-in based on the active backend (kept on for Sway, off for
+  wlr-randr-based compositors).
+- The compositor support matrix in the README is now honest: Sway full,
+  Hyprland / Wayfire / other wlroots via wlr-randr, GNOME on Wayland not
+  yet supported.
+
+### Fixed
+
+- `withOpacity()` deprecation warnings on newer Flutter SDKs.
+- `library_private_types_in_public_api` lint in `createState()` overrides.
+- Sidebar animation icon out-of-sync with the sidebar state at startup.
+- `_buildAndSave` no longer mutates fields inside `setState`.
+- Sway literal `"Unknown"` strings no longer leak into the manufacturer
+  display label.
+- `dpkg-deb` warning about file ownership in `scripts/build_deb.sh`
+  (now passes `--root-owner-group`).
+
+### Internals
+
+- 1573-line god widget refactored into a `KanshiController`
+  (`ChangeNotifier`), pulled `LayoutMath`, `KanshiConfigParser`,
+  `KanshiConfigWriter` and the backend layer out of the page.
+- Test suite grew from 0 → 79 tests covering layout, parser, writer,
+  Sway / wlr-randr backends, controller, safety-net, drag-session
+  alignment escapes, scale snap and the first-run helpers.
+
+## 1.0.2
+
+- Initial release with manual save / restart workflow.
