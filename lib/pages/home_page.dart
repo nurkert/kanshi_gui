@@ -362,6 +362,7 @@ class _HomePageState extends State<HomePage>
 
   void _onDragStart(MonitorTileData original) {
     _dragRollback[original.id] = original;
+    c.beginDragSession(original.id);
   }
 
   void _onTileUpdate(MonitorTileData updated, DisplayLayout layout) {
@@ -413,6 +414,7 @@ class _HomePageState extends State<HomePage>
     final idx = mons.indexWhere((m) => m.id == tile.id);
     if (idx == -1) return;
     c.snapAndCommit(mons[idx], rollback);
+    c.endDragSession(tile.id);
     final committed = c.activeMonitors.firstWhere((m) => m.id == tile.id);
     _toast(await c.pushLiveApply(committed));
   }
