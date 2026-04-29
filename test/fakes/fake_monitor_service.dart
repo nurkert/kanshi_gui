@@ -1,0 +1,94 @@
+import 'dart:io';
+
+import 'package:kanshi_gui/models/monitor_mode.dart';
+import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/services/kanshi_config_writer.dart';
+import 'package:kanshi_gui/services/monitor_service.dart';
+
+/// Test double that records every backend call and returns canned values.
+/// Lets us drive [KanshiController] through its scenarios without touching
+/// the host's compositor.
+class FakeMonitorService implements MonitorService {
+  @override
+  bool isLive;
+
+  @override
+  String get name => 'fake';
+
+  @override
+  KanshiWriteOptions writeOptions;
+
+  List<MonitorTileData> outputs;
+  ProcessResult enableResult;
+  ProcessResult disableResult;
+  ProcessResult applyResult;
+  ProcessResult setModeResult;
+  ProcessResult applyCustomResult;
+  ProcessResult restartResult;
+
+  final List<String> calls = [];
+
+  FakeMonitorService({
+    this.isLive = true,
+    this.writeOptions = KanshiWriteOptions.neutral,
+    List<MonitorTileData>? outputs,
+    ProcessResult? enableResult,
+    ProcessResult? disableResult,
+    ProcessResult? applyResult,
+    ProcessResult? setModeResult,
+    ProcessResult? applyCustomResult,
+    ProcessResult? restartResult,
+  })  : outputs = outputs ?? [],
+        enableResult = enableResult ?? ProcessResult(0, 0, '', ''),
+        disableResult = disableResult ?? ProcessResult(0, 0, '', ''),
+        applyResult = applyResult ?? ProcessResult(0, 0, '', ''),
+        setModeResult = setModeResult ?? ProcessResult(0, 0, '', ''),
+        applyCustomResult =
+            applyCustomResult ?? ProcessResult(0, 0, '', ''),
+        restartResult = restartResult ?? ProcessResult(0, 0, '', '');
+
+  @override
+  Future<List<MonitorTileData>> getOutputs() async {
+    calls.add('getOutputs');
+    return outputs;
+  }
+
+  @override
+  Future<ProcessResult> enable(String outputId) async {
+    calls.add('enable $outputId');
+    return enableResult;
+  }
+
+  @override
+  Future<ProcessResult> disable(String outputId) async {
+    calls.add('disable $outputId');
+    return disableResult;
+  }
+
+  @override
+  Future<ProcessResult> setMode(String outputId, MonitorMode mode) async {
+    calls.add(
+        'setMode $outputId ${mode.width.toInt()}x${mode.height.toInt()}@${mode.refresh}');
+    return setModeResult;
+  }
+
+  @override
+  Future<ProcessResult> apply(MonitorTileData target) async {
+    calls.add('apply ${target.id}');
+    return applyResult;
+  }
+
+  @override
+  Future<ProcessResult> applyCustomMode(
+      String outputId, double width, double height, double refresh) async {
+    calls.add(
+        'applyCustomMode $outputId ${width.toInt()}x${height.toInt()}@$refresh');
+    return applyCustomResult;
+  }
+
+  @override
+  Future<ProcessResult> restartCompositorProfileApply() async {
+    calls.add('restart');
+    return restartResult;
+  }
+}

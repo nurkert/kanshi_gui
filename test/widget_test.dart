@@ -1,11 +1,4 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-
-void main() {
-
-}
+// Smoke test placeholder: the meaningful test coverage lives in the
+// service/state suites (layout_math_test.dart, kanshi_config_*_test.dart,
+// sway_backend_test.dart, wlr_randr_backend_test.dart, kanshi_controller_test.dart).
+void main() {}
