@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.1 — 2026-04-29
+
+### Fixed
+
+- Release `.deb`s are now built inside a Debian Bullseye container so the
+  binaries link against glibc 2.31 instead of the runner's glibc
+  (2.35 on `ubuntu-22.04-arm`, 2.39 on `ubuntu-latest`). The 1.1.0 packages
+  failed to start on Pi OS Bullseye, Debian 11 and Ubuntu 20.04 with
+  `version 'GLIBC_2.34' not found`. Both architectures now run on anything
+  glibc ≥ 2.31.
+
 ## 1.1.0 — 2026-04-29
 
 ### Added
