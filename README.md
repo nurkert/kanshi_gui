@@ -18,7 +18,15 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 ### Prerequisites
 
-- 	**Wayland session**: This application is designed specifically for Wayland compositors. Make sure you are running a Wayland session (e.g., with Sway, Hyprland, Wayfire, GNOME on Wayland, etc.).
+- 	**Wayland session**: This application is designed specifically for Wayland compositors. The level of support depends on which output-control tool is available — see the matrix below.
+
+	| Compositor | Backend | Live apply | Sway workspace `exec` injected |
+	|------------|---------|:---:|:---:|
+	| Sway | `swaymsg` | ✅ | ✅ (default) |
+	| Hyprland / Wayfire / other wlroots | `wlr-randr` | ✅ | ❌ |
+	| GNOME on Wayland | _not yet supported_ | ❌ (offline editor only) | ❌ |
+
+	The app auto-detects the backend at startup. If neither `swaymsg` nor `wlr-randr` is installed, kanshi_gui still works as an offline profile editor (toggle/mode actions are disabled).
 - [**kanshi**](https://sr.ht/~emersion/kanshi/): Ensure [kanshi](https://sr.ht/~emersion/kanshi/) is installed and configured (with a working `~/.config/kanshi/config` file) on your system. 
 - **Flutter SDK**: Required to build the GUI yourself - [(Installation Guide)](https://flutter.dev/docs/get-started/install)
 
