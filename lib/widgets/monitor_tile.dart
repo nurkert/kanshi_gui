@@ -52,7 +52,7 @@ class MonitorTile extends StatefulWidget {
   });
 
   @override
-  _MonitorTileState createState() => _MonitorTileState();
+  State<MonitorTile> createState() => _MonitorTileState();
 }
 
 class _MonitorTileState extends State<MonitorTile> {
@@ -88,9 +88,9 @@ class _MonitorTileState extends State<MonitorTile> {
     final isEnabled = widget.data.enabled;
     final backgroundColor = isEnabled
         ? (widget.exists
-            ? Colors.green.withOpacity(0.3)
-            : Colors.red.withOpacity(0.3))
-        : Colors.grey.withOpacity(0.4);
+            ? Colors.green.withValues(alpha: 0.3)
+            : Colors.red.withValues(alpha: 0.3))
+        : Colors.grey.withValues(alpha: 0.4);
     final borderColor = isEnabled
         ? (widget.exists ? Colors.greenAccent : Colors.redAccent)
         : Colors.grey;
@@ -209,7 +209,7 @@ class _MonitorTileState extends State<MonitorTile> {
                   width: 16,
                   height: 16,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.5),
+                    color: Colors.white.withValues(alpha: 0.5),
                     border: Border.all(color: Colors.black),
                   ),
                 ),
@@ -252,12 +252,11 @@ class _MonitorTileState extends State<MonitorTile> {
                     ),
                   if (widget.data.modes.isNotEmpty)
                     SubmenuButton(
-                      child: const Text('Resolution / Hz'),
                       menuChildren: _buildModeMenuItems(),
+                      child: const Text('Resolution / Hz'),
                     ),
                   if (widget.onCustomMode != null || widget.onCustomModeRevert != null)
                     SubmenuButton(
-                      child: const Text('Advanced'),
                       menuChildren: [
                         if (widget.onCustomMode != null)
                           MenuItemButton(
@@ -270,6 +269,7 @@ class _MonitorTileState extends State<MonitorTile> {
                             child: const Text('Revert last custom mode'),
                           ),
                       ],
+                      child: const Text('Advanced'),
                     ),
                 ],
               ),
