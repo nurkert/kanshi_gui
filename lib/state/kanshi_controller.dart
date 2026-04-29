@@ -9,6 +9,7 @@ import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
+import 'package:kanshi_gui/state/safety_net.dart';
 
 /// Lightweight result type returned by mutating controller operations so the
 /// UI can decide whether to show a snackbar. Avoids leaking [ProcessResult]
@@ -29,6 +30,7 @@ class KanshiController extends ChangeNotifier {
   final ConfigService config;
   final CustomModeRevertScheduler _revertScheduler =
       CustomModeRevertScheduler();
+  final SafetyNet safetyNet = SafetyNet();
 
   /// Snap distance used by the layout helpers. Public so widgets that need
   /// to mirror the value (e.g. for cursor hints) can read it.
@@ -40,6 +42,21 @@ class KanshiController extends ChangeNotifier {
   bool _isApplyingBatch = false;
   Timer? _saveTimer;
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
+  final Map<String, double> _lastSnappedScale = {};
+  List<SnapLine> _activeSnapLines = const [];
+  StreamSubscription<List<MonitorTileData>>? _outputSubscription;
+  void Function(String message)? onHotplugToast;
+  Map<String, int> _identifyNumbers = const {};
+  Timer? _identifyTimer;
+
+  /// Scale values the slider rasters onto on release. Chosen for real-world
+  /// HiDPI scenarios; intentionally excludes integer scales > 3 because
+  /// they are essentially never useful and would create the "I can't get
+  /// off 1.0" trap if every integer were a magnet.
+  static const _scaleSnapValues = <double>[
+    1.0, 1.25, 1.333, 1.5, 1.75, 2.0, 2.5, 3.0,
+  ];
+  static const _scaleSnapTolerance = 0.03;
 
   KanshiController({
     required this.monitors,
@@ -47,6 +64,7 @@ class KanshiController extends ChangeNotifier {
     this.snapThreshold = 500.0,
   }) {
     config.writeOptions = monitors.writeOptions;
+    safetyNet.onChange((_) => notifyListeners());
   }
 
   // ── Read-only accessors ────────────────────────────────────────────────
@@ -60,18 +78,81 @@ class KanshiController extends ChangeNotifier {
       activeProfile?.monitors ?? const [];
   bool get isApplyingBatch => _isApplyingBatch;
   bool get supportsLiveApply => monitors.isLive;
+  List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
+  Map<String, int> get identifyNumbers =>
+      Map.unmodifiable(_identifyNumbers);
+  bool get isIdentifying => _identifyNumbers.isNotEmpty;
+
+  /// Flashes a numbered overlay on each active monitor tile for ~3 seconds
+  /// so the user can map "tile 1 ↔ physical screen 1". The numbering goes
+  /// left-to-right, top-to-bottom by absolute position.
+  void identifyDisplays() {
+    final mons = activeMonitors;
+    if (mons.isEmpty) return;
+    final sorted = [...mons]..sort((a, b) {
+        final byY = a.y.compareTo(b.y);
+        if (byY != 0) return byY;
+        return a.x.compareTo(b.x);
+      });
+    _identifyNumbers = {
+      for (var i = 0; i < sorted.length; i++) sorted[i].id: i + 1,
+    };
+    _identifyTimer?.cancel();
+    _identifyTimer = Timer(const Duration(seconds: 3), () {
+      _identifyNumbers = const {};
+      notifyListeners();
+    });
+    notifyListeners();
+  }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
   Future<void> init() async {
     await _loadConfig();
     await refreshConnectedMonitors();
     await ensureCurrentSetupMatches();
+    _subscribeHotplug();
+  }
+
+  void _subscribeHotplug() {
+    if (!monitors.isLive) return;
+    _outputSubscription = monitors.watchOutputs().listen((newOutputs) {
+      final oldIds = _currentMonitors.map((m) => m.id).toSet();
+      final newIds = newOutputs.map((m) => m.id).toSet();
+      final added = newIds.difference(oldIds);
+      final removed = oldIds.difference(newIds);
+      _currentMonitors = newOutputs;
+      // Re-hydrate profile entries with the live mode list.
+      for (final profile in _profiles) {
+        for (var i = 0; i < profile.monitors.length; i++) {
+          final connected = newOutputs.firstWhere(
+            (m) => _monitorsMatch(m, profile.monitors[i]),
+            orElse: () => profile.monitors[i],
+          );
+          profile.monitors[i] = profile.monitors[i].copyWith(
+            id: connected.id,
+            manufacturer: connected.manufacturer,
+            refresh: connected.refresh,
+            modes: connected.modes,
+          );
+        }
+      }
+      notifyListeners();
+      for (final id in added) {
+        onHotplugToast?.call('$id connected');
+      }
+      for (final id in removed) {
+        onHotplugToast?.call('$id disconnected');
+      }
+    });
   }
 
   @override
   void dispose() {
     _saveTimer?.cancel();
     _revertScheduler.cancelAll();
+    safetyNet.cancelAll();
+    _outputSubscription?.cancel();
+    _identifyTimer?.cancel();
     super.dispose();
   }
 
@@ -194,18 +275,31 @@ class KanshiController extends ChangeNotifier {
     final idx = mons.indexWhere((m) => m.id == updated.id);
     if (idx == -1) return;
     if (!mons[idx].enabled) return;
+    final prevRotation = mons[idx].rotation;
     mons[idx] = updated;
     _scheduleSave();
     notifyListeners();
+    // Rotation changes don't get a drag-end / commit callback — live-apply
+    // them right away so the compositor matches the visual state.
+    if (updated.rotation != prevRotation) {
+      // Fire-and-forget; UI doesn't await this.
+      // ignore: discarded_futures
+      pushLiveApply(updated);
+    }
   }
 
-  void scaleMonitor(String id, double newScale) {
+  /// Updates the scale of [id] and adjusts neighbours that were edge-snapped
+  /// to it so they stay aligned. When [committing] is true (mouse-up / final
+  /// commit), the new value rasters onto the nearest entry in
+  /// [_scaleSnapValues] within tolerance — *unless* the user just left a
+  /// snap value (tracked in [_lastSnappedScale]) and hasn't moved far
+  /// enough away from it yet (direction-aware snapping). When false (during
+  /// drag), no snap is applied so the user gets immediate, unfiltered
+  /// feedback and never feels "stuck" near 1.0.
+  void scaleMonitor(String id, double newScale, {bool committing = false}) {
     if (_activeProfileIndex == null) return;
-    for (var n = 1; n <= 8; n++) {
-      if ((newScale - n).abs() < 0.05) {
-        newScale = n.toDouble();
-        break;
-      }
+    if (committing) {
+      newScale = _maybeSnapScale(id, newScale);
     }
     newScale = double.parse(newScale.toStringAsFixed(2));
 
@@ -245,16 +339,77 @@ class KanshiController extends ChangeNotifier {
     final mons = [..._profiles[_activeProfileIndex!].monitors];
     final idx = mons.indexWhere((m) => m.id == dragged.id);
     if (idx == -1 || !mons[idx].enabled) return;
-    final snapped =
-        LayoutMath.snapToEdges(mons[idx], mons, snapThreshold);
-    mons[idx] = snapped;
-    if (LayoutMath.hasOverlap(snapped, mons, idx) && rollbackTo != null) {
+    final result = LayoutMath.snapToEdges(mons[idx], mons, snapThreshold);
+    mons[idx] = result.tile;
+    if (LayoutMath.hasOverlap(result.tile, mons, idx) && rollbackTo != null) {
       mons[idx] = rollbackTo;
     }
     _profiles[_activeProfileIndex!] =
         Profile(name: _profiles[_activeProfileIndex!].name, monitors: mons);
+    _activeSnapLines = const [];
     _scheduleSave();
     notifyListeners();
+  }
+
+  /// Computes the snap result for [dragged] without mutating any state and
+  /// publishes the active snap lines so the UI can render guide lines while
+  /// the drag is in progress.
+  void previewSnap(MonitorTileData dragged) {
+    if (_activeProfileIndex == null) {
+      if (_activeSnapLines.isNotEmpty) {
+        _activeSnapLines = const [];
+        notifyListeners();
+      }
+      return;
+    }
+    final mons = _profiles[_activeProfileIndex!].monitors;
+    final result = LayoutMath.snapToEdges(dragged, mons, snapThreshold);
+    if (!_snapLineListsEqual(_activeSnapLines, result.activeLines)) {
+      _activeSnapLines = result.activeLines;
+      notifyListeners();
+    }
+  }
+
+  void clearSnapPreview() {
+    if (_activeSnapLines.isNotEmpty) {
+      _activeSnapLines = const [];
+      notifyListeners();
+    }
+  }
+
+  bool _snapLineListsEqual(List<SnapLine> a, List<SnapLine> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  double _maybeSnapScale(String id, double raw) {
+    final last = _lastSnappedScale[id];
+    double? best;
+    var bestDist = double.infinity;
+    for (final v in _scaleSnapValues) {
+      final dist = (raw - v).abs();
+      if (dist > _scaleSnapTolerance) continue;
+      // Direction-aware: if we just left this value, require ~2× tolerance
+      // before re-snapping to the same one — avoids the "stuck on 1.0" trap.
+      if (last != null && (last - v).abs() < 1e-9) {
+        if (dist > 0 && (raw - last).abs() < _scaleSnapTolerance * 2) {
+          continue;
+        }
+      }
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = v;
+      }
+    }
+    if (best != null) {
+      _lastSnappedScale[id] = best;
+      return best;
+    }
+    _lastSnappedScale.remove(id);
+    return raw;
   }
 
   void rearrangeActiveLayout() {
@@ -291,6 +446,12 @@ class KanshiController extends ChangeNotifier {
     final mons = _profiles[_activeProfileIndex!].monitors;
     final idx = mons.indexWhere((m) => m.id == id);
     if (idx == -1) return const OpResult.err('Output not found.');
+
+    // Hard-block: refuse if this would leave the user with zero outputs.
+    if (!enabled && _wouldLockOutUser(idx)) {
+      return const OpResult.err(
+          'Cannot disable the last enabled output.');
+    }
 
     final target = _resolveOutputName(id);
     final currentMode = _currentModeForOutput(target);
@@ -330,6 +491,21 @@ class KanshiController extends ChangeNotifier {
       mons[idx] = mons[idx].copyWith(enabled: enabled);
       _scheduleSave();
       notifyListeners();
+      // Guard a *disable* with a SafetyNet — re-enable on timeout.
+      if (!enabled) {
+        await safetyNet.guard(
+          key: 'toggle:$target',
+          label: 'Disabled $target',
+          doIt: () async {},
+          revert: () async {
+            await monitors.enable(target);
+            await monitors.apply(mons[idx]);
+            mons[idx] = mons[idx].copyWith(enabled: true);
+            _scheduleSave();
+            notifyListeners();
+          },
+        );
+      }
       return OpResult.ok(enabled
           ? 'Output enabled.'
           : 'Output disabled.');
@@ -339,14 +515,54 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
+  /// Pushes the current state of [target] (position/scale/transform/mode)
+  /// into the running compositor as a single apply call. Used after a
+  /// drag/scale/rotate commit so the layout becomes "live" without
+  /// requiring an explicit "Save & restart" click. No SafetyNet guard —
+  /// the user sees the result immediately and can adjust by hand if it
+  /// looks wrong.
+  Future<OpResult> pushLiveApply(MonitorTileData target) async {
+    if (!monitors.isLive) return const OpResult.ok();
+    if (!target.enabled) return const OpResult.ok();
+    try {
+      final resolved = _resolveOutputName(target.id);
+      final r = await monitors.apply(target.copyWith(id: resolved));
+      if (r.exitCode != 0) {
+        return OpResult.err('Live apply failed: ${r.stderr}');
+      }
+      return const OpResult.ok();
+    } catch (e) {
+      return OpResult.err('Live apply error: $e');
+    }
+  }
+
+  /// True if the active profile would have zero enabled outputs after
+  /// disabling the monitor at [idx].
+  bool _wouldLockOutUser(int idx) {
+    if (_activeProfileIndex == null) return false;
+    final mons = _profiles[_activeProfileIndex!].monitors;
+    var enabledLeft = 0;
+    for (var i = 0; i < mons.length; i++) {
+      if (i == idx) continue;
+      if (mons[i].enabled) enabledLeft++;
+    }
+    return enabledLeft == 0;
+  }
+
   Future<OpResult> applyMode(String id, MonitorMode mode) async {
     if (_activeProfileIndex == null) return const OpResult.err('No profile.');
     final mons = _profiles[_activeProfileIndex!].monitors;
     final idx = mons.indexWhere((m) => m.id == id);
     if (idx == -1) return const OpResult.err('Output not found.');
+    final target = _resolveOutputName(id);
+    final priorMode = MonitorMode(
+      width: mons[idx].width,
+      height: mons[idx].height,
+      refresh: mons[idx].refresh,
+    );
+    final priorTile = mons[idx];
 
     if (mons[idx].enabled) {
-      final target = _resolveOutputName(id);
       try {
         final r = await monitors.setMode(target, mode);
         if (r.exitCode != 0) {
@@ -372,6 +588,28 @@ class KanshiController extends ChangeNotifier {
     );
     _scheduleSave();
     notifyListeners();
+
+    if (priorTile.enabled) {
+      await safetyNet.guard(
+        key: 'mode:$target',
+        label: 'Mode change on $target',
+        doIt: () async {},
+        revert: () async {
+          // Restore the prior mode at the compositor and in the profile.
+          await monitors.setMode(target, priorMode);
+          if (_activeProfileIndex != null) {
+            final cur = _profiles[_activeProfileIndex!].monitors;
+            final i = cur.indexWhere((m) => m.id == priorTile.id);
+            if (i != -1) {
+              cur[i] = priorTile;
+              _scheduleSave();
+              notifyListeners();
+            }
+          }
+          await refreshConnectedMonitors();
+        },
+      );
+    }
     return const OpResult.ok();
   }
 

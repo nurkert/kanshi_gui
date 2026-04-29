@@ -54,4 +54,7 @@ class NoopBackend implements MonitorService {
 
   @override
   Future<ProcessResult> restartCompositorProfileApply() async => _unsupported();
+
+  @override
+  Stream<List<MonitorTileData>> watchOutputs() => const Stream.empty();
 }

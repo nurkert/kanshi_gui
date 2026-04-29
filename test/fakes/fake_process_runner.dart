@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:kanshi_gui/services/process_runner.dart';
@@ -36,4 +37,28 @@ class FakeProcessRunner implements ProcessRunner {
 
   @override
   Future<bool> exists(String executable) async => installed.contains(executable);
+
+  /// Per-key streams that tests can push lines into. Key format matches
+  /// [run]: `executable arg1 arg2 …` joined by spaces.
+  final Map<String, StreamController<String>> _streamControllers = {};
+
+  StreamController<String> openStream(String key) {
+    return _streamControllers.putIfAbsent(
+        key, () => StreamController<String>.broadcast());
+  }
+
+  @override
+  ProcessStream stream(String executable, List<String> arguments) {
+    final invocation = [executable, ...arguments];
+    calls.add(invocation);
+    final key = invocation.join(' ');
+    final ctl = openStream(key);
+    return ProcessStream(
+      lines: ctl.stream,
+      kill: () async {
+        if (!ctl.isClosed) await ctl.close();
+        _streamControllers.remove(key);
+      },
+    );
+  }
 }

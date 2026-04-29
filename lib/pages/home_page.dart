@@ -7,6 +7,8 @@ import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/profile_sidebar.dart';
+import 'package:kanshi_gui/widgets/safety_net_banner.dart';
+import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
 /// Top-level page: hosts the AppBar, the sliding sidebar, and the layout
 /// canvas. All business logic lives in [KanshiController]; this widget is
@@ -36,6 +38,21 @@ class _HomePageState extends State<HomePage>
     );
     _isSidebarOpen = c.activeProfileIndex == null;
     _iconController.value = _isSidebarOpen ? 1.0 : 0.0;
+    c.onHotplugToast = (msg) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Row(
+            children: [
+              const Icon(Icons.cable, color: Colors.white),
+              const SizedBox(width: 8),
+              Text(msg),
+            ],
+          ),
+        ),
+      );
+    };
   }
 
   @override
@@ -228,12 +245,18 @@ class _HomePageState extends State<HomePage>
               title: const Text('Kanshi GUI'),
               actions: [
                 IconButton(
+                  icon: const Icon(Icons.lightbulb_outline),
+                  tooltip: 'Identify displays',
+                  onPressed: c.identifyDisplays,
+                ),
+                IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Reload & restart kanshi',
                   onPressed: () async => _toast(await c.reloadAndApply()),
                 ),
               ],
             ),
+            bottomNavigationBar: SafetyNetBanner(controller: c),
             body: Stack(
               children: [
                 AnimatedPositioned(
@@ -252,41 +275,66 @@ class _HomePageState extends State<HomePage>
                           Size(constraints.maxWidth, constraints.maxHeight),
                         );
                         return Stack(
-                          children: layout.displayMonitors.map((tile) {
-                            final original = c.activeMonitors
-                                .firstWhere((m) => m.id == tile.id);
-                            return MonitorTile(
-                              key: ValueKey(tile.id),
-                              data: tile,
-                              exists: c.monitorIsConnected(tile),
-                              snapThreshold: c.snapThreshold,
-                              containerSize: Size(constraints.maxWidth,
-                                  constraints.maxHeight),
-                              scaleFactor: layout.scaleFactor,
-                              offsetX: layout.offsetX,
-                              offsetY: layout.offsetY,
-                              originX: 0,
-                              originY: 0,
-                              originalWidth: original.width,
-                              originalHeight: original.height,
-                              onDragStart: () => _onDragStart(original),
-                              onUpdate: (updated) =>
-                                  _onTileUpdate(updated, layout),
-                              onDragEnd: () => _onDragEnd(tile),
-                              onScale: (s) => c.scaleMonitor(tile.id, s),
-                              onModeChange: (m) async =>
-                                  _toast(await c.applyMode(tile.id, m)),
-                              onToggleEnabled: (enabled) async {
-                                final r = await c.toggleEnabled(
-                                    tile.id, enabled);
-                                _toast(r);
-                                if (enabled) _maybeWarnBandwidth();
-                              },
-                              onCustomMode: () => _promptCustomMode(tile.id),
-                              onCustomModeRevert: () =>
-                                  _revertCustomMode(tile.id),
-                            );
-                          }).toList(),
+                          children: [
+                            // Snap guide lines underneath the tiles.
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  painter: SnapLinesPainter(
+                                    lines: c.activeSnapLines,
+                                    layout: layout,
+                                    referenceMonitors: c.activeMonitors,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            ...layout.displayMonitors.map((tile) {
+                              final original = c.activeMonitors
+                                  .firstWhere((m) => m.id == tile.id);
+                              return MonitorTile(
+                                key: ValueKey(tile.id),
+                                data: tile,
+                                exists: c.monitorIsConnected(tile),
+                                snapThreshold: c.snapThreshold,
+                                containerSize: Size(constraints.maxWidth,
+                                    constraints.maxHeight),
+                                scaleFactor: layout.scaleFactor,
+                                offsetX: layout.offsetX,
+                                offsetY: layout.offsetY,
+                                originX: 0,
+                                originY: 0,
+                                originalWidth: original.width,
+                                originalHeight: original.height,
+                                onDragStart: () => _onDragStart(original),
+                                onUpdate: (updated) =>
+                                    _onTileUpdate(updated, layout),
+                                onDragEnd: () => _onDragEnd(tile),
+                                onScale: (s) =>
+                                    c.scaleMonitor(tile.id, s),
+                                onScaleCommit: (s) async {
+                                  c.scaleMonitor(tile.id, s,
+                                      committing: true);
+                                  final m = c.activeMonitors.firstWhere(
+                                      (x) => x.id == tile.id,
+                                      orElse: () => tile);
+                                  _toast(await c.pushLiveApply(m));
+                                },
+                                onModeChange: (m) async =>
+                                    _toast(await c.applyMode(tile.id, m)),
+                                onToggleEnabled: (enabled) async {
+                                  final r = await c.toggleEnabled(
+                                      tile.id, enabled);
+                                  _toast(r);
+                                  if (enabled) _maybeWarnBandwidth();
+                                },
+                                onCustomMode: () =>
+                                    _promptCustomMode(tile.id),
+                                onCustomModeRevert: () =>
+                                    _revertCustomMode(tile.id),
+                                identifyNumber: c.identifyNumbers[tile.id],
+                              );
+                            }),
+                          ],
                         );
                       },
                     ),
@@ -337,7 +385,7 @@ class _HomePageState extends State<HomePage>
     final newAbsY = minY + (updated.y - layout.offsetY) / layout.scaleFactor;
     final newOrientation = newRot % 180 == 0 ? 'landscape' : 'portrait';
 
-    c.updateMonitor(MonitorTileData(
+    final updatedAbs = MonitorTileData(
       id: old.id,
       manufacturer: old.manufacturer,
       x: newAbsX,
@@ -353,14 +401,19 @@ class _HomePageState extends State<HomePage>
       orientation: newOrientation,
       modes: old.modes,
       enabled: old.enabled,
-    ));
+    );
+    c.updateMonitor(updatedAbs);
+    // Drive snap guides while the drag is in progress.
+    c.previewSnap(updatedAbs);
   }
 
-  void _onDragEnd(MonitorTileData tile) {
+  void _onDragEnd(MonitorTileData tile) async {
     final rollback = _dragRollback.remove(tile.id);
     final mons = c.activeMonitors;
     final idx = mons.indexWhere((m) => m.id == tile.id);
     if (idx == -1) return;
     c.snapAndCommit(mons[idx], rollback);
+    final committed = c.activeMonitors.firstWhere((m) => m.id == tile.id);
+    _toast(await c.pushLiveApply(committed));
   }
 }

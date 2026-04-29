@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -91,4 +92,16 @@ class FakeMonitorService implements MonitorService {
     calls.add('restart');
     return restartResult;
   }
+
+  final StreamController<List<MonitorTileData>> _watchController =
+      StreamController<List<MonitorTileData>>.broadcast();
+
+  /// Tests push a new outputs list here to simulate hot-plug.
+  void emitOutputs(List<MonitorTileData> next) {
+    outputs = next;
+    _watchController.add(next);
+  }
+
+  @override
+  Stream<List<MonitorTileData>> watchOutputs() => _watchController.stream;
 }

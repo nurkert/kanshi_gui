@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
+import 'package:kanshi_gui/widgets/identify_overlay.dart';
 import 'package:collection/collection.dart';
 
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
@@ -22,11 +23,17 @@ class MonitorTile extends StatefulWidget {
   final Function(MonitorTileData) onUpdate; // beim Drag oder Rotation
   final VoidCallback onDragEnd;
   final Function()? onDragStart;
+  /// Live scale changes during a resize drag. May fire many times — UI
+  /// updates only, no compositor calls.
   final ValueChanged<double>? onScale;
+  /// Final commit on resize-handle release. The controller raster the value
+  /// onto a snap entry here.
+  final ValueChanged<double>? onScaleCommit;
   final ValueChanged<MonitorMode>? onModeChange;
   final ValueChanged<bool>? onToggleEnabled;
   final VoidCallback? onCustomMode;
   final VoidCallback? onCustomModeRevert;
+  final int? identifyNumber;
 
   const MonitorTile({
     super.key,
@@ -45,10 +52,12 @@ class MonitorTile extends StatefulWidget {
     required this.onDragEnd,
     this.onDragStart,
     this.onScale,
+    this.onScaleCommit,
     this.onModeChange,
     this.onToggleEnabled,
     this.onCustomMode,
     this.onCustomModeRevert,
+    this.identifyNumber,
   });
 
   @override
@@ -188,21 +197,22 @@ class _MonitorTileState extends State<MonitorTile> {
                           if (tileWidth < 20) tileWidth = 20;
                           if (tileHeight < 20) tileHeight = 20;
                         });
-                        var newScale = widget.originalWidth /
-                            ((tileWidth) / widget.scaleFactor);
-                        for (int n = 1; n <= 8; n++) {
-                          if ((newScale - n).abs() < 0.05) {
-                            newScale = n.toDouble();
-                            tileWidth = widget.originalWidth /
-                                newScale * widget.scaleFactor;
-                            tileHeight = widget.originalHeight /
-                                newScale * widget.scaleFactor;
-                            break;
-                          }
-                        }
-                        newScale =
-                            double.parse(newScale.toStringAsFixed(2));
+                        // Live update only — no snapping during the drag so
+                        // the user never feels glued to integer scales.
+                        final newScale = double.parse((widget.originalWidth /
+                                ((tileWidth) / widget.scaleFactor))
+                            .toStringAsFixed(2));
                         widget.onScale?.call(newScale);
+                      }
+                    : null,
+                onPanEnd: isEnabled
+                    ? (_) {
+                        // Final commit — controller decides whether to
+                        // raster onto a snap value.
+                        final finalScale = double.parse((widget.originalWidth /
+                                ((tileWidth) / widget.scaleFactor))
+                            .toStringAsFixed(2));
+                        widget.onScaleCommit?.call(finalScale);
                       }
                     : null,
                 child: Container(
@@ -273,6 +283,10 @@ class _MonitorTileState extends State<MonitorTile> {
                     ),
                 ],
               ),
+            ),
+          if (widget.identifyNumber != null)
+            Positioned.fill(
+              child: IdentifyOverlay(number: widget.identifyNumber!),
             ),
         ],
       ),
