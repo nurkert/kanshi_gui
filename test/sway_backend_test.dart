@@ -117,6 +117,33 @@ void main() {
       expect(fake.calls.last, isNot(contains('1920,0')));
     });
 
+    test('apply() guards negative coordinates with -- separator', () async {
+      const json = '''
+[{"name":"DP-1","make":"X","model":"Y","serial":"Z","active":true,
+  "scale":1.0,"transform":"normal","rect":{"x":0,"y":0,"width":2560,"height":1440},
+  "current_mode":{"width":2560,"height":1440,"refresh":60000},
+  "modes":[{"width":2560,"height":1440,"refresh":60000}]}]
+''';
+      fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_outputs': ProcessResult(0, 0, json, ''),
+      });
+      backend = SwayBackend(runner: fake);
+      final outs = await backend.getOutputs();
+      // Stack the monitor above origin → Y=-1440. Without `--`, swaymsg's
+      // getopt parses "-1440" as the option flags -1/-4/-4/-0 and aborts
+      // with "invalid option -- '4'".
+      final m = outs.first.copyWith(x: 0, y: -1440);
+      await backend.apply(m);
+      final args = fake.calls.last;
+      final dashDashIdx = args.indexOf('--');
+      final outputIdx = args.indexOf('output');
+      expect(dashDashIdx, greaterThanOrEqualTo(0),
+          reason: '`--` must precede the message so getopt stops.');
+      expect(dashDashIdx, lessThan(outputIdx),
+          reason: '`--` must come before the message args.');
+      expect(args, contains('-1440'));
+    });
+
     test('setMode() formats refresh correctly', () async {
       await backend.setMode(
           'DP-1', MonitorMode(width: 2560, height: 1440, refresh: 59.95));

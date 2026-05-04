@@ -157,7 +157,10 @@ class SwayBackend implements MonitorService {
     final mode = _modeMatchingTarget(target) ?? _bestMode(target);
     // NB: swaymsg's `output … position` IPC takes two separate arguments
     // (X Y), unlike the kanshi config syntax which is comma-joined ("X,Y").
+    // Leading `--` stops swaymsg's getopt from parsing negative coordinates
+    // (e.g. a monitor stacked above origin yields position "-1440") as flags.
     return _runner.run(bin, [
+      '--',
       'output',
       target.id,
       'scale',
