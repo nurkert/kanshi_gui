@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2 — 2026-05-04
+
+### Fixed
+
+- Live apply no longer fails with `swaymsg: invalid option -- '4'` when a
+  monitor is stacked above origin (negative Y position). `swaymsg` runs its
+  argv through `getopt` before joining the message, so `"-1440"` was parsed
+  as the option flags `-1`/`-4`/`-4`/`-0`. The apply call now prepends `--`
+  to stop option scanning before the message starts.
+
 ## 1.1.1 — 2026-04-29
 
 ### Fixed
