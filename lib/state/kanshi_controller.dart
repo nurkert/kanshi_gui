@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -50,6 +51,7 @@ class KanshiController extends ChangeNotifier {
   Timer? _identifyTimer;
   final Map<String, _DragSession> _dragSessions = {};
   static const _alignmentEscapeLimit = 2;
+  Rect? _pinnedLayoutBounds;
 
   /// Scale values the slider rasters onto on release. Chosen for real-world
   /// HiDPI scenarios; intentionally excludes integer scales > 3 because
@@ -81,6 +83,14 @@ class KanshiController extends ChangeNotifier {
   bool get isApplyingBatch => _isApplyingBatch;
   bool get supportsLiveApply => monitors.isLive;
   List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
+
+  /// Bounding box (in absolute monitor space) the canvas should pin its
+  /// projection to. Non-null only while a drag session is active. Without
+  /// this, dragging a monitor into negative coordinates (e.g. above origin)
+  /// would shift `minX`/`minY` every frame, causing the entire layout —
+  /// including non-dragged tiles — to reflow under the cursor and produce
+  /// "duplicate" / overlapping ghost imprints.
+  Rect? get pinnedLayoutBounds => _pinnedLayoutBounds;
   Map<String, int> get identifyNumbers =>
       Map.unmodifiable(_identifyNumbers);
   bool get isIdentifying => _identifyNumbers.isNotEmpty;
@@ -364,15 +374,34 @@ class KanshiController extends ChangeNotifier {
 
   /// UI calls this when a fresh drag starts (mouse down on a tile). Resets
   /// the per-monitor alignment-escape memory so the user gets the full
-  /// alignment hints again.
+  /// alignment hints again, and snapshots the canvas bounding box so the
+  /// projection stays put while the user drags. Without the snapshot, the
+  /// dragged tile pushing the bounding box outward (e.g. negative Y when
+  /// stacked above origin) would re-scale and re-offset every other tile
+  /// every frame.
   void beginDragSession(String id) {
     _dragSessions[id] = _DragSession();
+    if (_activeProfileIndex != null) {
+      final mons = _profiles[_activeProfileIndex!]
+          .monitors
+          .where((m) => m.enabled)
+          .toList();
+      if (mons.isNotEmpty) {
+        _pinnedLayoutBounds = LayoutMath.boundingBox(mons);
+        notifyListeners();
+      }
+    }
   }
 
   /// UI calls this when the drag ends (mouse up). Clears the session so the
-  /// next grab is fresh.
+  /// next grab is fresh and releases the layout pin so the canvas reflows
+  /// to the post-drag state.
   void endDragSession(String id) {
     _dragSessions.remove(id);
+    if (_pinnedLayoutBounds != null) {
+      _pinnedLayoutBounds = null;
+      notifyListeners();
+    }
   }
 
   /// Computes the snap result for [dragged] without mutating any state and

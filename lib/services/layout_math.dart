@@ -10,12 +10,20 @@ class DisplayLayout {
   final double scaleFactor;
   final double offsetX;
   final double offsetY;
+  /// Absolute monitor-space coordinates that map to (offsetX, offsetY) in
+  /// the viewport. Callers that need to project additional points (snap
+  /// guide lines, drag-end coordinate translation) must use these so they
+  /// stay aligned with [displayMonitors].
+  final double originX;
+  final double originY;
   final List<MonitorTileData> displayMonitors;
 
   const DisplayLayout({
     required this.scaleFactor,
     required this.offsetX,
     required this.offsetY,
+    required this.originX,
+    required this.originY,
     required this.displayMonitors,
   });
 
@@ -23,6 +31,8 @@ class DisplayLayout {
     scaleFactor: 1.0,
     offsetX: 0.0,
     offsetY: 0.0,
+    originX: 0.0,
+    originY: 0.0,
     displayMonitors: <MonitorTileData>[],
   );
 }
@@ -290,16 +300,36 @@ class LayoutMath {
   /// Projects the absolute monitor layout into [viewport] coordinates so it
   /// fits within 80 % of the viewport (centered). Returns a [DisplayLayout]
   /// with the chosen scale/offset and the projected monitor rectangles.
+  ///
+  /// When [pinnedBounds] is supplied, it overrides the auto-computed
+  /// bounding box (left/top/right/bottom in absolute monitor space). This
+  /// lets the UI freeze the canvas while a drag is in progress so the
+  /// non-dragged tiles do not slide around as the dragged tile pushes the
+  /// bounding box outward — without this, dragging a monitor above origin
+  /// (negative Y) reflows the whole layout each frame and the tiles appear
+  /// to overlap and ghost.
   static DisplayLayout computeDisplay(
     List<MonitorTileData> mons,
-    Size viewport,
-  ) {
+    Size viewport, {
+    Rect? pinnedBounds,
+  }) {
     if (mons.isEmpty) return DisplayLayout.empty;
 
-    final minX = mons.map((m) => m.x).reduce(min);
-    final minY = mons.map((m) => m.y).reduce(min);
-    final maxX = mons.map((m) => m.x + m.width / m.scale).reduce(max);
-    final maxY = mons.map((m) => m.y + m.height / m.scale).reduce(max);
+    final double minX;
+    final double minY;
+    final double maxX;
+    final double maxY;
+    if (pinnedBounds != null) {
+      minX = pinnedBounds.left;
+      minY = pinnedBounds.top;
+      maxX = pinnedBounds.right;
+      maxY = pinnedBounds.bottom;
+    } else {
+      minX = mons.map((m) => m.x).reduce(min);
+      minY = mons.map((m) => m.y).reduce(min);
+      maxX = mons.map((m) => m.x + m.width / m.scale).reduce(max);
+      maxY = mons.map((m) => m.y + m.height / m.scale).reduce(max);
+    }
 
     final boundingWidth = maxX - minX;
     final boundingHeight = maxY - minY;
@@ -329,8 +359,24 @@ class LayoutMath {
       scaleFactor: scaleFactor,
       offsetX: offsetX,
       offsetY: offsetY,
+      originX: minX,
+      originY: minY,
       displayMonitors: displayMonitors,
     );
+  }
+
+  /// Computes the bounding box of [mons] in absolute monitor space — the
+  /// same one [computeDisplay] would derive when no pin is supplied. Used
+  /// by callers (e.g. the controller) that want to snapshot the bounds at
+  /// drag start and feed them back as [computeDisplay]'s [pinnedBounds].
+  static Rect boundingBox(Iterable<MonitorTileData> mons) {
+    final list = mons.toList(growable: false);
+    if (list.isEmpty) return Rect.zero;
+    final minX = list.map((m) => m.x).reduce(min);
+    final minY = list.map((m) => m.y).reduce(min);
+    final maxX = list.map((m) => m.x + m.width / m.scale).reduce(max);
+    final maxY = list.map((m) => m.y + m.height / m.scale).reduce(max);
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   /// Sum of width × height × refresh across all enabled monitors. Used for

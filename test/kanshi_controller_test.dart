@@ -165,6 +165,39 @@ void main() {
     expect(fake.calls.length, equals(before));
   });
 
+  test('beginDragSession pins layout bounds, endDragSession releases them',
+      () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [
+      _mon(id: 'A', x: 0, y: 0),
+      _mon(id: 'B', x: 1920, y: 0),
+    ]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+
+    expect(c.pinnedLayoutBounds, isNull,
+        reason: 'No pin outside of an active drag.');
+
+    c.beginDragSession('B');
+    final pinned = c.pinnedLayoutBounds;
+    expect(pinned, isNotNull);
+    expect(pinned!.left, equals(0));
+    expect(pinned.top, equals(0));
+    expect(pinned.right, equals(3840));
+    expect(pinned.bottom, equals(1080));
+
+    // Even after the dragged tile reports a far-negative position the pin
+    // does not change — that's the whole point: the canvas stays put while
+    // the drag is in progress so non-dragged tiles do not slide.
+    c.updateMonitor(c.activeMonitors
+        .firstWhere((m) => m.id == 'B')
+        .copyWith(x: -5000, y: -5000));
+    expect(c.pinnedLayoutBounds, equals(pinned));
+
+    c.endDragSession('B');
+    expect(c.pinnedLayoutBounds, isNull);
+  });
+
   test('controller propagates writeOptions from backend to ConfigService', () {
     final fake = FakeMonitorService(
         writeOptions: KanshiWriteOptions.neutral);

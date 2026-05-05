@@ -160,6 +160,68 @@ void main() {
       final l = LayoutMath.computeDisplay([a], const Size(4000, 4000));
       expect(l.scaleFactor, equals(1.0));
     });
+
+    test('exposes the origin used for projection', () {
+      // The carry-on origin lets snap-line painters and drag-end coordinate
+      // translation project against the same point the tiles were projected
+      // from — without recomputing min(monitors), which would be wrong while
+      // bounds are pinned.
+      final a = _mon(id: 'A', x: -200, y: -50);
+      final b = _mon(id: 'B', x: 1920, y: 0);
+      final l = LayoutMath.computeDisplay([a, b], const Size(800, 600));
+      expect(l.originX, equals(-200));
+      expect(l.originY, equals(-50));
+    });
+
+    test('pinnedBounds overrides the auto bounding box', () {
+      final a = _mon(id: 'A', x: 0, y: 0); // 1920×1080
+      final b = _mon(id: 'B', x: 1920, y: 0);
+      final pinned = Rect.fromLTRB(0, 0, 3840, 1080);
+      // Move B off into negative space — without the pin this would shift
+      // origin and reflow the layout. With the pin, origin stays at (0,0)
+      // and the unmoved tile A keeps the exact same viewport projection.
+      final moved = b.copyWith(x: -500, y: -500);
+      final unpinned =
+          LayoutMath.computeDisplay([a, b], const Size(800, 600));
+      final pinnedLayout = LayoutMath.computeDisplay(
+        [a, moved],
+        const Size(800, 600),
+        pinnedBounds: pinned,
+      );
+      expect(pinnedLayout.originX, equals(0));
+      expect(pinnedLayout.originY, equals(0));
+      expect(pinnedLayout.scaleFactor, equals(unpinned.scaleFactor));
+      expect(pinnedLayout.offsetX, equals(unpinned.offsetX));
+      expect(pinnedLayout.offsetY, equals(unpinned.offsetY));
+      // A — the tile that didn't move — must project to the same viewport
+      // position. This is the core property: the canvas does not reflow
+      // under the dragged tile.
+      final aPinned =
+          pinnedLayout.displayMonitors.firstWhere((m) => m.id == 'A');
+      final aUnpinned =
+          unpinned.displayMonitors.firstWhere((m) => m.id == 'A');
+      expect(aPinned.x, equals(aUnpinned.x));
+      expect(aPinned.y, equals(aUnpinned.y));
+    });
+  });
+
+  group('LayoutMath.boundingBox', () {
+    test('returns Rect.zero for empty input', () {
+      expect(LayoutMath.boundingBox(const []), equals(Rect.zero));
+    });
+
+    test('matches the auto bounding box computeDisplay derives', () {
+      final a = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 1920, y: 1080);
+      final box = LayoutMath.boundingBox([a, b]);
+      expect(box, equals(const Rect.fromLTRB(0, 0, 3840, 2160)));
+    });
+
+    test('honours scale (logical edges) not raw pixel edges', () {
+      final a = _mon(id: 'A', x: 0, y: 0, w: 3840, h: 2160, scale: 2.0);
+      final box = LayoutMath.boundingBox([a]);
+      expect(box, equals(const Rect.fromLTRB(0, 0, 1920, 1080)));
+    });
   });
 
   group('LayoutMath.totalPixelRate', () {

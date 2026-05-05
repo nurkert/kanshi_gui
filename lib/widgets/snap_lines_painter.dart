@@ -1,41 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
-import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'dart:math' as math;
 
 /// Paints Figma-style snap guide lines on top of the layout canvas while a
 /// drag is in progress. The lines arrive in *absolute* monitor space
 /// (matching the coordinate system the [KanshiController] uses internally)
-/// and are projected into viewport coordinates via the same min/scale
-/// mapping that [LayoutMath.computeDisplay] applied to the tiles.
+/// and are projected into viewport coordinates via the same origin/scale
+/// the layout itself used (carried on [DisplayLayout]).
 class SnapLinesPainter extends CustomPainter {
   final List<SnapLine> lines;
   final DisplayLayout layout;
-  final List<MonitorTileData> referenceMonitors;
 
   const SnapLinesPainter({
     required this.lines,
     required this.layout,
-    required this.referenceMonitors,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (lines.isEmpty || referenceMonitors.isEmpty) return;
-    final minX =
-        referenceMonitors.map((m) => m.x).reduce((a, b) => a < b ? a : b);
-    final minY =
-        referenceMonitors.map((m) => m.y).reduce((a, b) => a < b ? a : b);
+    if (lines.isEmpty) return;
     final paint = Paint()
       ..color = const Color(0xFF4FC3F7).withValues(alpha: 0.85)
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
 
     for (final line in lines) {
-      final x1 = (line.x1 - minX) * layout.scaleFactor + layout.offsetX;
-      final y1 = (line.y1 - minY) * layout.scaleFactor + layout.offsetY;
-      final x2 = (line.x2 - minX) * layout.scaleFactor + layout.offsetX;
-      final y2 = (line.y2 - minY) * layout.scaleFactor + layout.offsetY;
+      final x1 =
+          (line.x1 - layout.originX) * layout.scaleFactor + layout.offsetX;
+      final y1 =
+          (line.y1 - layout.originY) * layout.scaleFactor + layout.offsetY;
+      final x2 =
+          (line.x2 - layout.originX) * layout.scaleFactor + layout.offsetX;
+      final y2 =
+          (line.y2 - layout.originY) * layout.scaleFactor + layout.offsetY;
       // Extend each guide line by 12 px on either side so it visibly
       // overshoots the snapped edges (looks like a real alignment guide).
       const overhang = 12.0;
@@ -57,7 +54,5 @@ class SnapLinesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SnapLinesPainter old) =>
-      old.lines != lines ||
-      old.layout != layout ||
-      old.referenceMonitors != referenceMonitors;
+      old.lines != lines || old.layout != layout;
 }
