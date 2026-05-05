@@ -50,6 +50,16 @@ class KanshiController extends ChangeNotifier {
   List<SnapLine> _activeSnapLines = const [];
   StreamSubscription<List<MonitorTileData>>? _outputSubscription;
   void Function(String message)? onHotplugToast;
+  /// Fired after a hotplug event when the connected output set matches a
+  /// non-active profile better than the currently active one (confidence
+  /// > 0.5). The HomePage typically surfaces this as a SnackBar with a
+  /// "Switch" action; the controller never auto-switches on its own.
+  void Function(ProfileSuggestion suggestion)? onProfileSuggestion;
+  /// Wallclock of the last manual profile switch. Auto-suggestions are
+  /// suppressed for [_suggestionCooldown] after this so a user who just
+  /// picked profile A on purpose doesn't get nagged into switching back.
+  DateTime? _lastManualProfileSwitchAt;
+  static const Duration _suggestionCooldown = Duration(seconds: 30);
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
   final List<ProcessStream> _identifyBanners = [];
@@ -215,6 +225,7 @@ class KanshiController extends ChangeNotifier {
       // re-attached mirror partner needs a respawn.
       // ignore: discarded_futures
       _reconcileMirrors();
+      _maybeFireProfileSuggestion();
       notifyListeners();
       for (final id in added) {
         onHotplugToast?.call('$id connected');
@@ -359,6 +370,7 @@ class KanshiController extends ChangeNotifier {
 
   void setActiveProfile(int index) {
     _activeProfileIndex = index;
+    _lastManualProfileSwitchAt = DateTime.now();
     // A profile switch invalidates any in-flight drag — the layout it
     // started in is no longer the layout we'd commit into. Cancel via
     // the epoch token; the tile will snap back to its pre-drag origin.
@@ -1275,6 +1287,84 @@ class KanshiController extends ChangeNotifier {
     return idOrManufacturer;
   }
 
+  /// Score every non-active profile against the currently connected
+  /// outputs and return the best fit if it scores above
+  /// [confidenceFloor]. Confidence is `matchedScore / max(profileEnabled,
+  /// currentEnabled)`, where each match contributes 1.0 for an exact id
+  /// hit and 0.7 for a manufacturer-only fallback. Returns `null` when
+  /// no profile clears the floor or the active profile is already a
+  /// perfect fit.
+  ProfileSuggestion? findBestProfileSuggestion({
+    double confidenceFloor = 0.5,
+  }) {
+    final currentEnabled =
+        _currentMonitors.where((m) => m.enabled).toList();
+    if (currentEnabled.isEmpty || _profiles.isEmpty) return null;
+    ProfileSuggestion? best;
+    for (var i = 0; i < _profiles.length; i++) {
+      if (i == _activeProfileIndex) continue;
+      final profileEnabled =
+          _profiles[i].monitors.where((m) => m.enabled).toList();
+      if (profileEnabled.isEmpty) continue;
+      var score = 0.0;
+      var matched = 0;
+      final claimed = <int>{};
+      for (final pm in profileEnabled) {
+        var bestK = -1;
+        var bestS = 0.0;
+        for (var k = 0; k < currentEnabled.length; k++) {
+          if (claimed.contains(k)) continue;
+          final cm = currentEnabled[k];
+          double s;
+          if (_matchesOutput(pm.id, cm.id)) {
+            s = 1.0;
+          } else if (_matchesOutput(pm.manufacturer, cm.manufacturer)) {
+            s = 0.7;
+          } else {
+            continue;
+          }
+          if (s > bestS) {
+            bestS = s;
+            bestK = k;
+          }
+        }
+        if (bestK != -1) {
+          claimed.add(bestK);
+          score += bestS;
+          matched++;
+        }
+      }
+      final denom = profileEnabled.length > currentEnabled.length
+          ? profileEnabled.length
+          : currentEnabled.length;
+      final conf = score / denom;
+      if (best == null || conf > best.confidence) {
+        best = ProfileSuggestion(
+          profileIndex: i,
+          profileName: _profiles[i].name,
+          confidence: conf,
+          matchedOutputs: matched,
+          totalOutputs: denom,
+        );
+      }
+    }
+    if (best == null || best.confidence < confidenceFloor) return null;
+    return best;
+  }
+
+  void _maybeFireProfileSuggestion() {
+    final cb = onProfileSuggestion;
+    if (cb == null) return;
+    final since = _lastManualProfileSwitchAt;
+    if (since != null &&
+        DateTime.now().difference(since) < _suggestionCooldown) {
+      return;
+    }
+    final suggestion = findBestProfileSuggestion();
+    if (suggestion == null) return;
+    cb(suggestion);
+  }
+
   int? _findProfileMatchingCurrent() {
     final currentEnabled =
         _currentMonitors.where((m) => m.enabled).toList();
@@ -1313,6 +1403,32 @@ class KanshiController extends ChangeNotifier {
 
   bool wouldExceedBandwidth(List<MonitorTileData> mons) =>
       LayoutMath.totalPixelRate(mons) > 700000000;
+}
+
+/// One profile-match candidate surfaced to the UI when the connected
+/// output set fits a non-active profile better than the current one.
+/// The controller never auto-switches; the UI typically renders this
+/// as a SnackBar with a "Switch" action.
+class ProfileSuggestion {
+  final int profileIndex;
+  final String profileName;
+  /// 0..1 confidence — `matchedScore / max(profileEnabled, currentEnabled)`,
+  /// where each match contributes 1.0 (exact id) or 0.7 (manufacturer
+  /// fallback).
+  final double confidence;
+  /// How many of the profile's enabled outputs found a match in the
+  /// current connected set.
+  final int matchedOutputs;
+  /// `max(profileEnabled, currentEnabled)` — denominator of [confidence].
+  /// Used by the UI to render `"3 of 4 outputs"` style strings.
+  final int totalOutputs;
+  const ProfileSuggestion({
+    required this.profileIndex,
+    required this.profileName,
+    required this.confidence,
+    required this.matchedOutputs,
+    required this.totalOutputs,
+  });
 }
 
 /// Per-drag bookkeeping for the alignment-escape heuristic. Keeps track of
