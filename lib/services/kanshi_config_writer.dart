@@ -10,15 +10,23 @@ import 'package:kanshi_gui/models/profiles.dart';
 class KanshiWriteOptions {
   final bool injectSwayWorkspaceExec;
   final bool writeCurrentProfileMarker;
+  /// Emit `exec wl-mirror …` lines for outputs whose `mirrorOf` is set.
+  /// Sway-only — wl-mirror runs on any wlroots compositor in principle
+  /// but the rest of the GUI's mirror UX (capability flag, toggle menu)
+  /// is gated on the Sway backend, so the writer follows suit. Off in
+  /// neutral mode so wlr-randr-style profiles stay portable.
+  final bool injectMirrorExec;
 
   const KanshiWriteOptions({
     this.injectSwayWorkspaceExec = false,
     this.writeCurrentProfileMarker = false,
+    this.injectMirrorExec = false,
   });
 
   static const swayDefaults = KanshiWriteOptions(
     injectSwayWorkspaceExec: true,
     writeCurrentProfileMarker: true,
+    injectMirrorExec: true,
   );
 
   static const neutral = KanshiWriteOptions();
@@ -86,6 +94,21 @@ class KanshiConfigWriter {
         "mode ${baseW.toInt()}x${baseH.toInt()}@${formatHz(refresh)}Hz "
         "transform $transform position $posX,$posY",
       );
+    }
+
+    if (options.injectMirrorExec) {
+      // For each enabled output that mirrors another, spawn wl-mirror so
+      // the mirror is restored on profile activation when kanshi_gui is
+      // not the active orchestrator. The single-quoted ids handle
+      // whitespace-bearing output names (e.g. EDID-derived "Some Co X 0").
+      // The trailing `&` keeps kanshi from blocking on the long-running
+      // wl-mirror window.
+      for (final m in mons.where((m) => m.enabled && m.mirrorOf != null)) {
+        buffer.writeln(
+          "    exec wl-mirror '${m.mirrorOf}' "
+          "--fullscreen-output '${m.id}' --fullscreen &",
+        );
+      }
     }
 
     if (options.injectSwayWorkspaceExec) {

@@ -58,14 +58,46 @@ class KanshiConfigParser {
         j++;
       }
 
+      final blockText = block.toString();
       profiles.add(Profile(
         name: header,
-        monitors: _parseOutputs(block.toString()),
+        monitors: _applyMirrorExecs(_parseOutputs(blockText), blockText),
       ));
       i = j + 1;
     }
 
     return profiles;
+  }
+
+  /// Second-pass enrichment: extracts `exec wl-mirror SRC --fullscreen-
+  /// output DST --fullscreen` directives from the profile block and
+  /// stamps the matching destination output with `mirrorOf: SRC`. Both
+  /// quoted (`'DP-1'`) and bare (`DP-1`) ids are supported so configs
+  /// hand-written outside the GUI still parse.
+  static List<MonitorTileData> _applyMirrorExecs(
+    List<MonitorTileData> outputs,
+    String block,
+  ) {
+    final mirrorRE = RegExp(
+      r"exec\s+wl-mirror\s+(?:'([^']+)'|(\S+))"
+      r"\s+(?:.*?)--fullscreen-output\s+(?:'([^']+)'|(\S+))",
+      caseSensitive: false,
+    );
+    if (outputs.isEmpty) return outputs;
+    final byId = {for (final o in outputs) o.id: o};
+    var dirty = false;
+    for (final m in mirrorRE.allMatches(block)) {
+      final src = (m.group(1) ?? m.group(2) ?? '').trim();
+      final dst = (m.group(3) ?? m.group(4) ?? '').trim();
+      if (src.isEmpty || dst.isEmpty) continue;
+      final tile = byId[dst];
+      if (tile == null) continue;
+      byId[dst] = tile.copyWith(mirrorOf: src);
+      dirty = true;
+    }
+    if (!dirty) return outputs;
+    // Preserve original order while substituting updated tiles.
+    return [for (final o in outputs) byId[o.id] ?? o];
   }
 
   /// Matches `profile foo {`, `profile 'foo bar' {`, `profile foo` (brace on
