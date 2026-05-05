@@ -16,6 +16,11 @@ class MonitorTileData {
   final String orientation;
   final List<MonitorMode> modes;
   final bool enabled;
+  /// When non-null, this monitor mirrors the output named here (Sway's
+  /// `output X mirror Y` IPC). The compositor inherits mode / position /
+  /// scale / transform from the target, so this monitor's own
+  /// position/mode fields are advisory only while the mirror is active.
+  final String? mirrorOf;
 
   MonitorTileData({
     required this.id,
@@ -31,6 +36,7 @@ class MonitorTileData {
     required this.orientation,
     this.modes = const [],
     this.enabled = true,
+    this.mirrorOf,
   });
 
   MonitorTileData copyWith({
@@ -47,6 +53,7 @@ class MonitorTileData {
     String? orientation,
     List<MonitorMode>? modes,
     bool? enabled,
+    Object? mirrorOf = _sentinel,
   }) {
     return MonitorTileData(
       id: id ?? this.id,
@@ -62,6 +69,14 @@ class MonitorTileData {
       orientation: orientation ?? this.orientation,
       modes: modes ?? this.modes,
       enabled: enabled ?? this.enabled,
+      // `mirrorOf` is nullable in the model, so `null` is a meaningful
+      // value (release the mirror). The sentinel lets copyWith distinguish
+      // "explicitly clear to null" from "leave unchanged".
+      mirrorOf: identical(mirrorOf, _sentinel)
+          ? this.mirrorOf
+          : mirrorOf as String?,
     );
   }
 }
+
+const Object _sentinel = Object();
