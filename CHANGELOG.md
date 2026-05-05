@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.1 — 2026-05-05
+
+### Added
+
+- **Undo / redo with `Ctrl+Z` and `Ctrl+Shift+Z`** (`Ctrl+Y` also
+  works as a redo alias). Every mutation that touches profile state
+  pushes a deep snapshot onto the undo stack before applying its
+  change: drag commits, scale commits, mode changes, custom modes,
+  enable/disable, mirror set/clear, workspace-rank changes,
+  rearrange-layout, profile create/rename/delete, and profile
+  switches. Drags are recorded against the **pre-drag rollback**
+  (not the last mid-drag frame) so undo always returns to where the
+  layout was when the drag started. The stack is capped at 30
+  entries; redo lives only until the next mutation, at which point
+  the forward path is invalidated. A drag cancelled by hotplug or
+  profile-switch leaves no undoable entry — the rollback is silent
+  by design.
+
 ## 1.4.0 — 2026-05-05
 
 ### Added
