@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.0 — 2026-05-05
+
+### Added
+
+- **Display mirroring** on the Sway backend. Open a tile's three-dot menu
+  → "Mirror onto…" → pick another enabled output to make this monitor
+  show the same content. The relationship is per-profile; switching
+  profiles tears down the mirrors of the previous profile and brings up
+  the new ones. "Stop mirroring" releases the bond again.
+
+  Sway 1.11 has no native `output mirror` IPC, so the engine is the
+  external `wl-mirror` tool — `apt install wl-mirror` is required for
+  this feature. On other backends (wlr-randr, noop) the menu entries
+  are hidden entirely; on Sway without wl-mirror installed, they are
+  also hidden until the binary is in `$PATH`.
+
+  Mirrored tiles render with a cyan border + "⇄ Mirror of <src>" badge
+  and are parked in their own lane beside the active cluster — so the
+  layout never visually overlaps an independent monitor with one that
+  inherits its content. Drag, resize and mode change are disabled on a
+  mirror tile (those properties are inherited from the source).
+
+  Mirror state survives kanshi-gui restart via an `exec wl-mirror …`
+  hook injected into the relevant Sway profile in the kanshi config.
+
+  Cycles (A→B + B→A) and chains (A→B then B→C) are rejected at the
+  controller; the runner auto-respawns wl-mirror up to 3 times in 30s
+  when its window is closed accidentally and surfaces a "give up"
+  state when the budget is exhausted.
+
 ## 1.1.5 — 2026-05-05
 
 ### Changed
