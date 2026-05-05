@@ -8,6 +8,7 @@ import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
+import 'fakes/fake_mirror_runner.dart';
 import 'fakes/fake_monitor_service.dart';
 
 MonitorTileData _mon({
@@ -273,6 +274,193 @@ void main() {
         reason: 'Identical-EDID monitors must keep their distinct ids.');
     expect(ids.length, equals(2),
         reason: 'No two profile entries may collapse onto the same output.');
+  });
+
+  group('mirror', () {
+    test('setMirror is rejected when backend does not support mirror',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      // FakeMonitorService default: supportsMirror = false.
+      final fake = FakeMonitorService(outputs: [
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+      ]);
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      final r = await c.setMirror('A', 'B');
+      expect(r.success, isFalse);
+      expect(mr.calls, isEmpty);
+    });
+
+    test('setMirror starts wl-mirror and updates the profile', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      final r = await c.setMirror('A', 'B');
+      expect(r.success, isTrue);
+      expect(mr.activeDestinations, equals({'A'}));
+      expect(mr.mirrorSourceFor('A'), equals('B'));
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf,
+          equals('B'));
+    });
+
+    test('setMirror(null) tears down the wl-mirror process', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      await c.setMirror('A', 'B');
+      mr.calls.clear();
+      final r = await c.setMirror('A', null);
+      expect(r.success, isTrue);
+      expect(mr.activeDestinations, isEmpty);
+      expect(mr.calls, contains('stop A'));
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf,
+          isNull);
+    });
+
+    test('setMirror rejects self-mirror', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [_mon(id: 'A', x: 0, y: 0)],
+      );
+      final c = KanshiController(
+          monitors: fake, config: cfg, mirrorRunner: FakeMirrorRunner());
+      await c.init();
+      final r = await c.setMirror('A', 'A');
+      expect(r.success, isFalse);
+    });
+
+    test('setMirror rejects mirror chains (A→B then B→C)', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+          _mon(id: 'C', x: 3840, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      // First: B→C (B mirrors C). Now B has mirrorOf=C.
+      var r = await c.setMirror('B', 'C');
+      expect(r.success, isTrue);
+      // Then attempt A→B — refused, because B is itself a mirror dst.
+      r = await c.setMirror('A', 'B');
+      expect(r.success, isFalse);
+      expect(mr.mirrorSourceFor('A'), isNull);
+    });
+
+    test('setMirror rejects circular A→B when B→A already exists',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      // Set up A mirrors B.
+      await c.setMirror('A', 'B');
+      // Now B→A would close the loop. Refused.
+      // (Refused via the mirror-chain rule: A is already a mirror dst,
+      // so it can't be a source.)
+      final r = await c.setMirror('B', 'A');
+      expect(r.success, isFalse);
+    });
+
+    test('switching to a profile with no mirrors stops the running ones',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      await c.setMirror('A', 'B');
+      // Add a second profile and switch to it.
+      c.createProfileFromCurrentSetup();
+      // The new profile copies activeMonitors but the dragged setMirror
+      // already updated the original profile, so the new profile starts
+      // mirror-free.
+      c.setActiveProfile(c.profiles.length - 1);
+      // Wait one microtask so the discarded-future _reconcileMirrors runs.
+      await Future<void>.delayed(Duration.zero);
+      expect(mr.activeDestinations, isEmpty,
+          reason: 'Profile switch must tear down the previous mirrors.');
+    });
+
+    test('hotplug of a missing source spawns once it reconnects', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [_mon(id: 'A', x: 0, y: 0)],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      // Profile has A and B with B→A mirror, but B isn't connected yet.
+      // Manually inject B into the profile to simulate that scenario.
+      // Use createProfileFromCurrentSetup then add B by editing.
+      // Easier: include B in fake outputs from the start, set mirror,
+      // then disconnect B and reconnect.
+      fake.outputs = [
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+      ];
+      await c.refreshConnectedMonitors();
+      c.createProfileFromCurrentSetup();
+      await c.setMirror('B', 'A');
+      expect(mr.activeDestinations, contains('B'));
+      // B unplugs.
+      fake.emitOutputs([_mon(id: 'A', x: 0, y: 0)]);
+      await Future<void>.delayed(Duration.zero);
+      expect(mr.activeDestinations, isNot(contains('B')),
+          reason: 'Mirror must stop when destination is unplugged.');
+      // B comes back.
+      fake.emitOutputs([
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+      expect(mr.activeDestinations, contains('B'),
+          reason: 'Mirror must auto-respawn on destination reconnect.');
+    });
   });
 
   test('controller propagates writeOptions from backend to ConfigService', () {
