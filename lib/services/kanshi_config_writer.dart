@@ -116,20 +116,36 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
-      final enabledMons = mons.where((m) => m.enabled).toList();
-      final tmpBase = enabledMons.length + 1;
+      // Workspaces follow physical position **right-to-left** in fixed
+      // blocks of three: the rightmost screen owns 1/2/3, the next one to
+      // its left owns 4/5/6, and so on up to nine workspaces / three
+      // screens. With two screens this means workspaces 4-6 still anchor
+      // on the second monitor, so muscle memory like "Mod+6" lands on
+      // the same physical screen regardless of how many displays are
+      // attached.
+      const workspacesPerMonitor = 3;
+      final enabledMons = mons.where((m) => m.enabled).toList()
+        ..sort((a, b) => b.x.compareTo(a.x));
+      final assignments = <(int ws, String id)>[
+        for (var i = 0; i < enabledMons.length; i++)
+          for (var k = 0; k < workspacesPerMonitor; k++)
+            (i * workspacesPerMonitor + k + 1, enabledMons[i].id),
+      ];
+      // Pre-anchor each output on a high temporary workspace so Sway
+      // doesn't move the real low-numbered workspace onto the wrong
+      // output during the second pass.
+      final tmpBase = assignments.length + 1;
       for (var i = 0; i < enabledMons.length; i++) {
-        final m = enabledMons[i];
+        final ws = tmpBase + i;
         buffer.writeln(
-          "    exec swaymsg \"workspace ${tmpBase + i} output '${m.id}'; "
-          "workspace ${tmpBase + i}\"",
+          "    exec swaymsg \"workspace $ws output '${enabledMons[i].id}'; "
+          "workspace $ws\"",
         );
       }
-      for (var i = 0; i < enabledMons.length; i++) {
-        final m = enabledMons[i];
+      for (final (ws, id) in assignments) {
         buffer.writeln(
-          "    exec swaymsg \"workspace ${i + 1} output '${m.id}'; "
-          "workspace ${i + 1}\"",
+          "    exec swaymsg \"workspace $ws output '$id'; "
+          "workspace $ws\"",
         );
       }
     }
