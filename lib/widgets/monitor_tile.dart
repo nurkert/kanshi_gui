@@ -44,6 +44,17 @@ class MonitorTile extends StatefulWidget {
   /// (enabled, not themselves mirrors, and not this tile). Used to populate
   /// the "Mirror onto …" submenu.
   final List<MonitorTileData> mirrorSources;
+  /// Output ids that mirror *this* tile. When non-empty the tile renders
+  /// with the cyan mirror accent and a "→ Mirrors to A, B" label, and the
+  /// three-dot menu gains a "Stop mirroring X" entry per destination so
+  /// the relationship can be released without reaching for the now-hidden
+  /// destination tile.
+  final List<String> mirroredBy;
+  /// Used by the "Stop mirroring X" menu items: the parent clears the
+  /// mirror by calling `onSetMirror?.call(null)` on the *destination*
+  /// tile, but here we are the source — so we need a callback that names
+  /// the destination explicitly.
+  final void Function(String destId)? onStopMirroredBy;
 
   const MonitorTile({
     super.key,
@@ -70,6 +81,8 @@ class MonitorTile extends StatefulWidget {
     this.identifyNumber,
     this.onSetMirror,
     this.mirrorSources = const [],
+    this.mirroredBy = const [],
+    this.onStopMirroredBy,
   });
 
   @override
@@ -107,24 +120,28 @@ class _MonitorTileState extends State<MonitorTile> {
         : widget.data.manufacturer;
 
     final isEnabled = widget.data.enabled;
-    final isMirror = widget.data.mirrorOf != null;
-    // Mirror tiles get a cyan accent so the user can see at a glance that
-    // they are subordinate to another output. Drag/scale are also locked
-    // for them since their position/size are inherited from the source.
+    // A tile is "mirror-styled" when it acts as a mirror source — its
+    // pixels are duplicated onto one or more destination outputs. The
+    // destination tiles themselves are filtered out by LayoutMath, so
+    // [data.mirrorOf] should never be true here in normal flow; we still
+    // guard against it for defensive rendering.
+    final isMirrorSource = widget.mirroredBy.isNotEmpty;
+    final isMirrorDestination = widget.data.mirrorOf != null;
+    final hasMirrorAccent = isMirrorSource || isMirrorDestination;
     final backgroundColor = !isEnabled
         ? Colors.grey.withValues(alpha: 0.4)
-        : isMirror
+        : hasMirrorAccent
             ? const Color(0xFF4FC3F7).withValues(alpha: 0.18)
             : (widget.exists
                 ? Colors.green.withValues(alpha: 0.3)
                 : Colors.red.withValues(alpha: 0.3));
     final borderColor = !isEnabled
         ? Colors.grey
-        : isMirror
+        : hasMirrorAccent
             ? const Color(0xFF4FC3F7)
             : (widget.exists ? Colors.greenAccent : Colors.redAccent);
     final textColor = isEnabled ? Colors.white : Colors.white70;
-    final canDrag = isEnabled && !isMirror;
+    final canDrag = isEnabled && !isMirrorDestination;
     final canResize = canDrag;
     final canChangeMode = canDrag;
 
@@ -174,7 +191,20 @@ class _MonitorTileState extends State<MonitorTile> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (isMirror)
+                        if (isMirrorSource)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              '⇄ Mirrors to ${widget.mirroredBy.join(", ")}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF4FC3F7),
+                              ),
+                            ),
+                          )
+                        else if (isMirrorDestination)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
@@ -293,14 +323,22 @@ class _MonitorTileState extends State<MonitorTile> {
                             : 'Enable display',
                       ),
                     ),
-                  if (widget.onSetMirror != null && isMirror)
+                  if (widget.onSetMirror != null && isMirrorDestination)
                     MenuItemButton(
                       onPressed: () => widget.onSetMirror!.call(null),
                       leadingIcon: const Icon(Icons.link_off, size: 18),
                       child: const Text('Stop mirroring'),
                     ),
+                  if (widget.onStopMirroredBy != null && isMirrorSource)
+                    for (final dst in widget.mirroredBy)
+                      MenuItemButton(
+                        onPressed: () =>
+                            widget.onStopMirroredBy!.call(dst),
+                        leadingIcon: const Icon(Icons.link_off, size: 18),
+                        child: Text('Stop mirroring to $dst'),
+                      ),
                   if (widget.onSetMirror != null &&
-                      !isMirror &&
+                      !isMirrorDestination &&
                       widget.mirrorSources.isNotEmpty)
                     SubmenuButton(
                       leadingIcon:
