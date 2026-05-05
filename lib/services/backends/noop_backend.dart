@@ -18,6 +18,9 @@ class NoopBackend implements MonitorService {
   String get name => 'noop';
 
   @override
+  bool get supportsMirror => false;
+
+  @override
   KanshiWriteOptions get writeOptions => KanshiWriteOptions.neutral;
 
   ProcessResult _unsupported() => ProcessResult(

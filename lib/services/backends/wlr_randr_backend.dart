@@ -27,6 +27,9 @@ class WlrRandrBackend implements MonitorService {
   String get name => 'wlr-randr';
 
   @override
+  bool get supportsMirror => false;
+
+  @override
   KanshiWriteOptions get writeOptions => KanshiWriteOptions.neutral;
 
   @override
