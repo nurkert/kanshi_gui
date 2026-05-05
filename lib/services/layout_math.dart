@@ -463,6 +463,58 @@ class LayoutMath {
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
+  /// Returns the mirror-eligible drop target when the dragged tile
+  /// substantially covers another enabled tile in the same layout.
+  /// "Substantially" means at least [overlapThreshold] of the dragged
+  /// tile's logical area lands inside the candidate; the candidate with
+  /// the largest absolute overlap wins. Returns null when no candidate
+  /// clears the threshold, when the dragged tile is itself a mirror
+  /// destination (its position is locked to the source), or when only
+  /// other mirror destinations are around to land on (those tiles are
+  /// invisible in the layout, so a drop on them would feel arbitrary).
+  ///
+  /// Pure geometry — does not validate compositor support, does not run
+  /// the controller's mirror-cycle / chain rules. Callers are expected
+  /// to confirm via a UI prompt and surface any further validation
+  /// errors from `setMirror` itself.
+  static MonitorTileData? detectMirrorDropTarget({
+    required MonitorTileData dragged,
+    required Iterable<MonitorTileData> all,
+    double overlapThreshold = 0.7,
+  }) {
+    if (dragged.mirrorOf != null) return null;
+    final dragRect = Rect.fromLTWH(
+      dragged.x,
+      dragged.y,
+      dragged.width / dragged.scale,
+      dragged.height / dragged.scale,
+    );
+    final dragArea = dragRect.width * dragRect.height;
+    if (dragArea <= 0) return null;
+    MonitorTileData? best;
+    var bestOverlap = 0.0;
+    for (final m in all) {
+      if (m.id == dragged.id) continue;
+      if (!m.enabled) continue;
+      if (m.mirrorOf != null) continue;
+      final r = Rect.fromLTWH(
+        m.x,
+        m.y,
+        m.width / m.scale,
+        m.height / m.scale,
+      );
+      final isect = dragRect.intersect(r);
+      if (isect.isEmpty) continue;
+      final overlapArea = isect.width * isect.height;
+      if (overlapArea / dragArea < overlapThreshold) continue;
+      if (overlapArea > bestOverlap) {
+        bestOverlap = overlapArea;
+        best = m;
+      }
+    }
+    return best;
+  }
+
   /// Sum of width × height × refresh across all enabled monitors. Used for
   /// the bandwidth-warning heuristic. Disabled monitors are ignored.
   static double totalPixelRate(Iterable<MonitorTileData> mons) {
