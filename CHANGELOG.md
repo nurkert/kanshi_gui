@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.5 — 2026-05-05
+
+### Added
+
+- "Identify Displays" now also reports the physical screens hidden
+  behind a mirror. Mirror destinations are filtered out of the GUI
+  layout entirely (their pixels belong to the source), so they used
+  to be invisible during identify. The controller now numbers all
+  enabled outputs — sources, regular tiles, and destinations — and
+  the source tile renders small cyan `+N` chips next to its main
+  identify number, one per destination it occupies. The swaynag
+  banner spawn keeps skipping destinations: their physical screens
+  already display the source's number via wl-mirror, and printing a
+  second banner on a hidden workspace would just be noise.
+
 ## 1.3.4 — 2026-05-05
 
 ### Internal

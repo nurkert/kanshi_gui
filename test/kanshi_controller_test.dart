@@ -488,6 +488,58 @@ void main() {
             'Disabled tiles must not get banners; numbers match GUI order.');
   });
 
+  test('identifyDisplays numbers mirror destinations alongside their sources',
+      () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(
+      supportsMirror: true,
+      outputs: [
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+      ],
+    );
+    fake.identifyBannerSupported = true;
+    final mr = FakeMirrorRunner();
+    final c =
+        KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+    await c.init();
+    // Wire B to mirror A — B is now the destination, A the source.
+    final r = await c.setMirror('B', 'A');
+    expect(r.success, isTrue);
+    c.identifyDisplays();
+    // Both tiles must end up in `identifyNumbers` — the destination
+    // gets a number too so the source tile can render it as a chip.
+    expect(c.identifyNumbers, hasLength(2));
+    expect(c.identifyNumbers['A'], isNotNull);
+    expect(c.identifyNumbers['B'], isNotNull);
+  });
+
+  test(
+      'identifyDisplays skips swaynag for mirror destinations to avoid '
+      'double-painting the source pixels', () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(
+      supportsMirror: true,
+      outputs: [
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+      ],
+    );
+    fake.identifyBannerSupported = true;
+    final mr = FakeMirrorRunner();
+    final c =
+        KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+    await c.init();
+    await c.setMirror('B', 'A');
+    fake.identifyBannerCalls.clear();
+    c.identifyDisplays();
+    // Only A — B's banner would be hidden behind wl-mirror's fullscreen
+    // window anyway, AND would also paint twice on the source via the
+    // mirror, so the controller must skip B's banner spawn entirely.
+    expect(fake.identifyBannerCalls.map((c) => c.first).toList(),
+        equals(['A']));
+  });
+
   test('controller propagates writeOptions from backend to ConfigService', () {
     final fake = FakeMonitorService(
         writeOptions: KanshiWriteOptions.neutral);

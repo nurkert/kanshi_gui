@@ -76,6 +76,12 @@ class MonitorTile extends StatefulWidget {
   /// drag). Cancelled drags snap back to their pre-drag position
   /// silently.
   final int Function()? readDragCancelEpoch;
+  /// Identify-numbers of the destinations that mirror this tile, in the
+  /// same order as [mirroredBy]. When identify is active the source tile
+  /// renders these as small cyan chips next to its own big number, so
+  /// the user can see at a glance which physical screens carry the
+  /// same content.
+  final List<int> mirroredByNumbers;
 
   const MonitorTile({
     super.key,
@@ -109,6 +115,7 @@ class MonitorTile extends StatefulWidget {
     this.workspacePositionExplicit = false,
     this.onSetWorkspaceRank,
     this.readDragCancelEpoch,
+    this.mirroredByNumbers = const [],
   });
 
   @override
@@ -480,6 +487,36 @@ class _MonitorTileState extends State<MonitorTile> {
           if (widget.identifyNumber != null)
             Positioned.fill(
               child: IdentifyOverlay(number: widget.identifyNumber!),
+            ),
+          if (widget.identifyNumber != null &&
+              widget.mirroredByNumbers.isNotEmpty)
+            Positioned(
+              right: 6,
+              top: 6,
+              child: Wrap(
+                spacing: 4,
+                children: [
+                  for (final n in widget.mirroredByNumbers)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4FC3F7).withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '+$n',
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
         ],
       ),
