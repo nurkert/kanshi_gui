@@ -7,7 +7,23 @@ import 'dart:io';
 /// substitute a fake recorder + canned output so backends can be exercised
 /// without touching the host system.
 abstract class ProcessRunner {
-  Future<ProcessResult> run(String executable, List<String> arguments);
+  /// Default upper bound on how long a single short-lived subprocess (e.g.
+  /// `swaymsg`, `wlr-randr`, `kanshictl`) is allowed to run before it is
+  /// killed and a synthetic non-zero result is returned. Without this
+  /// guard a hung helper would block the apply pipeline indefinitely.
+  static const Duration defaultTimeout = Duration(seconds: 5);
+
+  /// Run [executable] with [arguments] and return its [ProcessResult]. If
+  /// the process is still running when [timeout] elapses, it is killed
+  /// (SIGKILL after a brief SIGTERM grace period) and a synthetic
+  /// `ProcessResult(-1, …)` with `stderr = "<exe>: timed out after Ns"`
+  /// is returned. The default [timeout] is [defaultTimeout]; pass a
+  /// tighter value for fast-path probes.
+  Future<ProcessResult> run(
+    String executable,
+    List<String> arguments, {
+    Duration timeout = defaultTimeout,
+  });
 
   /// True when [executable] is found in `$PATH` (and is executable). Used by
   /// auto-detection (`command -v` style) without forking a shell.
@@ -17,7 +33,8 @@ abstract class ProcessRunner {
   /// stream. The stream completes when the process exits. Used to listen
   /// to compositor event subscriptions (e.g. `swaymsg -t subscribe -m`).
   /// Returns a [ProcessStream] handle so the caller can [ProcessStream.kill]
-  /// the underlying process when done.
+  /// the underlying process when done. Long-running by definition — no
+  /// timeout is enforced here.
   ProcessStream stream(String executable, List<String> arguments);
 }
 
@@ -32,8 +49,53 @@ class DefaultProcessRunner implements ProcessRunner {
   const DefaultProcessRunner();
 
   @override
-  Future<ProcessResult> run(String executable, List<String> arguments) {
-    return Process.run(executable, arguments);
+  Future<ProcessResult> run(
+    String executable,
+    List<String> arguments, {
+    Duration timeout = ProcessRunner.defaultTimeout,
+  }) async {
+    // Use Process.start (not Process.run) so we own the child handle and
+    // can kill it when the timeout fires. Future.timeout alone would
+    // resolve our future but leave the child process orphaned.
+    final proc = await Process.start(executable, arguments);
+    final stdoutChunks = <List<int>>[];
+    final stderrChunks = <List<int>>[];
+    final stdoutDone = proc.stdout.listen(stdoutChunks.add).asFuture<void>();
+    final stderrDone = proc.stderr.listen(stderrChunks.add).asFuture<void>();
+    var timedOut = false;
+    Timer? timer;
+    timer = Timer(timeout, () {
+      timedOut = true;
+      proc.kill(ProcessSignal.sigterm);
+      // SIGKILL after a short grace period, in case the child swallows
+      // SIGTERM. The exitCode future resolves once the kernel reaps it.
+      Timer(const Duration(milliseconds: 500), () {
+        proc.kill(ProcessSignal.sigkill);
+      });
+    });
+    final exit = await proc.exitCode;
+    timer.cancel();
+    await Future.wait([stdoutDone, stderrDone]);
+    final stdoutBytes = stdoutChunks.expand((c) => c).toList();
+    final stderrBytes = stderrChunks.expand((c) => c).toList();
+    if (timedOut) {
+      final secs = timeout.inMilliseconds / 1000;
+      final s = secs == secs.roundToDouble()
+          ? secs.toInt().toString()
+          : secs.toStringAsFixed(1);
+      return ProcessResult(
+        proc.pid,
+        -1,
+        utf8.decode(stdoutBytes, allowMalformed: true),
+        '$executable: timed out after ${s}s',
+      );
+    }
+    return ProcessResult(
+      proc.pid,
+      exit,
+      utf8.decode(stdoutBytes, allowMalformed: true),
+      utf8.decode(stderrBytes, allowMalformed: true),
+    );
   }
 
   @override
