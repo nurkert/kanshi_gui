@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.3 — 2026-05-05
+
+### Fixed
+
+- Stop the layout canvas from reflowing under the cursor while a drag is in
+  progress. Dragging a monitor above (or left of) origin pushed the
+  bounding box outward, which re-scaled and re-offset every other tile
+  every frame — the visible result was tiles "jumping", overlapping and
+  leaving ghost imprints. The canvas now snapshots the bounding box at
+  drag start and only releases the pin on drag end, so non-dragged tiles
+  stay put and the dragged one follows the cursor pixel-perfectly even
+  into negative coordinates.
+
 ## 1.1.2 — 2026-05-04
 
 ### Fixed
