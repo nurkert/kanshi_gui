@@ -1,19 +1,35 @@
 # Changelog
 
-## 1.2.3 — 2026-05-05
+## 1.3.0 — 2026-05-05
+
+### Added
+
+- "Workspace position" submenu on each monitor tile's three-dot menu.
+  Pick `Position 1`/`Position 2`/… to override which slot this monitor
+  occupies in the left-to-right workspace distribution, or `Auto
+  (left-to-right)` to clear the override and fall back to X-position.
+  Choosing a slot that another monitor already holds swaps with that
+  monitor so all positions stay unique. Overrides are persisted in the
+  kanshi config as `# kanshi_gui:rank '<id>'=<n>` annotations and read
+  back on the next app start / `kanshictl reload`.
 
 ### Changed
 
-- Workspace numbering on the Sway backend now follows physical screen
-  position **right-to-left** in fixed blocks of three. The rightmost
-  monitor owns workspaces 1/2/3, the next one to its left owns 4/5/6,
-  and so on up to nine workspaces / three screens. Previously the
-  writer numbered ascending from the leftmost monitor and only assigned
-  one workspace per screen, so a three-display layout produced 1/2/3
-  left-to-right and "Mod+6" had no defined home. Workspaces are now
-  block-anchored, so muscle memory like "Mod+6 = second screen" lands
-  on the same physical display whether two or three monitors are
-  attached.
+- Workspace numbering on the Sway backend is now **interleaved
+  left-to-right**, not ascending in blocks. With N enabled outputs,
+  workspace `w` lands on the monitor whose left-to-right rank equals
+  `(w - 1) mod N`. So two screens give the left one workspaces
+  1/3/5/7/9 and the right one 2/4/6/8; three screens give 1/4/7,
+  2/5/8, 3/6/9. The number-keys 1..9 thus walk left-to-right across
+  the displays and loop back as you press higher numbers, matching
+  what most users perceive as "workspace 1 = first screen".
+
+  Previous releases (≤1.2.2) numbered ascending from the leftmost
+  monitor and only assigned one workspace per screen; 1.2.3 (skipped)
+  briefly tried right-to-left blocks of three. Both turned out to be
+  the wrong default — the interleaved scheme keeps the keys 1..N
+  walking the displays in physical order regardless of how many
+  monitors are attached.
 
 ## 1.2.2 — 2026-05-05
 
