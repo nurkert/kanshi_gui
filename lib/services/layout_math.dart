@@ -308,12 +308,25 @@ class LayoutMath {
   /// bounding box outward — without this, dragging a monitor above origin
   /// (negative Y) reflows the whole layout each frame and the tiles appear
   /// to overlap and ghost.
+  ///
+  /// Disabled monitors usually carry the compositor's last position for
+  /// them — for Sway that is (0, 0), which puts every disabled tile on top
+  /// of whatever active monitor occupies origin. Rather than render them as
+  /// an unreadable stack, this function parks each disabled monitor in a
+  /// vertical column to the right of the active cluster. The park positions
+  /// are display-only — the underlying [MonitorTileData.x] / `.y` of the
+  /// disabled monitors is left untouched, so re-enabling the monitor brings
+  /// it back to wherever the user (or compositor) had positioned it.
   static DisplayLayout computeDisplay(
     List<MonitorTileData> mons,
     Size viewport, {
     Rect? pinnedBounds,
   }) {
     if (mons.isEmpty) return DisplayLayout.empty;
+
+    // Stash original coords and overwrite x/y for disabled tiles with their
+    // park positions so the projection treats them like any other tile.
+    final laidOut = _parkDisabledBeside(mons);
 
     final double minX;
     final double minY;
@@ -325,10 +338,10 @@ class LayoutMath {
       maxX = pinnedBounds.right;
       maxY = pinnedBounds.bottom;
     } else {
-      minX = mons.map((m) => m.x).reduce(min);
-      minY = mons.map((m) => m.y).reduce(min);
-      maxX = mons.map((m) => m.x + m.width / m.scale).reduce(max);
-      maxY = mons.map((m) => m.y + m.height / m.scale).reduce(max);
+      minX = laidOut.map((m) => m.x).reduce(min);
+      minY = laidOut.map((m) => m.y).reduce(min);
+      maxX = laidOut.map((m) => m.x + m.width / m.scale).reduce(max);
+      maxY = laidOut.map((m) => m.y + m.height / m.scale).reduce(max);
     }
 
     final boundingWidth = maxX - minX;
@@ -347,7 +360,7 @@ class LayoutMath {
     final offsetX = (viewport.width - scaledBW) / 2;
     final offsetY = (viewport.height - scaledBH) / 2;
 
-    final displayMonitors = mons.map((m) {
+    final displayMonitors = laidOut.map((m) {
       final dx = (m.x - minX) * scaleFactor + offsetX;
       final dy = (m.y - minY) * scaleFactor + offsetY;
       final dw = (m.width / m.scale) * scaleFactor;
@@ -364,6 +377,42 @@ class LayoutMath {
       displayMonitors: displayMonitors,
     );
   }
+
+  /// Returns a copy of [mons] where each disabled monitor's `x` / `y` has
+  /// been replaced with a park position to the right of the enabled cluster
+  /// — stacked vertically, separated by [_parkSpacing]. Enabled monitors
+  /// pass through unchanged. When *every* monitor is disabled the original
+  /// coords are kept (nothing to park beside) so the user still sees the
+  /// last layout.
+  static List<MonitorTileData> _parkDisabledBeside(
+      List<MonitorTileData> mons) {
+    final enabled = mons.where((m) => m.enabled).toList(growable: false);
+    final disabled = mons.where((m) => !m.enabled).toList(growable: false);
+    if (enabled.isEmpty || disabled.isEmpty) return mons;
+
+    final activeMaxX = enabled
+        .map((m) => m.x + m.width / m.scale)
+        .reduce(max);
+    final activeMinY = enabled.map((m) => m.y).reduce(min);
+
+    final parked = <String, MonitorTileData>{};
+    var lane = activeMinY;
+    for (final m in disabled) {
+      final h = m.height / m.scale;
+      parked[m.id] = m.copyWith(
+        x: activeMaxX + _parkSpacing,
+        y: lane,
+      );
+      lane += h + _parkSpacing;
+    }
+    return [for (final m in mons) parked[m.id] ?? m];
+  }
+
+  /// Pixel-space gap between a parked disabled monitor and the active
+  /// cluster (and between two consecutive parked tiles). Roughly half a
+  /// 1080p row so the lane is unambiguously visible without dwarfing the
+  /// active layout.
+  static const double _parkSpacing = 200.0;
 
   /// Computes the bounding box of [mons] in absolute monitor space — the
   /// same one [computeDisplay] would derive when no pin is supplied. Used

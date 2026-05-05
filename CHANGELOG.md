@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.5 — 2026-05-05
+
+### Changed
+
+- Disabled monitors no longer render on top of the active layout. Sway
+  parks disabled outputs at (0, 0), which previously stacked them on
+  whichever monitor occupied origin — looking like a dirty grey overlap.
+  The canvas now parks each disabled tile in a vertical column to the
+  right of the active cluster (display-only; the stored coords stay
+  intact so re-enabling brings the monitor back to its real position).
+- Snap and overlap detection ignore disabled monitors: they were never
+  visible at the snap target's coordinates anyway, so they no longer
+  produce phantom snap targets when dragging an active tile.
+
 ## 1.1.4 — 2026-05-05
 
 ### Fixed
