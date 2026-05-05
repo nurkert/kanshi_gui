@@ -23,6 +23,9 @@ class SwayBackend implements MonitorService {
   String get name => 'sway';
 
   @override
+  bool get supportsMirror => true;
+
+  @override
   KanshiWriteOptions get writeOptions => KanshiWriteOptions.swayDefaults;
 
   Future<String> _binary() async {
