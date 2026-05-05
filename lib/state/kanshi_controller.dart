@@ -8,6 +8,7 @@ import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
@@ -29,6 +30,7 @@ class OpResult {
 class KanshiController extends ChangeNotifier {
   final MonitorService monitors;
   final ConfigService config;
+  final MirrorRunner mirrorRunner;
   final CustomModeRevertScheduler _revertScheduler =
       CustomModeRevertScheduler();
   final SafetyNet safetyNet = SafetyNet();
@@ -65,10 +67,15 @@ class KanshiController extends ChangeNotifier {
   KanshiController({
     required this.monitors,
     required this.config,
+    MirrorRunner? mirrorRunner,
     this.snapThreshold = 500.0,
-  }) {
+  }) : mirrorRunner = mirrorRunner ?? MirrorRunner() {
     config.writeOptions = monitors.writeOptions;
     safetyNet.onChange((_) => notifyListeners());
+    // The runner mutates failedDestinations / activeDestinations on
+    // wl-mirror exits. UI surfaces that via this controller's
+    // notifyListeners pipeline.
+    this.mirrorRunner.addListener(notifyListeners);
   }
 
   // ── Read-only accessors ────────────────────────────────────────────────
@@ -82,6 +89,7 @@ class KanshiController extends ChangeNotifier {
       activeProfile?.monitors ?? const [];
   bool get isApplyingBatch => _isApplyingBatch;
   bool get supportsLiveApply => monitors.isLive;
+  bool get supportsMirror => monitors.supportsMirror;
   List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
 
   /// Bounding box (in absolute monitor space) the canvas should pin its
@@ -123,6 +131,7 @@ class KanshiController extends ChangeNotifier {
     await refreshConnectedMonitors();
     await ensureCurrentSetupMatches();
     _subscribeHotplug();
+    await _reconcileMirrors();
   }
 
   void _subscribeHotplug() {
@@ -146,6 +155,11 @@ class KanshiController extends ChangeNotifier {
         _pinnedLayoutBounds = null;
       }
       _rehydrateProfilesAgainst(newOutputs);
+      // Reconcile any wl-mirror processes against the new connected set —
+      // a yanked source/destination ends naturally on its own, but a
+      // re-attached mirror partner needs a respawn.
+      // ignore: discarded_futures
+      _reconcileMirrors();
       notifyListeners();
       for (final id in added) {
         onHotplugToast?.call('$id connected');
@@ -163,6 +177,9 @@ class KanshiController extends ChangeNotifier {
     safetyNet.cancelAll();
     _outputSubscription?.cancel();
     _identifyTimer?.cancel();
+    mirrorRunner.removeListener(notifyListeners);
+    // ignore: discarded_futures
+    mirrorRunner.stopAll();
     super.dispose();
   }
 
@@ -294,6 +311,12 @@ class KanshiController extends ChangeNotifier {
     // surprising.
     _lastModeBeforeCustom.clear();
     _revertScheduler.cancelAll();
+    // Profile mirrors are per-profile: tear down everything that belongs
+    // to the previous profile and let _reconcileMirrors stand up the new
+    // ones. Do this even when the index is unchanged so a manual switch
+    // back to the same profile heals any drift.
+    // ignore: discarded_futures
+    _reconcileMirrors();
     notifyListeners();
   }
 
@@ -588,6 +611,138 @@ class KanshiController extends ChangeNotifier {
         Profile(name: profile.name, monitors: rearranged);
     _scheduleSave();
     notifyListeners();
+  }
+
+  // ── Mirror state ───────────────────────────────────────────────────────
+
+  /// Toggle the mirror relationship of [destId]: pass [srcId] to make
+  /// `destId` mirror `srcId`, or null to release the mirror. Validates
+  /// against circular and chained mirrors (rejected as
+  /// `OpResult.err`). The runner is asked to spawn / kill wl-mirror
+  /// immediately; the kanshi config write is scheduled and a
+  /// `kanshictl reload` is fired so kanshi knows about the change.
+  Future<OpResult> setMirror(String destId, String? srcId) async {
+    if (!supportsMirror) {
+      return const OpResult.err(
+          'Mirror is only supported on the Sway backend.');
+    }
+    if (_activeProfileIndex == null) {
+      return const OpResult.err('No active profile.');
+    }
+    final mons = [..._profiles[_activeProfileIndex!].monitors];
+    final destIdx = mons.indexWhere((m) => m.id == destId);
+    if (destIdx == -1) {
+      return OpResult.err('Output $destId not found in active profile.');
+    }
+    if (!mons[destIdx].enabled) {
+      return const OpResult.err(
+          'Cannot mirror a disabled output — enable it first.');
+    }
+
+    if (srcId != null) {
+      if (srcId == destId) {
+        return const OpResult.err('A monitor cannot mirror itself.');
+      }
+      final srcIdx = mons.indexWhere((m) => m.id == srcId);
+      if (srcIdx == -1) {
+        return OpResult.err('Mirror source $srcId not found in profile.');
+      }
+      if (!mons[srcIdx].enabled) {
+        return OpResult.err('Mirror source $srcId is disabled.');
+      }
+      // Reject chains and cycles: the source must not itself be a
+      // mirror destination (would create a chain, which Sway/wl-mirror
+      // do not handle), and there must not already be a mirror going
+      // the other way (A→B + B→A is a cycle).
+      if (mons[srcIdx].mirrorOf != null) {
+        return OpResult.err(
+            'Cannot chain mirrors — $srcId already mirrors '
+            '${mons[srcIdx].mirrorOf}.');
+      }
+      if (mons.any((m) => m.id == srcId && m.mirrorOf == destId) ||
+          mons[destIdx].mirrorOf == srcId) {
+        // Latter half of the OR is the no-op identity — just rebind below.
+      }
+      // Check for a reverse-direction mirror from src→dest (would cycle).
+      final reverse = mons.firstWhere(
+        (m) => m.id == srcId,
+        orElse: () => mons[destIdx],
+      );
+      if (reverse.mirrorOf == destId) {
+        return const OpResult.err(
+            'Refusing to set up a circular mirror.');
+      }
+    }
+
+    mons[destIdx] = mons[destIdx].copyWith(mirrorOf: srcId);
+    _profiles[_activeProfileIndex!] = Profile(
+      name: _profiles[_activeProfileIndex!].name,
+      monitors: mons,
+    );
+    _scheduleSave();
+
+    // Drive the live process state immediately. _reconcileMirrors handles
+    // both the "spawn new" and "kill old" cases by diffing against the
+    // current desired set.
+    await _reconcileMirrors();
+
+    // Push the change into the active kanshi config so a future profile
+    // re-activation reproduces the mirror without our involvement. The
+    // restart is best-effort — failures are surfaced but don't undo the
+    // local state, since the wl-mirror process is already running.
+    try {
+      await monitors.restartCompositorProfileApply();
+    } catch (_) {
+      // Surface only if it matters to the user; for now silent — the
+      // live mirror works regardless.
+    }
+
+    notifyListeners();
+    if (srcId == null) {
+      return OpResult.ok('$destId no longer mirroring.');
+    }
+    return OpResult.ok('$destId mirrors $srcId.');
+  }
+
+  /// Diff the active profile's intended mirror set against MirrorRunner's
+  /// running set, then start/stop wl-mirror processes to converge. Called
+  /// from `setMirror`, `setActiveProfile`, hotplug, and `init`.
+  Future<void> _reconcileMirrors() async {
+    if (!supportsMirror) {
+      // Backend cannot mirror — make sure no leftovers are running.
+      if (mirrorRunner.activeDestinations.isNotEmpty) {
+        await mirrorRunner.stopAll();
+      }
+      return;
+    }
+    final connectedIds =
+        _currentMonitors.map((m) => m.id).toSet();
+    final desired = <String, String>{}; // destId -> srcId
+    if (_activeProfileIndex != null) {
+      for (final m in _profiles[_activeProfileIndex!].monitors) {
+        final src = m.mirrorOf;
+        if (src == null || !m.enabled) continue;
+        // Only spin up wl-mirror when both endpoints are physically
+        // present — otherwise wl-mirror would just exit, burn the retry
+        // budget and mark the destination failed.
+        if (!connectedIds.contains(m.id)) continue;
+        if (!connectedIds.contains(src)) continue;
+        desired[m.id] = src;
+      }
+    }
+    final running = mirrorRunner.activeDestinations;
+
+    // Stop mirrors no longer in the desired set, or whose source changed.
+    for (final dst in running) {
+      final wantSrc = desired[dst];
+      if (wantSrc == null) {
+        await mirrorRunner.stop(dst);
+      }
+    }
+    // Start / rebind desired mirrors.
+    for (final entry in desired.entries) {
+      await mirrorRunner.start(entry.value, entry.key);
+    }
   }
 
   // ── Compositor-driven actions ──────────────────────────────────────────
