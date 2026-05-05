@@ -407,6 +407,13 @@ class _HomePageState extends State<HomePage>
                                     await c.setWorkspaceRank(tile.id, r)),
                                 readDragCancelEpoch: () =>
                                     c.dragCancelEpoch,
+                                mirroredByNumbers: [
+                                  for (final dst in layout
+                                          .mirroredBy[tile.id] ??
+                                      const <String>[])
+                                    if (c.identifyNumbers[dst] != null)
+                                      c.identifyNumbers[dst]!,
+                                ],
                               );
                             }),
                           ],
