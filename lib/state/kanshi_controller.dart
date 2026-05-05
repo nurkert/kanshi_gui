@@ -10,6 +10,7 @@ import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 
@@ -51,6 +52,7 @@ class KanshiController extends ChangeNotifier {
   void Function(String message)? onHotplugToast;
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
+  final List<ProcessStream> _identifyBanners = [];
   final Map<String, _DragSession> _dragSessions = {};
   static const _alignmentEscapeLimit = 2;
   Rect? _pinnedLayoutBounds;
@@ -107,22 +109,52 @@ class KanshiController extends ChangeNotifier {
   /// so the user can map "tile 1 ↔ physical screen 1". The numbering goes
   /// left-to-right, top-to-bottom by absolute position.
   void identifyDisplays() {
-    final mons = activeMonitors;
+    final mons = activeMonitors.where((m) => m.enabled).toList();
     if (mons.isEmpty) return;
     final sorted = [...mons]..sort((a, b) {
         final byY = a.y.compareTo(b.y);
         if (byY != 0) return byY;
         return a.x.compareTo(b.x);
       });
-    _identifyNumbers = {
+    final numbers = <String, int>{
       for (var i = 0; i < sorted.length; i++) sorted[i].id: i + 1,
     };
+    _identifyNumbers = numbers;
     _identifyTimer?.cancel();
+
+    // Spawn an on-screen banner per physical output so the user can map
+    // "tile N in the GUI" → "screen N in front of me". Backends that
+    // can't target a specific output return null — for those we fall
+    // back to the in-GUI overlay only.
+    _killIdentifyBanners();
+    for (final entry in numbers.entries) {
+      // Skip mirrored tiles — their banner would render on the source's
+      // pixels, leading to two banners on the same physical screen.
+      final tile = sorted.firstWhere((m) => m.id == entry.key);
+      if (tile.mirrorOf != null) continue;
+      final ps = monitors.spawnIdentifyBanner(
+          _resolveOutputName(entry.key), entry.value.toString());
+      if (ps != null) {
+        _identifyBanners.add(ps);
+        // Drain stdout to keep the pipe from blocking the child.
+        ps.lines.listen((_) {}, onError: (_) {}, cancelOnError: false);
+      }
+    }
+
     _identifyTimer = Timer(const Duration(seconds: 3), () {
       _identifyNumbers = const {};
+      _killIdentifyBanners();
       notifyListeners();
     });
     notifyListeners();
+  }
+
+  void _killIdentifyBanners() {
+    for (final ps in _identifyBanners) {
+      // ignore: discarded_futures
+      ps.kill();
+    }
+    _identifyBanners.clear();
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -177,6 +209,7 @@ class KanshiController extends ChangeNotifier {
     safetyNet.cancelAll();
     _outputSubscription?.cancel();
     _identifyTimer?.cancel();
+    _killIdentifyBanners();
     mirrorRunner.removeListener(notifyListeners);
     // ignore: discarded_futures
     mirrorRunner.stopAll();

@@ -5,6 +5,7 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/process_runner.dart';
 
 /// Test double that records every backend call and returns canned values.
 /// Lets us drive [KanshiController] through its scenarios without touching
@@ -108,4 +109,24 @@ class FakeMonitorService implements MonitorService {
 
   @override
   Stream<List<MonitorTileData>> watchOutputs() => _watchController.stream;
+
+  /// Per-output identify-banner spawn calls recorded for tests. Set
+  /// [identifyBannerSupported] to true to make this fake act like Sway and
+  /// return a fake [ProcessStream]; otherwise it returns null so the
+  /// controller falls back to the GUI-only overlay path.
+  bool identifyBannerSupported = false;
+  final List<List<String>> identifyBannerCalls = [];
+
+  @override
+  ProcessStream? spawnIdentifyBanner(String output, String label) {
+    identifyBannerCalls.add([output, label]);
+    if (!identifyBannerSupported) return null;
+    final ctl = StreamController<String>.broadcast();
+    return ProcessStream(
+      lines: ctl.stream,
+      kill: () async {
+        if (!ctl.isClosed) await ctl.close();
+      },
+    );
+  }
 }
