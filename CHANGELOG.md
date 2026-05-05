@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.4 — 2026-05-05
+
+### Fixed
+
+- A monitor disconnected while the user was dragging it left the layout
+  canvas pinned to a bounding box that no longer existed; the next drag
+  projected against stale coordinates. Hotplug now releases the pin and
+  closes the drag session for any vanished output.
+- Profile re-hydration matched on `id` *or* manufacturer string with
+  short-circuiting: with two physically identical monitors (same EDID on
+  two ports) both profile entries silently collapsed onto whichever live
+  output was first in the list, swapping mode lists between the two
+  screens. Re-hydration now runs in two passes — exact `id` match first,
+  manufacturer fallback only on the still-unclaimed live outputs.
+- The "revert last custom mode" memory was global and persisted across
+  profile switches; reverting after a switch could replay an unrelated
+  prior mode. Switching profiles now clears the cache and cancels any
+  pending auto-revert timer.
+
 ## 1.1.3 — 2026-05-05
 
 ### Fixed

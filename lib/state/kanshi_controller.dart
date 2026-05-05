@@ -133,21 +133,19 @@ class KanshiController extends ChangeNotifier {
       final added = newIds.difference(oldIds);
       final removed = oldIds.difference(newIds);
       _currentMonitors = newOutputs;
-      // Re-hydrate profile entries with the live mode list.
-      for (final profile in _profiles) {
-        for (var i = 0; i < profile.monitors.length; i++) {
-          final connected = newOutputs.firstWhere(
-            (m) => _monitorsMatch(m, profile.monitors[i]),
-            orElse: () => profile.monitors[i],
-          );
-          profile.monitors[i] = profile.monitors[i].copyWith(
-            id: connected.id,
-            manufacturer: connected.manufacturer,
-            refresh: connected.refresh,
-            modes: connected.modes,
-          );
+      // If a monitor disappears while the user is dragging it, end the
+      // drag session so the layout pin is released — otherwise the canvas
+      // stays frozen on a bounding box that references the vanished tile
+      // and subsequent drags see a stale, mismatched coordinate space.
+      for (final id in removed) {
+        if (_dragSessions.containsKey(id)) {
+          _dragSessions.remove(id);
         }
       }
+      if (_dragSessions.isEmpty && _pinnedLayoutBounds != null) {
+        _pinnedLayoutBounds = null;
+      }
+      _rehydrateProfilesAgainst(newOutputs);
       notifyListeners();
       for (final id in added) {
         onHotplugToast?.call('$id connected');
@@ -184,24 +182,74 @@ class KanshiController extends ChangeNotifier {
     }
     try {
       _currentMonitors = await monitors.getOutputs();
-      // Re-hydrate profile entries with the live mode list / refresh / id.
-      for (final profile in _profiles) {
-        for (var i = 0; i < profile.monitors.length; i++) {
-          final connected = _currentMonitors.firstWhere(
-            (m) => _monitorsMatch(m, profile.monitors[i]),
-            orElse: () => profile.monitors[i],
-          );
-          profile.monitors[i] = profile.monitors[i].copyWith(
-            id: connected.id,
-            manufacturer: connected.manufacturer,
-            refresh: connected.refresh,
-            modes: connected.modes,
-          );
-        }
-      }
+      _rehydrateProfilesAgainst(_currentMonitors);
       notifyListeners();
     } catch (e) {
       debugPrint('refreshConnectedMonitors failed: $e');
+    }
+  }
+
+  /// Walks every profile and refreshes the per-monitor `id`, `manufacturer`,
+  /// `refresh` and `modes` from the connected outputs in [live]. Matches in
+  /// two passes so identical-EDID dual-monitor setups (same make/model on
+  /// two ports) do not all collapse onto the first connected output:
+  ///   1. exact `id` match (Sway's per-port output name) wins first;
+  ///   2. only the leftover, unmatched profile entries fall back to a
+  ///      manufacturer-string match against the still-unclaimed live
+  ///      outputs.
+  /// Without the two-pass rule a profile with two "Samsung 2560×1440"
+  /// entries would re-hydrate both from whichever live output appears
+  /// first in the list, silently swapping mode lists between the two
+  /// physical screens.
+  void _rehydrateProfilesAgainst(List<MonitorTileData> live) {
+    for (final profile in _profiles) {
+      final claimed = <int>{};
+      // Pass 1: exact id matches.
+      for (var i = 0; i < profile.monitors.length; i++) {
+        final pe = profile.monitors[i];
+        if (pe.id.isEmpty) continue;
+        for (var j = 0; j < live.length; j++) {
+          if (claimed.contains(j)) continue;
+          if (_matchesOutput(live[j].id, pe.id)) {
+            claimed.add(j);
+            profile.monitors[i] = pe.copyWith(
+              id: live[j].id,
+              manufacturer: live[j].manufacturer,
+              refresh: live[j].refresh,
+              modes: live[j].modes,
+            );
+            break;
+          }
+        }
+      }
+      // Pass 2: manufacturer fallback for entries that did not get an id
+      // hit. We have to rescan because pass 1 may have updated `id` fields
+      // we now want to skip.
+      for (var i = 0; i < profile.monitors.length; i++) {
+        final pe = profile.monitors[i];
+        // Skip entries that were already matched in pass 1 by checking
+        // whether their id is currently claimed.
+        final alreadyClaimed = live.indexWhere(
+                (m) => _matchesOutput(m.id, pe.id)) !=
+            -1 &&
+            claimed.contains(
+                live.indexWhere((m) => _matchesOutput(m.id, pe.id)));
+        if (alreadyClaimed) continue;
+        if (pe.manufacturer.isEmpty) continue;
+        for (var j = 0; j < live.length; j++) {
+          if (claimed.contains(j)) continue;
+          if (_matchesOutput(live[j].manufacturer, pe.manufacturer)) {
+            claimed.add(j);
+            profile.monitors[i] = pe.copyWith(
+              id: live[j].id,
+              manufacturer: live[j].manufacturer,
+              refresh: live[j].refresh,
+              modes: live[j].modes,
+            );
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -238,6 +286,14 @@ class KanshiController extends ChangeNotifier {
 
   void setActiveProfile(int index) {
     _activeProfileIndex = index;
+    // The "revert custom mode" memory is per-output but profile-scoped in
+    // intent — a custom mode applied while Profile A was active should not
+    // be revertable from Profile B (the prior mode belongs to A's idea of
+    // the layout). Drop the cache on every profile switch so the next
+    // revert call surfaces a clean error instead of restoring something
+    // surprising.
+    _lastModeBeforeCustom.clear();
+    _revertScheduler.cancelAll();
     notifyListeners();
   }
 
