@@ -116,37 +116,51 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
-      // Workspaces follow physical position **right-to-left** in fixed
-      // blocks of three: the rightmost screen owns 1/2/3, the next one to
-      // its left owns 4/5/6, and so on up to nine workspaces / three
-      // screens. With two screens this means workspaces 4-6 still anchor
-      // on the second monitor, so muscle memory like "Mod+6" lands on
-      // the same physical screen regardless of how many displays are
-      // attached.
-      const workspacesPerMonitor = 3;
-      final enabledMons = mons.where((m) => m.enabled).toList()
-        ..sort((a, b) => b.x.compareTo(a.x));
-      final assignments = <(int ws, String id)>[
-        for (var i = 0; i < enabledMons.length; i++)
-          for (var k = 0; k < workspacesPerMonitor; k++)
-            (i * workspacesPerMonitor + k + 1, enabledMons[i].id),
-      ];
-      // Pre-anchor each output on a high temporary workspace so Sway
-      // doesn't move the real low-numbered workspace onto the wrong
-      // output during the second pass.
-      final tmpBase = assignments.length + 1;
-      for (var i = 0; i < enabledMons.length; i++) {
-        final ws = tmpBase + i;
-        buffer.writeln(
-          "    exec swaymsg \"workspace $ws output '${enabledMons[i].id}'; "
-          "workspace $ws\"",
-        );
-      }
-      for (final (ws, id) in assignments) {
-        buffer.writeln(
-          "    exec swaymsg \"workspace $ws output '$id'; "
-          "workspace $ws\"",
-        );
+      // Workspaces are distributed **interleaved** by left-to-right
+      // position. With N enabled outputs ranked 0..N-1 from left to right,
+      // workspace `w` (1-indexed) lands on the monitor whose rank equals
+      // `(w - 1) mod N`. So two screens give the left one workspaces
+      // 1/3/5/7/9 and the right one 2/4/6/8; three screens give
+      // 1/4/7, 2/5/8, 3/6/9. The number-keys 1..9 thus walk left-to-right
+      // across the displays, looping back as you press higher numbers.
+      //
+      // Each monitor's rank defaults to its X-sorted index but can be
+      // overridden via `MonitorTileData.workspaceRank` — useful when the
+      // physical arrangement of identical monitors doesn't match what the
+      // user perceives as "screen 1 / 2 / 3". Overrides are persisted as
+      // `# kanshi_gui:rank '<id>'=<n>` comments below so they survive an
+      // app restart.
+      const maxWorkspaces = 9;
+      final enabledMons = mons.where((m) => m.enabled).toList();
+      final ranked = resolveWorkspaceRanks(enabledMons);
+      final n = ranked.length;
+      if (n > 0) {
+        for (final entry in ranked) {
+          if (entry.explicit) {
+            buffer.writeln(
+              "    # kanshi_gui:rank '${entry.id}'=${entry.rank}",
+            );
+          }
+        }
+        // Pre-anchor each monitor on a high temporary workspace before
+        // assigning the real low-numbered ones, so Sway doesn't move
+        // workspace 1 (and friends) to the wrong output mid-pass.
+        final tmpBase = maxWorkspaces + 1;
+        for (var i = 0; i < n; i++) {
+          final ws = tmpBase + i;
+          buffer.writeln(
+            "    exec swaymsg \"workspace $ws output '${ranked[i].id}'; "
+            "workspace $ws\"",
+          );
+        }
+        for (var ws = 1; ws <= maxWorkspaces; ws++) {
+          final rank = (ws - 1) % n;
+          final id = ranked[rank].id;
+          buffer.writeln(
+            "    exec swaymsg \"workspace $ws output '$id'; "
+            "workspace $ws\"",
+          );
+        }
       }
     }
 
@@ -229,4 +243,63 @@ class KanshiConfigWriter {
     final isInt = (hz - hz.round()).abs() < 0.01;
     return isInt ? hz.round().toString() : hz.toStringAsFixed(3);
   }
+}
+
+class WorkspaceRankEntry {
+  final String id;
+  final int rank;
+  final bool explicit;
+  const WorkspaceRankEntry(this.id, this.rank, this.explicit);
+}
+
+/// Resolves each enabled monitor to a unique 0..N-1 rank used for the
+/// interleaved workspace distribution. Explicit `workspaceRank` overrides
+/// win first (in X-ascending order on collision); remaining slots are
+/// filled by the still-unranked monitors in X-ascending order.
+///
+/// Returned list is ordered **by effective rank** — element at index `i`
+/// owns workspace `i+1`, `i+1+N`, `i+1+2N`, …
+List<WorkspaceRankEntry> resolveWorkspaceRanks(List<MonitorTileData> mons) {
+  if (mons.isEmpty) return const [];
+  final n = mons.length;
+  final byX = mons.toList()
+    ..sort((a, b) {
+      final byXCmp = a.x.compareTo(b.x);
+      if (byXCmp != 0) return byXCmp;
+      return a.id.compareTo(b.id);
+    });
+
+  final byRank = <int, MonitorTileData>{};
+  final explicit = <String>{};
+  // Pass 1: claim explicit ranks in X-order so collisions are resolved
+  // deterministically (leftmost wins).
+  final unranked = <MonitorTileData>[];
+  for (final m in byX) {
+    final r = m.workspaceRank;
+    if (r == null) {
+      unranked.add(m);
+      continue;
+    }
+    final clamped = r < 0 ? 0 : (r >= n ? n - 1 : r);
+    if (byRank.containsKey(clamped)) {
+      unranked.add(m);
+      continue;
+    }
+    byRank[clamped] = m;
+    explicit.add(m.id);
+  }
+  // Pass 2: fill the remaining ranks with the still-unranked monitors,
+  // taking the lowest free rank for the leftmost monitor.
+  var nextRank = 0;
+  for (final m in unranked) {
+    while (byRank.containsKey(nextRank)) {
+      nextRank++;
+    }
+    byRank[nextRank] = m;
+    nextRank++;
+  }
+  return [
+    for (var i = 0; i < n; i++)
+      WorkspaceRankEntry(byRank[i]!.id, i, explicit.contains(byRank[i]!.id)),
+  ];
 }

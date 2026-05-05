@@ -652,6 +652,58 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Workspace rank ─────────────────────────────────────────────────────
+
+  /// Set this monitor's left-to-right rank (0-indexed) for the
+  /// interleaved Sway workspace distribution. Pass `null` to clear the
+  /// override and fall back to the X-position derived rank. The change
+  /// is persisted in the kanshi config (as a `# kanshi_gui:rank` comment)
+  /// and a `kanshictl reload` is fired so the new workspace assignment
+  /// takes effect immediately.
+  Future<OpResult> setWorkspaceRank(String monitorId, int? rank) async {
+    if (_activeProfileIndex == null) {
+      return const OpResult.err('No active profile.');
+    }
+    final profile = _profiles[_activeProfileIndex!];
+    final mons = [...profile.monitors];
+    final idx = mons.indexWhere((m) => m.id == monitorId);
+    if (idx == -1) {
+      return OpResult.err('Output $monitorId not found in active profile.');
+    }
+    final enabledCount = mons.where((m) => m.enabled).length;
+    if (rank != null && (rank < 0 || rank >= enabledCount)) {
+      return OpResult.err(
+          'Workspace position must be between 1 and $enabledCount.');
+    }
+    // If another monitor already holds this rank, swap with it so all
+    // ranks stay unique. Without the swap the writer's collision-resolver
+    // would silently demote the other monitor to a derived rank, which is
+    // surprising — explicit swap mirrors what the user likely meant.
+    if (rank != null) {
+      final clash = mons.indexWhere(
+        (m) => m.id != monitorId && m.workspaceRank == rank,
+      );
+      if (clash != -1) {
+        mons[clash] = mons[clash].copyWith(
+          workspaceRank: mons[idx].workspaceRank,
+        );
+      }
+    }
+    mons[idx] = mons[idx].copyWith(workspaceRank: rank);
+    _profiles[_activeProfileIndex!] =
+        Profile(name: profile.name, monitors: mons);
+    _scheduleSave();
+    try {
+      await monitors.restartCompositorProfileApply();
+    } catch (_) {/* config still updated; reload best-effort. */}
+    notifyListeners();
+    return OpResult.ok(
+      rank == null
+          ? '$monitorId workspace position cleared.'
+          : '$monitorId now at workspace position ${rank + 1}.',
+    );
+  }
+
   // ── Mirror state ───────────────────────────────────────────────────────
 
   /// Toggle the mirror relationship of [destId]: pass [srcId] to make

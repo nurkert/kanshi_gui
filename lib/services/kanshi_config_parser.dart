@@ -14,6 +14,10 @@ class KanshiConfigParser {
 
   static List<Profile> parse(String content) {
     final profiles = <Profile>[];
+    // Rank annotations live inside `# kanshi_gui:rank …` comments, so
+    // pull them off the raw content before the comment stripper drops
+    // them. Keyed by profile name → output id → rank.
+    final rankByProfile = _extractRankComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -59,14 +63,73 @@ class KanshiConfigParser {
       }
 
       final blockText = block.toString();
+      final ranks = rankByProfile[header] ?? const <String, int>{};
       profiles.add(Profile(
         name: header,
-        monitors: _applyMirrorExecs(_parseOutputs(blockText), blockText),
+        monitors: _applyRanks(
+          _applyMirrorExecs(_parseOutputs(blockText), blockText),
+          ranks,
+        ),
       ));
       i = j + 1;
     }
 
     return profiles;
+  }
+
+  /// Applies the per-profile rank map captured before comment-stripping.
+  static List<MonitorTileData> _applyRanks(
+    List<MonitorTileData> outputs,
+    Map<String, int> ranks,
+  ) {
+    if (ranks.isEmpty) return outputs;
+    return [
+      for (final o in outputs)
+        ranks.containsKey(o.id) ? o.copyWith(workspaceRank: ranks[o.id]) : o,
+    ];
+  }
+
+  /// Walks the raw config text and pulls `# kanshi_gui:rank '<id>'=<n>`
+  /// annotations out of each profile body. Returns a map
+  /// profile-name → output-id → rank.
+  static Map<String, Map<String, int>> _extractRankComments(String content) {
+    final out = <String, Map<String, int>>{};
+    final rankLine = RegExp(
+      r"^\s*#\s*kanshi_gui:rank\s+'([^']+)'\s*=\s*(\d+)\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      final line = raw;
+      // Detect profile header on this line (with or without inline brace).
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(line.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(line, '{') - _countChar(line, '}');
+          if (depth == 0 && line.contains('{')) {
+            // Single-line `profile X {}` — close immediately.
+            currentProfile = null;
+          }
+          continue;
+        }
+      } else {
+        final m = rankLine.firstMatch(line);
+        if (m != null) {
+          final id = m.group(1)!;
+          final r = int.tryParse(m.group(2)!);
+          if (r != null) {
+            (out[currentProfile] ??= <String, int>{})[id] = r;
+          }
+        }
+        depth += _countChar(line, '{') - _countChar(line, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
   }
 
   /// Second-pass enrichment: extracts `exec wl-mirror …` directives from

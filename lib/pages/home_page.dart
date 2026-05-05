@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
@@ -315,6 +316,15 @@ class _HomePageState extends State<HomePage>
                                           m.mirrorOf == null)
                                       .toList()
                                   : const <MonitorTileData>[];
+                              final enabledMons = c.activeMonitors
+                                  .where((m) => m.enabled)
+                                  .toList();
+                              final ranks =
+                                  resolveWorkspaceRanks(enabledMons);
+                              final rankIdx = ranks
+                                  .indexWhere((e) => e.id == tile.id);
+                              final rankEntry =
+                                  rankIdx >= 0 ? ranks[rankIdx] : null;
                               return MonitorTile(
                                 key: ValueKey(tile.id),
                                 data: tile,
@@ -368,6 +378,13 @@ class _HomePageState extends State<HomePage>
                                     ? (destId) async => _toast(
                                         await c.setMirror(destId, null))
                                     : null,
+                                workspacePositionCount: enabledMons.length,
+                                workspacePositionEffective:
+                                    rankEntry?.rank,
+                                workspacePositionExplicit:
+                                    rankEntry?.explicit ?? false,
+                                onSetWorkspaceRank: (r) async => _toast(
+                                    await c.setWorkspaceRank(tile.id, r)),
                               );
                             }),
                           ],

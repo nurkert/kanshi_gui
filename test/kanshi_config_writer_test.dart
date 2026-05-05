@@ -15,6 +15,7 @@ MonitorTileData _mon({
   int rotation = 0,
   double refresh = 60,
   String? mirrorOf,
+  int? workspaceRank,
 }) {
   return MonitorTileData(
     id: id,
@@ -30,6 +31,7 @@ MonitorTileData _mon({
     orientation: w >= h ? 'landscape' : 'portrait',
     enabled: enabled,
     mirrorOf: mirrorOf,
+    workspaceRank: workspaceRank,
   );
 }
 
@@ -80,7 +82,7 @@ void main() {
       expect(out, contains("current_kanshi_profile"));
     });
 
-    test('numbers workspaces right-to-left in fixed blocks of three', () {
+    test('interleaves workspaces left-to-right across three monitors', () {
       final p = Profile(
         name: 'Triple',
         monitors: [
@@ -93,20 +95,19 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      // Rightmost screen R owns workspaces 1-3, M owns 4-6, L owns 7-9.
-      for (final ws in [1, 2, 3]) {
-        expect(out, contains("workspace $ws output 'R'"));
+      // Leftmost L owns 1/4/7, middle M owns 2/5/8, rightmost R owns 3/6/9.
+      for (final ws in [1, 4, 7]) {
+        expect(out, contains("workspace $ws output 'L'"));
       }
-      for (final ws in [4, 5, 6]) {
+      for (final ws in [2, 5, 8]) {
         expect(out, contains("workspace $ws output 'M'"));
       }
-      for (final ws in [7, 8, 9]) {
-        expect(out, contains("workspace $ws output 'L'"));
+      for (final ws in [3, 6, 9]) {
+        expect(out, contains("workspace $ws output 'R'"));
       }
     });
 
-    test('two-monitor layout still parks workspaces 4-6 on the second screen',
-        () {
+    test('two-monitor layout interleaves odd/even', () {
       final p = Profile(
         name: 'Pair',
         monitors: [
@@ -118,11 +119,55 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      // Right screen: 1-3, Left screen: 4-6.
-      expect(out, contains("workspace 1 output 'Right'"));
-      expect(out, contains("workspace 3 output 'Right'"));
-      expect(out, contains("workspace 4 output 'Left'"));
-      expect(out, contains("workspace 6 output 'Left'"));
+      // Left screen: 1/3/5/7/9, Right screen: 2/4/6/8.
+      for (final ws in [1, 3, 5, 7, 9]) {
+        expect(out, contains("workspace $ws output 'Left'"));
+      }
+      for (final ws in [2, 4, 6, 8]) {
+        expect(out, contains("workspace $ws output 'Right'"));
+      }
+    });
+
+    test('explicit workspaceRank overrides X-derived rank', () {
+      final p = Profile(
+        name: 'Override',
+        monitors: [
+          // Physically L is at x=0, R is at x=1920. Without override the
+          // left screen would own odd workspaces. We pin L to rank 1
+          // (right slot) so R becomes rank 0 and owns the odds.
+          _mon(id: 'L', x: 0, workspaceRank: 1),
+          _mon(id: 'R', x: 1920),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      expect(out, contains("# kanshi_gui:rank 'L'=1"));
+      expect(out, contains("workspace 1 output 'R'"));
+      expect(out, contains("workspace 2 output 'L'"));
+      expect(out, contains("workspace 3 output 'R'"));
+      expect(out, contains("workspace 4 output 'L'"));
+    });
+
+    test('round-trips workspaceRank through writer → parser', () {
+      final p = Profile(
+        name: 'Roundtrip',
+        monitors: [
+          _mon(id: 'A', x: 0, workspaceRank: 2),
+          _mon(id: 'B', x: 1920),
+          _mon(id: 'C', x: 3840, workspaceRank: 0),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      final reparsed = KanshiConfigParser.parse(rendered).single.monitors;
+      final a = reparsed.firstWhere((m) => m.id == 'A');
+      final c = reparsed.firstWhere((m) => m.id == 'C');
+      expect(a.workspaceRank, equals(2));
+      expect(c.workspaceRank, equals(0));
     });
   });
 

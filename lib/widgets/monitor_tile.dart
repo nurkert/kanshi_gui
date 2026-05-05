@@ -55,6 +55,21 @@ class MonitorTile extends StatefulWidget {
   /// tile, but here we are the source — so we need a callback that names
   /// the destination explicitly.
   final void Function(String destId)? onStopMirroredBy;
+  /// Number of enabled outputs in the active profile. Determines the
+  /// number of choices in the "Workspace position" submenu (1..N).
+  /// 0 means the menu entry is hidden.
+  final int workspacePositionCount;
+  /// 0-indexed effective rank of this monitor in the active profile's
+  /// workspace distribution (i.e. the rank actually used by the writer
+  /// after collision resolution). Highlights the current entry in the
+  /// submenu and is the value reported when no override is set.
+  final int? workspacePositionEffective;
+  /// True when the user has set an explicit override for this monitor —
+  /// shown in the menu so they know it differs from the auto-derived
+  /// rank, and lets them clear the override via "Auto (left-to-right)".
+  final bool workspacePositionExplicit;
+  /// Pass the new 0-indexed rank or `null` to clear the override.
+  final void Function(int? rank)? onSetWorkspaceRank;
 
   const MonitorTile({
     super.key,
@@ -83,6 +98,10 @@ class MonitorTile extends StatefulWidget {
     this.mirrorSources = const [],
     this.mirroredBy = const [],
     this.onStopMirroredBy,
+    this.workspacePositionCount = 0,
+    this.workspacePositionEffective,
+    this.workspacePositionExplicit = false,
+    this.onSetWorkspaceRank,
   });
 
   @override
@@ -356,6 +375,48 @@ class _MonitorTileState extends State<MonitorTile> {
                           ),
                       ],
                       child: const Text('Mirror onto…'),
+                    ),
+                  if (widget.onSetWorkspaceRank != null &&
+                      widget.workspacePositionCount > 1 &&
+                      widget.data.enabled &&
+                      !isMirrorDestination)
+                    SubmenuButton(
+                      leadingIcon: const Icon(Icons.tag, size: 18),
+                      menuChildren: [
+                        MenuItemButton(
+                          onPressed: () =>
+                              widget.onSetWorkspaceRank!.call(null),
+                          leadingIcon: Icon(
+                            widget.workspacePositionExplicit
+                                ? Icons.auto_awesome
+                                : Icons.check,
+                            size: 18,
+                          ),
+                          child: const Text('Auto (left-to-right)'),
+                        ),
+                        for (var i = 0;
+                            i < widget.workspacePositionCount;
+                            i++)
+                          MenuItemButton(
+                            onPressed: () =>
+                                widget.onSetWorkspaceRank!.call(i),
+                            leadingIcon: Icon(
+                              widget.workspacePositionEffective == i &&
+                                      widget.workspacePositionExplicit
+                                  ? Icons.check
+                                  : Icons.tag,
+                              size: 18,
+                            ),
+                            child: Text('Position ${i + 1}'),
+                          ),
+                      ],
+                      child: Text(
+                        widget.workspacePositionEffective == null
+                            ? 'Workspace position'
+                            : 'Workspace position '
+                                '(${widget.workspacePositionEffective! + 1}'
+                                '${widget.workspacePositionExplicit ? '' : ' auto'})',
+                      ),
                     ),
                   if (canChangeMode && widget.data.modes.isNotEmpty)
                     SubmenuButton(

@@ -21,6 +21,12 @@ class MonitorTileData {
   /// scale / transform from the target, so this monitor's own
   /// position/mode fields are advisory only while the mirror is active.
   final String? mirrorOf;
+  /// Optional 0-indexed left-to-right rank that overrides the X-position
+  /// derived rank used by the Sway workspace-distribution pass. `null`
+  /// means "derive from X". Persisted in the kanshi config as a
+  /// `# kanshi_gui:rank '<id>'=<n>` comment so the override survives an
+  /// app restart and external `kanshictl reload` invocations.
+  final int? workspaceRank;
 
   MonitorTileData({
     required this.id,
@@ -37,6 +43,7 @@ class MonitorTileData {
     this.modes = const [],
     this.enabled = true,
     this.mirrorOf,
+    this.workspaceRank,
   });
 
   MonitorTileData copyWith({
@@ -54,6 +61,7 @@ class MonitorTileData {
     List<MonitorMode>? modes,
     bool? enabled,
     Object? mirrorOf = _sentinel,
+    Object? workspaceRank = _sentinel,
   }) {
     return MonitorTileData(
       id: id ?? this.id,
@@ -75,6 +83,9 @@ class MonitorTileData {
       mirrorOf: identical(mirrorOf, _sentinel)
           ? this.mirrorOf
           : mirrorOf as String?,
+      workspaceRank: identical(workspaceRank, _sentinel)
+          ? this.workspaceRank
+          : workspaceRank as int?,
     );
   }
 }
