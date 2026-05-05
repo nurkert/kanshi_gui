@@ -39,12 +39,18 @@ class FakeProcessRunner implements ProcessRunner {
   Future<bool> exists(String executable) async => installed.contains(executable);
 
   /// Per-key streams that tests can push lines into. Key format matches
-  /// [run]: `executable arg1 arg2 …` joined by spaces.
+  /// [run]: `executable arg1 arg2 …` joined by spaces. A closed controller
+  /// is replaced on the next access — without this the MirrorRunner's
+  /// respawn loop would attach a fresh listener to an already-closed
+  /// controller and fire onDone immediately, causing runaway respawns.
   final Map<String, StreamController<String>> _streamControllers = {};
 
   StreamController<String> openStream(String key) {
-    return _streamControllers.putIfAbsent(
-        key, () => StreamController<String>.broadcast());
+    final existing = _streamControllers[key];
+    if (existing != null && !existing.isClosed) return existing;
+    final fresh = StreamController<String>.broadcast();
+    _streamControllers[key] = fresh;
+    return fresh;
   }
 
   @override
@@ -57,6 +63,9 @@ class FakeProcessRunner implements ProcessRunner {
       lines: ctl.stream,
       kill: () async {
         if (!ctl.isClosed) await ctl.close();
+        // Drop the closed controller so the next [stream] / [openStream]
+        // call gets a fresh one, mirroring the way `Process.start` returns
+        // a fresh process with its own pipes each time.
         _streamControllers.remove(key);
       },
     );
