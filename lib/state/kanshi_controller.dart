@@ -60,6 +60,14 @@ class KanshiController extends ChangeNotifier {
   /// picked profile A on purpose doesn't get nagged into switching back.
   DateTime? _lastManualProfileSwitchAt;
   static const Duration _suggestionCooldown = Duration(seconds: 30);
+
+  /// Undo/redo history. Each entry is a deep snapshot of `_profiles` and
+  /// the active index taken just before a mutation. The stacks are LIFO;
+  /// pushing onto undo clears redo, undoing pops onto redo, redoing pops
+  /// onto undo. Capped at [_historyCap] entries to keep memory bounded.
+  final List<_HistoryEntry> _undoStack = [];
+  final List<_HistoryEntry> _redoStack = [];
+  static const int _historyCap = 30;
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
   final List<ProcessStream> _identifyBanners = [];
@@ -114,6 +122,17 @@ class KanshiController extends ChangeNotifier {
       activeProfile?.monitors ?? const [];
   bool get isApplyingBatch => _isApplyingBatch;
   bool get supportsLiveApply => monitors.isLive;
+  /// True when there's a snapshot to roll back to via [undo].
+  bool get canUndo => _undoStack.isNotEmpty;
+  /// True when [redo] has a snapshot to replay.
+  bool get canRedo => _redoStack.isNotEmpty;
+  /// Human-readable label of the most recent undoable mutation, or null
+  /// when the stack is empty. Used by the UI for tooltips like
+  /// "Undo: toggle DP-1".
+  String? get nextUndoLabel =>
+      _undoStack.isEmpty ? null : _undoStack.last.label;
+  String? get nextRedoLabel =>
+      _redoStack.isEmpty ? null : _redoStack.last.label;
   bool get supportsMirror => monitors.supportsMirror;
   List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
 
@@ -368,7 +387,94 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Snapshot the current profile state onto the undo stack so the
+  /// matching mutation can be rolled back. Pass [overrides] when the
+  /// "before" state isn't simply the current state — e.g. a drag has
+  /// already mutated the active profile to mid-drag positions and we
+  /// want the snapshot to reflect the pre-drag rollback. Pushing also
+  /// clears the redo stack: a fresh mutation invalidates any prior
+  /// "forward" history.
+  void _pushHistory(
+    String label, {
+    Map<String, MonitorTileData>? overrides,
+  }) {
+    final snap = <Profile>[];
+    for (var i = 0; i < _profiles.length; i++) {
+      final p = _profiles[i];
+      final mons = [...p.monitors];
+      if (i == _activeProfileIndex && overrides != null) {
+        for (var j = 0; j < mons.length; j++) {
+          final ov = overrides[mons[j].id];
+          if (ov != null) mons[j] = ov;
+        }
+      }
+      snap.add(Profile(name: p.name, monitors: mons));
+    }
+    _undoStack.add(_HistoryEntry(
+      profiles: snap,
+      activeIndex: _activeProfileIndex,
+      label: label,
+    ));
+    while (_undoStack.length > _historyCap) {
+      _undoStack.removeAt(0);
+    }
+    _redoStack.clear();
+  }
+
+  /// Reverts the most recent mutation by replacing `_profiles` and the
+  /// active index with the top of the undo stack, pushing the current
+  /// state onto the redo stack so it can be replayed via [redo].
+  /// Schedules a save and reload so the compositor catches up.
+  Future<OpResult> undo() async {
+    if (_undoStack.isEmpty) return const OpResult.err('Nothing to undo.');
+    final entry = _undoStack.removeLast();
+    _redoStack.add(_currentSnapshot(entry.label));
+    while (_redoStack.length > _historyCap) {
+      _redoStack.removeAt(0);
+    }
+    _restoreSnapshot(entry);
+    return OpResult.ok('Undone: ${entry.label}');
+  }
+
+  Future<OpResult> redo() async {
+    if (_redoStack.isEmpty) return const OpResult.err('Nothing to redo.');
+    final entry = _redoStack.removeLast();
+    _undoStack.add(_currentSnapshot(entry.label));
+    while (_undoStack.length > _historyCap) {
+      _undoStack.removeAt(0);
+    }
+    _restoreSnapshot(entry);
+    return OpResult.ok('Redone: ${entry.label}');
+  }
+
+  _HistoryEntry _currentSnapshot(String label) => _HistoryEntry(
+        profiles: [
+          for (final p in _profiles)
+            Profile(name: p.name, monitors: [...p.monitors]),
+        ],
+        activeIndex: _activeProfileIndex,
+        label: label,
+      );
+
+  void _restoreSnapshot(_HistoryEntry entry) {
+    _profiles = [
+      for (final p in entry.profiles)
+        Profile(name: p.name, monitors: [...p.monitors]),
+    ];
+    _activeProfileIndex = entry.activeIndex;
+    // Cancel any in-flight drag — its rollback origin is no longer
+    // valid against the restored profile shape.
+    _cancelInFlightDrags();
+    _scheduleSave();
+    // ignore: discarded_futures
+    _reconcileMirrors();
+    notifyListeners();
+  }
+
   void setActiveProfile(int index) {
+    if (_activeProfileIndex != index) {
+      _pushHistory("activate '${_profiles[index].name}'");
+    }
     _activeProfileIndex = index;
     _lastManualProfileSwitchAt = DateTime.now();
     // A profile switch invalidates any in-flight drag — the layout it
@@ -399,6 +505,7 @@ class KanshiController extends ChangeNotifier {
     if (exists) {
       return const OpResult.err('Profile name already exists!');
     }
+    _pushHistory("rename '${_profiles[index].name}' → '$newName'");
     _profiles[index].name = newName;
     _scheduleSave();
     notifyListeners();
@@ -406,6 +513,7 @@ class KanshiController extends ChangeNotifier {
   }
 
   void deleteProfile(int index) {
+    _pushHistory("delete '${_profiles[index].name}'");
     if (_activeProfileIndex == index) _activeProfileIndex = null;
     _profiles.removeAt(index);
     _scheduleSave();
@@ -413,6 +521,7 @@ class KanshiController extends ChangeNotifier {
   }
 
   void createProfileFromCurrentSetup() {
+    _pushHistory('create profile');
     final newProfile = Profile(
       name: 'Current Setup',
       monitors: _currentMonitors.map((m) {
@@ -469,6 +578,12 @@ class KanshiController extends ChangeNotifier {
     final mons = [..._profiles[_activeProfileIndex!].monitors];
     final idx = mons.indexWhere((m) => m.id == id);
     if (idx == -1 || !mons[idx].enabled) return;
+    // Only the commit step is undoable. Mid-slider drags would otherwise
+    // pollute the undo stack with one entry per pixel, which makes the
+    // user-facing semantics of Ctrl+Z unintuitive.
+    if (committing) {
+      _pushHistory('scale $id to ${newScale.toStringAsFixed(2)}');
+    }
 
     final centre = mons[idx];
     for (var i = 0; i < mons.length; i++) {
@@ -502,6 +617,14 @@ class KanshiController extends ChangeNotifier {
     final mons = [..._profiles[_activeProfileIndex!].monitors];
     final idx = mons.indexWhere((m) => m.id == dragged.id);
     if (idx == -1 || !mons[idx].enabled) return;
+    // Push pre-drag state: snapshot reflects the rollback (what the
+    // user would see if they had not dragged) so undo restores their
+    // original layout, not the last mid-drag frame's position.
+    _pushHistory(
+      "move ${dragged.id}",
+      overrides:
+          rollbackTo != null ? {dragged.id: rollbackTo} : null,
+    );
     final session = _dragSessions[dragged.id];
     // Only enabled, non-mirrored monitors are real snap / overlap
     // targets — disabled tiles and mirror tiles are rendered parked
@@ -708,6 +831,7 @@ class KanshiController extends ChangeNotifier {
     final inactive = profile.monitors.where((m) => !m.enabled).toList()
       ..sort((a, b) => a.x.compareTo(b.x));
     if (active.isEmpty) return;
+    _pushHistory('rearrange layout');
 
     const spacing = 100.0;
     var currentX = 0.0;
@@ -751,6 +875,11 @@ class KanshiController extends ChangeNotifier {
       return OpResult.err(
           'Workspace position must be between 1 and $enabledCount.');
     }
+    _pushHistory(
+      rank == null
+          ? 'clear workspace rank for $monitorId'
+          : 'set $monitorId to workspace position ${rank + 1}',
+    );
     // If another monitor already holds this rank, swap with it so all
     // ranks stay unique. Without the swap the writer's collision-resolver
     // would silently demote the other monitor to a derived rank, which is
@@ -841,6 +970,9 @@ class KanshiController extends ChangeNotifier {
       }
     }
 
+    _pushHistory(srcId == null
+        ? 'stop $destId mirroring'
+        : 'mirror $destId onto $srcId');
     mons[destIdx] = mons[destIdx].copyWith(mirrorOf: srcId);
     _profiles[_activeProfileIndex!] = Profile(
       name: _profiles[_activeProfileIndex!].name,
@@ -960,6 +1092,7 @@ class KanshiController extends ChangeNotifier {
         _normalizeOutputId(m.id) == _normalizeOutputId(target) &&
         m.enabled == enabled);
     if (live) {
+      _pushHistory(enabled ? 'enable $id' : 'disable $id');
       mons[idx] = mons[idx].copyWith(enabled: enabled);
       _scheduleSave();
       notifyListeners();
@@ -1049,6 +1182,8 @@ class KanshiController extends ChangeNotifier {
     final rotation = mons[idx].rotation;
     final rotW = rotation % 180 == 0 ? mode.width : mode.height;
     final rotH = rotation % 180 == 0 ? mode.height : mode.width;
+    _pushHistory(
+        "set $id to ${mode.width.toInt()}x${mode.height.toInt()}@${_formatHz(mode.refresh)}");
     mons[idx] = mons[idx].copyWith(
       width: rotW,
       height: rotH,
@@ -1112,6 +1247,8 @@ class KanshiController extends ChangeNotifier {
       final idx = mons.indexWhere(
           (m) => _normalizeOutputId(m.id) == _normalizeOutputId(target));
       if (idx != -1) {
+        _pushHistory(
+            "custom mode for $id: ${w.toInt()}x${h.toInt()}@${_formatHz(hz)}");
         final rot = mons[idx].rotation;
         final rotW = rot % 180 == 0 ? w : h;
         final rotH = rot % 180 == 0 ? h : w;
@@ -1428,6 +1565,17 @@ class ProfileSuggestion {
     required this.confidence,
     required this.matchedOutputs,
     required this.totalOutputs,
+  });
+}
+
+class _HistoryEntry {
+  final List<Profile> profiles;
+  final int? activeIndex;
+  final String label;
+  const _HistoryEntry({
+    required this.profiles,
+    required this.activeIndex,
+    required this.label,
   });
 }
 
