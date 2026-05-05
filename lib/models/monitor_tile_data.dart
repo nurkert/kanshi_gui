@@ -2,6 +2,22 @@
 
 import 'monitor_mode.dart';
 
+/// One monitor tile in a profile.
+///
+/// **Coordinate spaces** — the snap engine, the layout writer and the
+/// Sway IPC apply path all assume the same convention; do not mix them:
+///
+/// - [x] / [y] are **logical** (post-scale) layout coordinates. They live
+///   in the same global Wayland layout space Sway exposes via its
+///   `output … position X Y` IPC, so a 4K display at scale 2.0 placed
+///   flush to the right of a 1080p panel sits at `x = 1920` (the logical
+///   extent of the 1080p neighbour), not `x = 3840`.
+/// - [width] / [height] are **physical** pixels — the raw mode dimensions
+///   of the panel. The kanshi config and `swaymsg output mode` both want
+///   the physical mode here. To get the logical extent at a given scale
+///   use `width / scale`, which is what the snap math, the bounding box
+///   helper and the destination filter all do.
+/// - [scale] is the per-output HiDPI scale factor (1.0 = 1×, 2.0 = 2×).
 class MonitorTileData {
   final String id;
   final String manufacturer; // Neuer Herstellerstring
