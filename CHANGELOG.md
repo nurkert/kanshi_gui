@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.1 — 2026-05-05
+
+### Changed
+
+- Saving the kanshi config is now crash-safe and keeps a rolling
+  history of the last 10 versions. Each save first snapshots the
+  current live config to `~/.config/kanshi/config.bak.<unix-ms>`,
+  then writes the new content to a temporary sibling and renames
+  it over the live file (atomic on POSIX). Older backups beyond the
+  newest 10 are pruned. Previously a single `config.bak` was
+  overwritten on every save and the live file was rewritten in
+  place, so a crash mid-write — or a writer regression — could
+  leave an unrecoverable half-written config and clobber the only
+  rollback point.
+- `restoreBackupAndApply` now picks the newest timestamped backup,
+  not a fixed `config.bak` path.
+
+### Internal
+
+- `ConfigService.backupPath` constructor argument renamed to
+  `backupPrefix`. The default value is unchanged
+  (`~/.config/kanshi/config.bak`), but new backups are written as
+  `<prefix>.<unix-ms>` instead of overwriting the prefix itself.
+
 ## 1.3.0 — 2026-05-05
 
 ### Added
