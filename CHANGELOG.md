@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.2 — 2026-05-05
+
+### Fixed
+
+- Subprocess calls (`swaymsg`, `wlr-randr`, `kanshictl`, …) can no
+  longer hang the apply pipeline indefinitely. `ProcessRunner.run`
+  now enforces a default 5-second timeout: if the child is still
+  alive when the timer fires it gets `SIGTERM`, then `SIGKILL`
+  500ms later, and the call returns a synthetic non-zero
+  `ProcessResult` whose `stderr` reads `"<exe>: timed out after 5s"`.
+  Streaming subscriptions (`swaymsg -t subscribe -m`) are
+  unaffected — they're long-running by design.
+
 ## 1.3.1 — 2026-05-05
 
 ### Changed
