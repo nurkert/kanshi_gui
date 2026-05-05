@@ -24,6 +24,15 @@ abstract class MonitorService {
   /// Human-readable label for the active backend (used in logs and UI).
   String get name;
 
+  /// Whether this backend supports the "mirror onto another output"
+  /// feature. Default: `false`. Sway-style backends override to `true`
+  /// because mirroring on Sway 1.x is implemented via the external
+  /// `wl-mirror` tool (see [MirrorRunner]); native `output mirror` IPC
+  /// is not available on Sway 1.11. wlr-randr-based compositors and the
+  /// noop backend leave this at `false` because there is no
+  /// general-purpose mirror primitive on the wlroots CLI surface.
+  bool get supportsMirror => false;
+
   Future<List<MonitorTileData>> getOutputs();
 
   Future<ProcessResult> enable(String outputId);

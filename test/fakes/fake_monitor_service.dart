@@ -17,6 +17,9 @@ class FakeMonitorService implements MonitorService {
   String get name => 'fake';
 
   @override
+  bool supportsMirror;
+
+  @override
   KanshiWriteOptions writeOptions;
 
   List<MonitorTileData> outputs;
@@ -31,6 +34,7 @@ class FakeMonitorService implements MonitorService {
 
   FakeMonitorService({
     this.isLive = true,
+    this.supportsMirror = false,
     this.writeOptions = KanshiWriteOptions.neutral,
     List<MonitorTileData>? outputs,
     ProcessResult? enableResult,
