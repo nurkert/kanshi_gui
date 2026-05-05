@@ -62,6 +62,22 @@ class _HomePageState extends State<HomePage>
         ),
       );
     };
+    c.onProfileSuggestion = (s) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(
+            "Setup matches profile '${s.profileName}' "
+            '(${s.matchedOutputs} of ${s.totalOutputs} outputs).',
+          ),
+          action: SnackBarAction(
+            label: 'Switch',
+            onPressed: () => c.setActiveProfile(s.profileIndex),
+          ),
+        ),
+      );
+    };
     if (c.supportsMirror) {
       // Cache the wl-mirror availability check so the menu wiring is sync.
       // ignore: discarded_futures

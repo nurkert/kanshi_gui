@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.6 — 2026-05-05
+
+### Added
+
+- Hotplug events now surface a "Setup matches profile X (N of M
+  outputs). Switch?" SnackBar when the connected output set fits a
+  non-active profile better than the currently active one. The
+  controller never auto-switches — kanshi already does its own
+  matching and we don't fight it — so the toast is purely
+  informational with a "Switch" action that activates the
+  suggestion. Suggestions are suppressed for 30 seconds after a
+  manual profile switch so the user isn't nagged into reverting
+  what they just chose. Confidence is `matchedScore /
+  max(profileEnabled, currentEnabled)`, where each match
+  contributes 1.0 (id-exact) or 0.7 (manufacturer-only fallback);
+  the default floor is 0.5.
+
 ## 1.3.5 — 2026-05-05
 
 ### Added
