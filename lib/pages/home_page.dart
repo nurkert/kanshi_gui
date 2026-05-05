@@ -28,6 +28,11 @@ class _HomePageState extends State<HomePage>
   bool _isSidebarOpen = false;
   final Map<String, MonitorTileData> _dragRollback = {};
   bool? _wlMirrorAvailable;
+  /// Last seen drag-cancel epoch — used to detect when the controller
+  /// rolled back an in-flight drag (hotplug, profile switch) so the
+  /// per-page `_dragRollback` map can be cleared. Otherwise abandoned
+  /// rollbacks would linger past their tile being re-instantiated.
+  int _lastSeenDragCancelEpoch = 0;
 
   KanshiController get c => widget.controller;
 
@@ -40,6 +45,8 @@ class _HomePageState extends State<HomePage>
     );
     _isSidebarOpen = c.activeProfileIndex == null;
     _iconController.value = _isSidebarOpen ? 1.0 : 0.0;
+    _lastSeenDragCancelEpoch = c.dragCancelEpoch;
+    c.addListener(_onControllerChanged);
     c.onHotplugToast = (msg) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -69,8 +76,21 @@ class _HomePageState extends State<HomePage>
 
   @override
   void dispose() {
+    c.removeListener(_onControllerChanged);
     _iconController.dispose();
     super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (c.dragCancelEpoch != _lastSeenDragCancelEpoch) {
+      _lastSeenDragCancelEpoch = c.dragCancelEpoch;
+      // Drop any rollbacks recorded against the cancelled drag — the
+      // controller has already restored the profile and the tile will
+      // detect the cancel via its own epoch check. Without this clear,
+      // a future drag-end against the same id could find a stale
+      // rollback from a long-cancelled session.
+      _dragRollback.clear();
+    }
   }
 
   void _toggleSidebar() {
@@ -385,6 +405,8 @@ class _HomePageState extends State<HomePage>
                                     rankEntry?.explicit ?? false,
                                 onSetWorkspaceRank: (r) async => _toast(
                                     await c.setWorkspaceRank(tile.id, r)),
+                                readDragCancelEpoch: () =>
+                                    c.dragCancelEpoch,
                               );
                             }),
                           ],
@@ -415,7 +437,7 @@ class _HomePageState extends State<HomePage>
 
   void _onDragStart(MonitorTileData original) {
     _dragRollback[original.id] = original;
-    c.beginDragSession(original.id);
+    c.beginDragSession(original.id, original);
   }
 
   void _onTileUpdate(MonitorTileData updated, DisplayLayout layout) {
