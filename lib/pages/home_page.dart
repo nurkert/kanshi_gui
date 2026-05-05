@@ -512,13 +512,59 @@ class _HomePageState extends State<HomePage>
   }
 
   void _onDragEnd(MonitorTileData tile) async {
-    final rollback = _dragRollback.remove(tile.id);
     final mons = c.activeMonitors;
     final idx = mons.indexWhere((m) => m.id == tile.id);
-    if (idx == -1) return;
+    if (idx == -1) {
+      _dragRollback.remove(tile.id);
+      return;
+    }
+    final dragged = mons[idx];
+    // Drag-to-mirror: if the dragged tile lands substantially on top of
+    // another enabled tile and the backend supports mirroring, ask the
+    // user whether they meant to drop-as-mirror instead of drop-as-move.
+    // The check runs *before* snap-and-commit so a "Mirror" answer can
+    // restore the original position cleanly via the rollback.
+    final mirrorTarget = c.supportsMirror && _wlMirrorAvailable == true
+        ? LayoutMath.detectMirrorDropTarget(dragged: dragged, all: mons)
+        : null;
+    if (mirrorTarget != null) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text("Mirror ${dragged.id} onto ${mirrorTarget.id}?"),
+          content: Text(
+            '${dragged.id} will display the same content as '
+            '${mirrorTarget.id}. Its position is locked to the source — '
+            'release the mirror via the three-dot menu when you want '
+            '${dragged.id} back as an independent screen.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Mirror'),
+            ),
+          ],
+        ),
+      );
+      if (confirm == true) {
+        // Roll back the drag-position write so the mirror takes over
+        // an unchanged layout, then set up the mirror.
+        final rollback = _dragRollback.remove(dragged.id);
+        if (rollback != null) c.updateMonitor(rollback);
+        c.endDragSession(dragged.id);
+        _toast(await c.setMirror(dragged.id, mirrorTarget.id));
+        return;
+      }
+    }
+    final rollback = _dragRollback.remove(tile.id);
     c.snapAndCommit(mons[idx], rollback);
     c.endDragSession(tile.id);
     final committed = c.activeMonitors.firstWhere((m) => m.id == tile.id);
     _toast(await c.pushLiveApply(committed));
   }
+
 }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.0 — 2026-05-05
+
+### Added
+
+- **Drag-to-mirror**: drop a monitor tile substantially on top of
+  another (≥70% area coverage) and a confirmation dialog asks
+  whether to set up a mirror. Confirming reverts the drag-position
+  and calls `setMirror`; declining continues with the regular
+  snap-and-commit position drag. The detection lives as a pure
+  geometry helper (`LayoutMath.detectMirrorDropTarget`) so it has
+  no extra coupling to the gesture pipeline; it runs only after
+  `onPanEnd` so the existing snap/alignment math is untouched
+  during the drag itself. Disabled tiles and mirror destinations
+  are skipped as drop targets — the latter are filtered out of the
+  layout entirely, so a drop on their phantom rect would feel
+  arbitrary. Available only on backends that support mirroring AND
+  when wl-mirror is installed; otherwise the menu-based
+  "Mirror onto…" path remains the only way in.
+
 ## 1.3.6 — 2026-05-05
 
 ### Added
