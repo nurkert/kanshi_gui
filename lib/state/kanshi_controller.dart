@@ -408,9 +408,15 @@ class KanshiController extends ChangeNotifier {
     final idx = mons.indexWhere((m) => m.id == dragged.id);
     if (idx == -1 || !mons[idx].enabled) return;
     final session = _dragSessions[dragged.id];
+    // Only enabled monitors are real snap / overlap targets — disabled
+    // tiles are rendered parked beside the active cluster, not at their
+    // stored coordinates, so snapping or overlap-checking against their
+    // raw position would offer phantom targets the user cannot see.
+    final activeOnly = mons.where((m) => m.enabled).toList();
+    final activeIdx = activeOnly.indexWhere((m) => m.id == dragged.id);
     final result = LayoutMath.snapToEdges(
       mons[idx],
-      mons,
+      activeOnly,
       snapThreshold,
       yAlignmentEnabled:
           (session?.yEscapeCount ?? 0) < _alignmentEscapeLimit,
@@ -418,7 +424,9 @@ class KanshiController extends ChangeNotifier {
           (session?.xEscapeCount ?? 0) < _alignmentEscapeLimit,
     );
     mons[idx] = result.tile;
-    if (LayoutMath.hasOverlap(result.tile, mons, idx) && rollbackTo != null) {
+    activeOnly[activeIdx] = result.tile;
+    if (LayoutMath.hasOverlap(result.tile, activeOnly, activeIdx) &&
+        rollbackTo != null) {
       mons[idx] = rollbackTo;
     }
     _profiles[_activeProfileIndex!] =
@@ -473,7 +481,10 @@ class KanshiController extends ChangeNotifier {
       }
       return;
     }
-    final mons = _profiles[_activeProfileIndex!].monitors;
+    final mons = _profiles[_activeProfileIndex!]
+        .monitors
+        .where((m) => m.enabled)
+        .toList();
     final session = _dragSessions[dragged.id];
     final result = LayoutMath.snapToEdges(
       dragged,

@@ -205,6 +205,48 @@ void main() {
     });
   });
 
+  group('LayoutMath.computeDisplay disabled-tile parking', () {
+    test('parks a disabled monitor to the right of the active cluster', () {
+      // Sway leaves disabled outputs at (0, 0). Without parking they would
+      // render on top of the monitor that actually occupies origin.
+      final active = _mon(id: 'A', x: 0, y: 0); // 1920×1080
+      final off = _mon(id: 'B', x: 0, y: 0, enabled: false);
+      final l = LayoutMath.computeDisplay([active, off], const Size(800, 600));
+      final aTile = l.displayMonitors.firstWhere((m) => m.id == 'A');
+      final bTile = l.displayMonitors.firstWhere((m) => m.id == 'B');
+      // Disabled tile must be entirely to the right of the active tile.
+      expect(bTile.x, greaterThan(aTile.x + aTile.width),
+          reason: 'Disabled tile must not overlap the active cluster.');
+    });
+
+    test('stacks multiple disabled monitors vertically in the park lane', () {
+      final active = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 0, y: 0, enabled: false);
+      final c = _mon(id: 'C', x: 0, y: 0, enabled: false);
+      final l = LayoutMath.computeDisplay(
+          [active, b, c], const Size(800, 600));
+      final bTile = l.displayMonitors.firstWhere((m) => m.id == 'B');
+      final cTile = l.displayMonitors.firstWhere((m) => m.id == 'C');
+      // Same park column.
+      expect(cTile.x, equals(bTile.x));
+      // C below B (no overlap, with a gap).
+      expect(cTile.y, greaterThan(bTile.y + bTile.height));
+    });
+
+    test('all-disabled layouts keep the original positions', () {
+      // Nothing to park beside — fall back to honouring stored coords so
+      // the user still sees their last known layout instead of a single
+      // collapsed tile.
+      final a = _mon(id: 'A', x: 0, y: 0, enabled: false);
+      final b = _mon(id: 'B', x: 1920, y: 0, enabled: false);
+      final l = LayoutMath.computeDisplay([a, b], const Size(800, 600));
+      // Two distinct tile positions (not stacked at origin).
+      final aTile = l.displayMonitors.firstWhere((m) => m.id == 'A');
+      final bTile = l.displayMonitors.firstWhere((m) => m.id == 'B');
+      expect(bTile.x, greaterThan(aTile.x));
+    });
+  });
+
   group('LayoutMath.boundingBox', () {
     test('returns Rect.zero for empty input', () {
       expect(LayoutMath.boundingBox(const []), equals(Rect.zero));
