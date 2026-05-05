@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
@@ -273,14 +274,25 @@ class _HomePageState extends State<HomePage>
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: c,
-      builder: (context, _) {
-        return AppMenu(
-          controller: c,
-          onShowLogs: _showLogs,
-          onShowHelp: _showHelp,
-          child: Scaffold(
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
+            _toast(_awaitOp(c.undo())),
+        const SingleActivator(LogicalKeyboardKey.keyZ,
+            control: true, shift: true): () => _toast(_awaitOp(c.redo())),
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () =>
+            _toast(_awaitOp(c.redo())),
+      },
+      child: Focus(
+        autofocus: true,
+        child: ListenableBuilder(
+          listenable: c,
+          builder: (context, _) {
+            return AppMenu(
+              controller: c,
+              onShowLogs: _showLogs,
+              onShowHelp: _showHelp,
+              child: Scaffold(
             appBar: AppBar(
               leading: IconButton(
                 icon: AnimatedIcon(
@@ -454,8 +466,18 @@ class _HomePageState extends State<HomePage>
             ),
           ),
         );
-      },
-    );
+            },
+          ),
+        ),
+      );
+  }
+
+  /// Wraps an async OpResult so `_toast` can be called synchronously
+  /// from a CallbackShortcuts binding. The binding doesn't await, so we
+  /// just kick off the future and toast its result when it lands.
+  OpResult _awaitOp(Future<OpResult> op) {
+    op.then(_toast).catchError((Object _) {/* ignore */});
+    return const OpResult.ok();
   }
 
   void _onDragStart(MonitorTileData original) {

@@ -62,13 +62,22 @@ class FakeMonitorService implements MonitorService {
   @override
   Future<ProcessResult> enable(String outputId) async {
     calls.add('enable $outputId');
+    if (enableResult.exitCode == 0) _setEnabled(outputId, true);
     return enableResult;
   }
 
   @override
   Future<ProcessResult> disable(String outputId) async {
     calls.add('disable $outputId');
+    if (disableResult.exitCode == 0) _setEnabled(outputId, false);
     return disableResult;
+  }
+
+  void _setEnabled(String id, bool enabled) {
+    outputs = [
+      for (final m in outputs)
+        if (m.id == id) m.copyWith(enabled: enabled) else m,
+    ];
   }
 
   @override
