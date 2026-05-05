@@ -29,7 +29,7 @@ MonitorTileData _mon({
 
 ConfigService _tmpConfig(String dir) => ConfigService(
       configPath: '$dir/c',
-      backupPath: '$dir/c.bak',
+      backupPrefix: '$dir/c.bak',
       writeOptions: KanshiWriteOptions.neutral,
     );
 

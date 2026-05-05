@@ -31,7 +31,7 @@ MonitorTileData _mon({
 Future<KanshiController> _ctrl() async {
   final cfg = ConfigService(
     configPath: '/tmp/kanshi_gui_test_${DateTime.now().microsecondsSinceEpoch}',
-    backupPath: '/tmp/kanshi_gui_test_bak_${DateTime.now().microsecondsSinceEpoch}',
+    backupPrefix: '/tmp/kanshi_gui_test_bak_${DateTime.now().microsecondsSinceEpoch}',
     writeOptions: KanshiWriteOptions.neutral,
   );
   final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);

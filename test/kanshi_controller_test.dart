@@ -42,7 +42,7 @@ MonitorTileData _mon({
 
 ConfigService _tmpConfig(Directory dir) => ConfigService(
       configPath: '${dir.path}/config',
-      backupPath: '${dir.path}/config.bak',
+      backupPrefix: '${dir.path}/config.bak',
       writeOptions: KanshiWriteOptions.neutral,
     );
 
@@ -495,7 +495,7 @@ void main() {
     // because the active backend is wlr-randr-style.
     final cfg = ConfigService(
       configPath: '${tmp.path}/c',
-      backupPath: '${tmp.path}/c.bak',
+      backupPrefix: '${tmp.path}/c.bak',
       writeOptions: KanshiWriteOptions.swayDefaults,
     );
     KanshiController(monitors: fake, config: cfg);
