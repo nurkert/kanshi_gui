@@ -28,7 +28,11 @@ class FakeProcessRunner implements ProcessRunner {
         fallback = fallback ?? ProcessResult(0, 0, '', '');
 
   @override
-  Future<ProcessResult> run(String executable, List<String> arguments) async {
+  Future<ProcessResult> run(
+    String executable,
+    List<String> arguments, {
+    Duration timeout = ProcessRunner.defaultTimeout,
+  }) async {
     final invocation = [executable, ...arguments];
     calls.add(invocation);
     final key = invocation.join(' ');
