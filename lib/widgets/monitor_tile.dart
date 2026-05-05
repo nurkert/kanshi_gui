@@ -34,6 +34,16 @@ class MonitorTile extends StatefulWidget {
   final VoidCallback? onCustomMode;
   final VoidCallback? onCustomModeRevert;
   final int? identifyNumber;
+  /// When non-null the three-dot menu offers a "Mirror onto …" submenu
+  /// (and a "Stop mirroring" item if this tile already has [data.mirrorOf]
+  /// set). The HomePage only wires this up on backends that support
+  /// mirroring AND when wl-mirror is installed; otherwise it stays null
+  /// and the menu omits the mirror entries entirely.
+  final ValueChanged<String?>? onSetMirror;
+  /// Other monitors in the same profile that are valid mirror sources
+  /// (enabled, not themselves mirrors, and not this tile). Used to populate
+  /// the "Mirror onto …" submenu.
+  final List<MonitorTileData> mirrorSources;
 
   const MonitorTile({
     super.key,
@@ -58,6 +68,8 @@ class MonitorTile extends StatefulWidget {
     this.onCustomMode,
     this.onCustomModeRevert,
     this.identifyNumber,
+    this.onSetMirror,
+    this.mirrorSources = const [],
   });
 
   @override
@@ -95,15 +107,26 @@ class _MonitorTileState extends State<MonitorTile> {
         : widget.data.manufacturer;
 
     final isEnabled = widget.data.enabled;
-    final backgroundColor = isEnabled
-        ? (widget.exists
-            ? Colors.green.withValues(alpha: 0.3)
-            : Colors.red.withValues(alpha: 0.3))
-        : Colors.grey.withValues(alpha: 0.4);
-    final borderColor = isEnabled
-        ? (widget.exists ? Colors.greenAccent : Colors.redAccent)
-        : Colors.grey;
+    final isMirror = widget.data.mirrorOf != null;
+    // Mirror tiles get a cyan accent so the user can see at a glance that
+    // they are subordinate to another output. Drag/scale are also locked
+    // for them since their position/size are inherited from the source.
+    final backgroundColor = !isEnabled
+        ? Colors.grey.withValues(alpha: 0.4)
+        : isMirror
+            ? const Color(0xFF4FC3F7).withValues(alpha: 0.18)
+            : (widget.exists
+                ? Colors.green.withValues(alpha: 0.3)
+                : Colors.red.withValues(alpha: 0.3));
+    final borderColor = !isEnabled
+        ? Colors.grey
+        : isMirror
+            ? const Color(0xFF4FC3F7)
+            : (widget.exists ? Colors.greenAccent : Colors.redAccent);
     final textColor = isEnabled ? Colors.white : Colors.white70;
+    final canDrag = isEnabled && !isMirror;
+    final canResize = canDrag;
+    final canChangeMode = canDrag;
 
     return Positioned(
       left: position.dx,
@@ -113,8 +136,8 @@ class _MonitorTileState extends State<MonitorTile> {
       child: Stack(
         children: [
           GestureDetector(
-            onPanStart: isEnabled ? (_) => widget.onDragStart?.call() : null,
-            onPanUpdate: isEnabled
+            onPanStart: canDrag ? (_) => widget.onDragStart?.call() : null,
+            onPanUpdate: canDrag
                 ? (details) {
                     setState(() => position += details.delta);
                     widget.onUpdate(
@@ -125,8 +148,8 @@ class _MonitorTileState extends State<MonitorTile> {
                     );
                   }
                 : null,
-            onPanEnd: isEnabled ? (_) => widget.onDragEnd() : null,
-            onSecondaryTap: isEnabled
+            onPanEnd: canDrag ? (_) => widget.onDragEnd() : null,
+            onSecondaryTap: canDrag
                 ? () {
                     final newRotation =
                         (widget.data.rotation + 90) % 360;
@@ -151,6 +174,19 @@ class _MonitorTileState extends State<MonitorTile> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (isMirror)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              '⇄ Mirror of ${widget.data.mirrorOf}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF4FC3F7),
+                              ),
+                            ),
+                          ),
                         Flexible(
                           child: Text(
                             displayName,
@@ -183,49 +219,46 @@ class _MonitorTileState extends State<MonitorTile> {
               ),
             ),
           ),
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.resizeUpLeftDownRight,
-              child: GestureDetector(
-                onPanUpdate: isEnabled
-                    ? (details) {
-                        setState(() {
-                          tileWidth += details.delta.dx;
-                          tileHeight += details.delta.dy;
-                          if (tileWidth < 20) tileWidth = 20;
-                          if (tileHeight < 20) tileHeight = 20;
-                        });
-                        // Live update only — no snapping during the drag so
-                        // the user never feels glued to integer scales.
-                        final newScale = double.parse((widget.originalWidth /
-                                ((tileWidth) / widget.scaleFactor))
-                            .toStringAsFixed(2));
-                        widget.onScale?.call(newScale);
-                      }
-                    : null,
-                onPanEnd: isEnabled
-                    ? (_) {
-                        // Final commit — controller decides whether to
-                        // raster onto a snap value.
-                        final finalScale = double.parse((widget.originalWidth /
-                                ((tileWidth) / widget.scaleFactor))
-                            .toStringAsFixed(2));
-                        widget.onScaleCommit?.call(finalScale);
-                      }
-                    : null,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    border: Border.all(color: Colors.black),
+          if (canResize)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    setState(() {
+                      tileWidth += details.delta.dx;
+                      tileHeight += details.delta.dy;
+                      if (tileWidth < 20) tileWidth = 20;
+                      if (tileHeight < 20) tileHeight = 20;
+                    });
+                    // Live update only — no snapping during the drag so
+                    // the user never feels glued to integer scales.
+                    final newScale = double.parse((widget.originalWidth /
+                            ((tileWidth) / widget.scaleFactor))
+                        .toStringAsFixed(2));
+                    widget.onScale?.call(newScale);
+                  },
+                  onPanEnd: (_) {
+                    // Final commit — controller decides whether to
+                    // raster onto a snap value.
+                    final finalScale = double.parse((widget.originalWidth /
+                            ((tileWidth) / widget.scaleFactor))
+                        .toStringAsFixed(2));
+                    widget.onScaleCommit?.call(finalScale);
+                  },
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      border: Border.all(color: Colors.black),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
           if (widget.data.modes.isNotEmpty || widget.onToggleEnabled != null)
             Positioned(
               right: 0,
@@ -260,12 +293,40 @@ class _MonitorTileState extends State<MonitorTile> {
                             : 'Enable display',
                       ),
                     ),
-                  if (widget.data.modes.isNotEmpty)
+                  if (widget.onSetMirror != null && isMirror)
+                    MenuItemButton(
+                      onPressed: () => widget.onSetMirror!.call(null),
+                      leadingIcon: const Icon(Icons.link_off, size: 18),
+                      child: const Text('Stop mirroring'),
+                    ),
+                  if (widget.onSetMirror != null &&
+                      !isMirror &&
+                      widget.mirrorSources.isNotEmpty)
+                    SubmenuButton(
+                      leadingIcon:
+                          const Icon(Icons.compare_arrows, size: 18),
+                      menuChildren: [
+                        for (final src in widget.mirrorSources)
+                          MenuItemButton(
+                            onPressed: () =>
+                                widget.onSetMirror!.call(src.id),
+                            child: Text(
+                              src.manufacturer.isNotEmpty
+                                  ? '${src.id} (${src.manufacturer})'
+                                  : src.id,
+                            ),
+                          ),
+                      ],
+                      child: const Text('Mirror onto…'),
+                    ),
+                  if (canChangeMode && widget.data.modes.isNotEmpty)
                     SubmenuButton(
                       menuChildren: _buildModeMenuItems(),
                       child: const Text('Resolution / Hz'),
                     ),
-                  if (widget.onCustomMode != null || widget.onCustomModeRevert != null)
+                  if (canChangeMode &&
+                      (widget.onCustomMode != null ||
+                          widget.onCustomModeRevert != null))
                     SubmenuButton(
                       menuChildren: [
                         if (widget.onCustomMode != null)
