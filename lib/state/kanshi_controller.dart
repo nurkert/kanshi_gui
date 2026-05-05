@@ -431,11 +431,13 @@ class KanshiController extends ChangeNotifier {
     final idx = mons.indexWhere((m) => m.id == dragged.id);
     if (idx == -1 || !mons[idx].enabled) return;
     final session = _dragSessions[dragged.id];
-    // Only enabled monitors are real snap / overlap targets — disabled
-    // tiles are rendered parked beside the active cluster, not at their
-    // stored coordinates, so snapping or overlap-checking against their
-    // raw position would offer phantom targets the user cannot see.
-    final activeOnly = mons.where((m) => m.enabled).toList();
+    // Only enabled, non-mirrored monitors are real snap / overlap
+    // targets — disabled tiles and mirror tiles are rendered parked
+    // beside the active cluster, not at their stored coordinates, so
+    // snapping or overlap-checking against their raw position would
+    // offer phantom targets the user cannot see.
+    final activeOnly =
+        mons.where((m) => m.enabled && m.mirrorOf == null).toList();
     final activeIdx = activeOnly.indexWhere((m) => m.id == dragged.id);
     final result = LayoutMath.snapToEdges(
       mons[idx],
@@ -469,9 +471,13 @@ class KanshiController extends ChangeNotifier {
   void beginDragSession(String id) {
     _dragSessions[id] = _DragSession();
     if (_activeProfileIndex != null) {
+      // Pin against the truly-independent active cluster only — mirror
+      // tiles and disabled ones are parked, so pinning a bounding box
+      // that includes them would freeze the canvas around phantom
+      // positions.
       final mons = _profiles[_activeProfileIndex!]
           .monitors
-          .where((m) => m.enabled)
+          .where((m) => m.enabled && m.mirrorOf == null)
           .toList();
       if (mons.isNotEmpty) {
         _pinnedLayoutBounds = LayoutMath.boundingBox(mons);
@@ -506,7 +512,7 @@ class KanshiController extends ChangeNotifier {
     }
     final mons = _profiles[_activeProfileIndex!]
         .monitors
-        .where((m) => m.enabled)
+        .where((m) => m.enabled && m.mirrorOf == null)
         .toList();
     final session = _dragSessions[dragged.id];
     final result = LayoutMath.snapToEdges(

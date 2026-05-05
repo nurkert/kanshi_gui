@@ -13,6 +13,7 @@ MonitorTileData _mon({
   double scale = 1.0,
   bool enabled = true,
   double refresh = 60,
+  String? mirrorOf,
 }) {
   return MonitorTileData(
     id: id,
@@ -27,6 +28,7 @@ MonitorTileData _mon({
     resolution: '${w.toInt()}x${h.toInt()}',
     orientation: w >= h ? 'landscape' : 'portrait',
     enabled: enabled,
+    mirrorOf: mirrorOf,
   );
 }
 
@@ -231,6 +233,24 @@ void main() {
       expect(cTile.x, equals(bTile.x));
       // C below B (no overlap, with a gap).
       expect(cTile.y, greaterThan(bTile.y + bTile.height));
+    });
+
+    test('parks a mirror tile in its own lane between active and disabled',
+        () {
+      final active = _mon(id: 'A', x: 0, y: 0); // 1920×1080 at origin
+      final mirror = _mon(id: 'B', x: 0, y: 0, mirrorOf: 'A');
+      final off = _mon(id: 'C', x: 0, y: 0, enabled: false);
+      final l = LayoutMath.computeDisplay(
+          [active, mirror, off], const Size(800, 600));
+      final aTile = l.displayMonitors.firstWhere((m) => m.id == 'A');
+      final bTile = l.displayMonitors.firstWhere((m) => m.id == 'B');
+      final cTile = l.displayMonitors.firstWhere((m) => m.id == 'C');
+      // Mirror tile must sit between active and disabled, never overlap.
+      expect(bTile.x, greaterThan(aTile.x + aTile.width),
+          reason: 'Mirror tile parked to the right of the active cluster.');
+      expect(cTile.x, greaterThan(bTile.x + bTile.width),
+          reason:
+              'Disabled tile parked to the right of the mirror lane.');
     });
 
     test('all-disabled layouts keep the original positions', () {
