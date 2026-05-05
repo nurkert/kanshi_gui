@@ -273,6 +273,7 @@ class _HomePageState extends State<HomePage>
                         final layout = LayoutMath.computeDisplay(
                           c.activeMonitors,
                           Size(constraints.maxWidth, constraints.maxHeight),
+                          pinnedBounds: c.pinnedLayoutBounds,
                         );
                         return Stack(
                           children: [
@@ -283,7 +284,6 @@ class _HomePageState extends State<HomePage>
                                   painter: SnapLinesPainter(
                                     lines: c.activeSnapLines,
                                     layout: layout,
-                                    referenceMonitors: c.activeMonitors,
                                   ),
                                 ),
                               ),
@@ -380,10 +380,15 @@ class _HomePageState extends State<HomePage>
     final newWidth = wasLandscape != isLandscape ? old.height : old.width;
     final newHeight = wasLandscape != isLandscape ? old.width : old.height;
 
-    final minX = mons.map((m) => m.x).reduce((a, b) => a < b ? a : b);
-    final minY = mons.map((m) => m.y).reduce((a, b) => a < b ? a : b);
-    final newAbsX = minX + (updated.x - layout.offsetX) / layout.scaleFactor;
-    final newAbsY = minY + (updated.y - layout.offsetY) / layout.scaleFactor;
+    // Use the origin the *current* layout actually projected from. While a
+    // drag is in progress this is the pinned snapshot from drag-start, so
+    // the viewport↔abs round-trip stays self-consistent and the dragged
+    // tile follows the cursor pixel-perfectly even when its coordinates
+    // go negative.
+    final newAbsX = layout.originX +
+        (updated.x - layout.offsetX) / layout.scaleFactor;
+    final newAbsY = layout.originY +
+        (updated.y - layout.offsetY) / layout.scaleFactor;
     final newOrientation = newRot % 180 == 0 ? 'landscape' : 'portrait';
 
     final updatedAbs = MonitorTileData(
