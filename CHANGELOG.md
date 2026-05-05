@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.3 — 2026-05-05
+
+### Fixed
+
+- A monitor unplugged or replugged in the middle of a tile-drag no
+  longer leaves the canvas in a half-committed state. The controller
+  now exposes a monotonically increasing `dragCancelEpoch`; the
+  Sway-style hotplug listener and `setActiveProfile` bump it whenever
+  they invalidate in-flight drags. Each tile snapshots the epoch at
+  `onPanStart` and aborts subsequent `onPanUpdate` / `onPanEnd`
+  events when the value advances — the dragged tile snaps back to
+  its pre-drag origin and no commit is sent. The pre-drag rollback
+  is also stored inside the controller's drag session so the rollback
+  is applied to the active profile, not just the visual position.
+
 ## 1.3.2 — 2026-05-05
 
 ### Fixed

@@ -70,6 +70,12 @@ class MonitorTile extends StatefulWidget {
   final bool workspacePositionExplicit;
   /// Pass the new 0-indexed rank or `null` to clear the override.
   final void Function(int? rank)? onSetWorkspaceRank;
+  /// Reads the controller's current drag-cancel epoch. The tile snapshots
+  /// the value in `onPanStart` and treats any later update whose epoch
+  /// differs as cancelled (hotplug / profile-switch invalidated the
+  /// drag). Cancelled drags snap back to their pre-drag position
+  /// silently.
+  final int Function()? readDragCancelEpoch;
 
   const MonitorTile({
     super.key,
@@ -102,6 +108,7 @@ class MonitorTile extends StatefulWidget {
     this.workspacePositionEffective,
     this.workspacePositionExplicit = false,
     this.onSetWorkspaceRank,
+    this.readDragCancelEpoch,
   });
 
   @override
@@ -112,6 +119,12 @@ class _MonitorTileState extends State<MonitorTile> {
   late Offset position; // Position innerhalb der Stack (skaliert)
   late double tileWidth;
   late double tileHeight;
+  /// Cancel-epoch sampled at drag start. If the controller's epoch
+  /// advances mid-drag (hotplug / profile switch), the gesture is
+  /// invalidated and we snap back to [_dragOrigin].
+  int? _sessionEpoch;
+  /// The tile's `position` at drag start, used to roll back on cancel.
+  Offset? _dragOrigin;
 
   @override
   void initState() {
@@ -172,9 +185,19 @@ class _MonitorTileState extends State<MonitorTile> {
       child: Stack(
         children: [
           GestureDetector(
-            onPanStart: canDrag ? (_) => widget.onDragStart?.call() : null,
+            onPanStart: canDrag
+                ? (_) {
+                    _sessionEpoch = widget.readDragCancelEpoch?.call();
+                    _dragOrigin = position;
+                    widget.onDragStart?.call();
+                  }
+                : null,
             onPanUpdate: canDrag
                 ? (details) {
+                    if (_isDragCancelled()) {
+                      _abortDrag();
+                      return;
+                    }
                     setState(() => position += details.delta);
                     widget.onUpdate(
                       widget.data.copyWith(
@@ -184,7 +207,17 @@ class _MonitorTileState extends State<MonitorTile> {
                     );
                   }
                 : null,
-            onPanEnd: canDrag ? (_) => widget.onDragEnd() : null,
+            onPanEnd: canDrag
+                ? (_) {
+                    if (_isDragCancelled()) {
+                      _abortDrag();
+                      return;
+                    }
+                    _sessionEpoch = null;
+                    _dragOrigin = null;
+                    widget.onDragEnd();
+                  }
+                : null,
             onSecondaryTap: canDrag
                 ? () {
                     final newRotation =
@@ -451,6 +484,22 @@ class _MonitorTileState extends State<MonitorTile> {
         ],
       ),
     );
+  }
+
+  bool _isDragCancelled() {
+    final epoch = _sessionEpoch;
+    if (epoch == null) return false;
+    final current = widget.readDragCancelEpoch?.call();
+    return current != null && current != epoch;
+  }
+
+  void _abortDrag() {
+    final origin = _dragOrigin;
+    if (origin != null && mounted) {
+      setState(() => position = origin);
+    }
+    _sessionEpoch = null;
+    _dragOrigin = null;
   }
 
   List<Widget> _buildModeMenuItems() {
