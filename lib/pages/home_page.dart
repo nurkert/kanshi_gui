@@ -26,6 +26,7 @@ class _HomePageState extends State<HomePage>
   late final AnimationController _iconController;
   bool _isSidebarOpen = false;
   final Map<String, MonitorTileData> _dragRollback = {};
+  bool? _wlMirrorAvailable;
 
   KanshiController get c => widget.controller;
 
@@ -53,6 +54,16 @@ class _HomePageState extends State<HomePage>
         ),
       );
     };
+    if (c.supportsMirror) {
+      // Cache the wl-mirror availability check so the menu wiring is sync.
+      // ignore: discarded_futures
+      c.mirrorRunner.isAvailable().then((v) {
+        if (!mounted) return;
+        setState(() => _wlMirrorAvailable = v);
+      });
+    } else {
+      _wlMirrorAvailable = false;
+    }
   }
 
   @override
@@ -291,6 +302,19 @@ class _HomePageState extends State<HomePage>
                             ...layout.displayMonitors.map((tile) {
                               final original = c.activeMonitors
                                   .firstWhere((m) => m.id == tile.id);
+                              final mirrorEnabled = c.supportsMirror &&
+                                  (_wlMirrorAvailable ?? false);
+                              // Valid mirror sources: enabled, not the
+                              // tile itself, not already a mirror dst
+                              // (no chains).
+                              final sources = mirrorEnabled
+                                  ? c.activeMonitors
+                                      .where((m) =>
+                                          m.id != tile.id &&
+                                          m.enabled &&
+                                          m.mirrorOf == null)
+                                      .toList()
+                                  : const <MonitorTileData>[];
                               return MonitorTile(
                                 key: ValueKey(tile.id),
                                 data: tile,
@@ -332,6 +356,11 @@ class _HomePageState extends State<HomePage>
                                 onCustomModeRevert: () =>
                                     _revertCustomMode(tile.id),
                                 identifyNumber: c.identifyNumbers[tile.id],
+                                onSetMirror: mirrorEnabled
+                                    ? (srcId) async => _toast(
+                                        await c.setMirror(tile.id, srcId))
+                                    : null,
+                                mirrorSources: sources,
                               );
                             }),
                           ],
