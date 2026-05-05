@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2 — 2026-05-05
+
+### Changed
+
+- Mirror layout now collapses both physical screens into a single tile
+  in the GUI, with cyan accent + "⇄ Mirrors to <dst>" label, instead of
+  parking a separate ghost destination tile in a side lane. Two
+  monitors that show the exact same pixels were rendering as two
+  independent tiles, which suggested they had separate roles in the
+  layout — they don't. The "Stop mirroring to X" item moved to the
+  source tile's three-dot menu so the mirror can be released without
+  reaching for an absent destination tile.
+
 ## 1.2.1 — 2026-05-05
 
 ### Fixed

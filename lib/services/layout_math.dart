@@ -17,6 +17,13 @@ class DisplayLayout {
   final double originX;
   final double originY;
   final List<MonitorTileData> displayMonitors;
+  /// Reverse mirror map: for each output id that *is a mirror source*, the
+  /// list of destination output ids that mirror it. Empty when no mirror
+  /// is active. Mirror destinations themselves are absent from
+  /// [displayMonitors] entirely — physically both monitors show the same
+  /// pixels, so the layout shows them as a single tile (the source) with
+  /// a "→ Mirrors to A, B" badge.
+  final Map<String, List<String>> mirroredBy;
 
   const DisplayLayout({
     required this.scaleFactor,
@@ -25,6 +32,7 @@ class DisplayLayout {
     required this.originX,
     required this.originY,
     required this.displayMonitors,
+    this.mirroredBy = const {},
   });
 
   static const empty = DisplayLayout(
@@ -324,9 +332,30 @@ class LayoutMath {
   }) {
     if (mons.isEmpty) return DisplayLayout.empty;
 
+    // A mirror destination shows the exact same pixels as its source —
+    // rendering it as a separate tile would suggest two independent
+    // outputs in the layout. Drop destinations entirely; the source tile
+    // is rendered with a cyan accent + "Mirrors to X" badge instead.
+    // Build the reverse map of source → [destinations] so the UI knows
+    // which sources need that styling.
+    final mirroredBy = <String, List<String>>{};
+    for (final m in mons) {
+      final src = m.mirrorOf;
+      if (src == null) continue;
+      mirroredBy.putIfAbsent(src, () => <String>[]).add(m.id);
+    }
+    final visible =
+        mons.where((m) => m.mirrorOf == null).toList(growable: false);
+    if (visible.isEmpty) {
+      // Edge case: every active output is a mirror destination. That
+      // shouldn't normally happen (the controller rejects chains, so a
+      // source must exist somewhere) but guard against an empty layout.
+      return DisplayLayout.empty;
+    }
+
     // Stash original coords and overwrite x/y for disabled tiles with their
     // park positions so the projection treats them like any other tile.
-    final laidOut = _parkDisabledBeside(mons);
+    final laidOut = _parkDisabledBeside(visible);
 
     final double minX;
     final double minY;
@@ -375,75 +404,42 @@ class LayoutMath {
       originX: minX,
       originY: minY,
       displayMonitors: displayMonitors,
+      mirroredBy: mirroredBy,
     );
   }
 
-  /// Returns a copy of [mons] where the position of each non-independent
-  /// tile has been replaced with a virtual park position to the right of
-  /// the enabled, non-mirrored cluster.
-  ///
-  /// Layout-wise the result has three lanes side-by-side:
+  /// Returns a copy of [mons] where each disabled tile's position has
+  /// been replaced with a virtual park position to the right of the
+  /// active cluster. Active tiles pass through unchanged. Mirror
+  /// destinations are not handled here — `computeDisplay` filters them
+  /// out before this is called.
   ///
   /// ```
-  /// [ active independent tiles ][ mirror lane ][ disabled lane ]
+  /// [ active tiles ][ disabled lane ]
   /// ```
   ///
-  /// - **Active independent**: enabled, not mirroring anything → real coords.
-  /// - **Mirror lane**: enabled but mirroring another output. Their stored
-  ///   coords are meaningless once the mirror runs (Sway/wl-mirror will
-  ///   slap their content over the source's pixels), so showing them at
-  ///   "their" position would mislead the user. We park them so the
-  ///   mirror tile is visible but clearly subordinate.
-  /// - **Disabled lane**: not enabled. Compositors typically leave their
-  ///   stored coords at (0, 0), which would otherwise stack them on top
-  ///   of the active tile at origin.
-  ///
-  /// When all tiles are inactive in some way (no anchor cluster) the
-  /// original coords are kept so the user still sees their last layout
-  /// instead of a single collapsed tile.
+  /// When all tiles are disabled the original coords are kept (no anchor
+  /// to park beside) so the user still sees their last layout.
   static List<MonitorTileData> _parkDisabledBeside(
       List<MonitorTileData> mons) {
-    final activeIndependent = mons
-        .where((m) => m.enabled && m.mirrorOf == null)
-        .toList(growable: false);
-    final mirrors = mons
-        .where((m) => m.enabled && m.mirrorOf != null)
-        .toList(growable: false);
+    final active = mons.where((m) => m.enabled).toList(growable: false);
     final disabled = mons.where((m) => !m.enabled).toList(growable: false);
-    if (activeIndependent.isEmpty || (mirrors.isEmpty && disabled.isEmpty)) {
-      return mons;
-    }
+    if (active.isEmpty || disabled.isEmpty) return mons;
 
-    final activeMaxX = activeIndependent
-        .map((m) => m.x + m.width / m.scale)
-        .reduce(max);
-    final activeMinY = activeIndependent.map((m) => m.y).reduce(min);
+    final activeMaxX =
+        active.map((m) => m.x + m.width / m.scale).reduce(max);
+    final activeMinY = active.map((m) => m.y).reduce(min);
 
     final parked = <String, MonitorTileData>{};
-    var nextX = activeMaxX + _parkSpacing;
-
-    if (mirrors.isNotEmpty) {
-      var lane = activeMinY;
-      double laneMaxX = nextX;
-      for (final m in mirrors) {
-        final w = m.width / m.scale;
-        final h = m.height / m.scale;
-        parked[m.id] = m.copyWith(x: nextX, y: lane);
-        lane += h + _parkSpacing;
-        if (nextX + w > laneMaxX) laneMaxX = nextX + w;
-      }
-      nextX = laneMaxX + _parkSpacing;
+    var lane = activeMinY;
+    for (final m in disabled) {
+      final h = m.height / m.scale;
+      parked[m.id] = m.copyWith(
+        x: activeMaxX + _parkSpacing,
+        y: lane,
+      );
+      lane += h + _parkSpacing;
     }
-
-    if (disabled.isNotEmpty) {
-      var lane = activeMinY;
-      for (final m in disabled) {
-        final h = m.height / m.scale;
-        parked[m.id] = m.copyWith(x: nextX, y: lane);
-        lane += h + _parkSpacing;
-      }
-    }
-
     return [for (final m in mons) parked[m.id] ?? m];
   }
 

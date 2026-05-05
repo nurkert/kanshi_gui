@@ -235,22 +235,35 @@ void main() {
       expect(cTile.y, greaterThan(bTile.y + bTile.height));
     });
 
-    test('parks a mirror tile in its own lane between active and disabled',
-        () {
-      final active = _mon(id: 'A', x: 0, y: 0); // 1920×1080 at origin
+    test('mirror destinations are absorbed into the source tile', () {
+      // Both physical screens show the same pixels, so the layout shows
+      // only the source tile. mirroredBy reports the relationship so the
+      // UI can paint the cyan badge.
+      final active = _mon(id: 'A', x: 0, y: 0);
       final mirror = _mon(id: 'B', x: 0, y: 0, mirrorOf: 'A');
       final off = _mon(id: 'C', x: 0, y: 0, enabled: false);
       final l = LayoutMath.computeDisplay(
           [active, mirror, off], const Size(800, 600));
+      expect(l.displayMonitors.map((m) => m.id), isNot(contains('B')),
+          reason: 'Mirror destination must be filtered out of the layout.');
+      expect(l.displayMonitors.map((m) => m.id),
+          containsAll(['A', 'C']));
+      expect(l.mirroredBy, equals({'A': ['B']}));
+      // The disabled tile still parks beside A — no mirror lane.
       final aTile = l.displayMonitors.firstWhere((m) => m.id == 'A');
-      final bTile = l.displayMonitors.firstWhere((m) => m.id == 'B');
       final cTile = l.displayMonitors.firstWhere((m) => m.id == 'C');
-      // Mirror tile must sit between active and disabled, never overlap.
-      expect(bTile.x, greaterThan(aTile.x + aTile.width),
-          reason: 'Mirror tile parked to the right of the active cluster.');
-      expect(cTile.x, greaterThan(bTile.x + bTile.width),
-          reason:
-              'Disabled tile parked to the right of the mirror lane.');
+      expect(cTile.x, greaterThan(aTile.x + aTile.width),
+          reason: 'Disabled tile parked to the right of the active cluster.');
+    });
+
+    test('multiple destinations on one source aggregate in mirroredBy', () {
+      final active = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 0, y: 0, mirrorOf: 'A');
+      final c = _mon(id: 'C', x: 0, y: 0, mirrorOf: 'A');
+      final l = LayoutMath.computeDisplay(
+          [active, b, c], const Size(800, 600));
+      expect(l.displayMonitors.map((m) => m.id), equals(['A']));
+      expect(l.mirroredBy['A'], unorderedEquals(['B', 'C']));
     });
 
     test('all-disabled layouts keep the original positions', () {

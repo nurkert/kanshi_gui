@@ -361,6 +361,13 @@ class _HomePageState extends State<HomePage>
                                         await c.setMirror(tile.id, srcId))
                                     : null,
                                 mirrorSources: sources,
+                                mirroredBy:
+                                    layout.mirroredBy[tile.id] ??
+                                        const <String>[],
+                                onStopMirroredBy: mirrorEnabled
+                                    ? (destId) async => _toast(
+                                        await c.setMirror(destId, null))
+                                    : null,
                               );
                             }),
                           ],
