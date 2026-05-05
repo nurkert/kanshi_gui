@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.3 — 2026-05-05
+
+### Changed
+
+- Workspace numbering on the Sway backend now follows physical screen
+  position **right-to-left** in fixed blocks of three. The rightmost
+  monitor owns workspaces 1/2/3, the next one to its left owns 4/5/6,
+  and so on up to nine workspaces / three screens. Previously the
+  writer numbered ascending from the leftmost monitor and only assigned
+  one workspace per screen, so a three-display layout produced 1/2/3
+  left-to-right and "Mod+6" had no defined home. Workspaces are now
+  block-anchored, so muscle memory like "Mod+6 = second screen" lands
+  on the same physical display whether two or three monitors are
+  attached.
+
 ## 1.2.2 — 2026-05-05
 
 ### Changed

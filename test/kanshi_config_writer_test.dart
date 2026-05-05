@@ -79,6 +79,51 @@ void main() {
       expect(out, contains('exec swaymsg'));
       expect(out, contains("current_kanshi_profile"));
     });
+
+    test('numbers workspaces right-to-left in fixed blocks of three', () {
+      final p = Profile(
+        name: 'Triple',
+        monitors: [
+          _mon(id: 'L', x: 0),
+          _mon(id: 'M', x: 1920),
+          _mon(id: 'R', x: 3840),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      // Rightmost screen R owns workspaces 1-3, M owns 4-6, L owns 7-9.
+      for (final ws in [1, 2, 3]) {
+        expect(out, contains("workspace $ws output 'R'"));
+      }
+      for (final ws in [4, 5, 6]) {
+        expect(out, contains("workspace $ws output 'M'"));
+      }
+      for (final ws in [7, 8, 9]) {
+        expect(out, contains("workspace $ws output 'L'"));
+      }
+    });
+
+    test('two-monitor layout still parks workspaces 4-6 on the second screen',
+        () {
+      final p = Profile(
+        name: 'Pair',
+        monitors: [
+          _mon(id: 'Left', x: 0),
+          _mon(id: 'Right', x: 1920),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      // Right screen: 1-3, Left screen: 4-6.
+      expect(out, contains("workspace 1 output 'Right'"));
+      expect(out, contains("workspace 3 output 'Right'"));
+      expect(out, contains("workspace 4 output 'Left'"));
+      expect(out, contains("workspace 6 output 'Left'"));
+    });
   });
 
   group('Round-trip: writer → parser', () {
