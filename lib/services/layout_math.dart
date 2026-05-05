@@ -378,33 +378,72 @@ class LayoutMath {
     );
   }
 
-  /// Returns a copy of [mons] where each disabled monitor's `x` / `y` has
-  /// been replaced with a park position to the right of the enabled cluster
-  /// — stacked vertically, separated by [_parkSpacing]. Enabled monitors
-  /// pass through unchanged. When *every* monitor is disabled the original
-  /// coords are kept (nothing to park beside) so the user still sees the
-  /// last layout.
+  /// Returns a copy of [mons] where the position of each non-independent
+  /// tile has been replaced with a virtual park position to the right of
+  /// the enabled, non-mirrored cluster.
+  ///
+  /// Layout-wise the result has three lanes side-by-side:
+  ///
+  /// ```
+  /// [ active independent tiles ][ mirror lane ][ disabled lane ]
+  /// ```
+  ///
+  /// - **Active independent**: enabled, not mirroring anything → real coords.
+  /// - **Mirror lane**: enabled but mirroring another output. Their stored
+  ///   coords are meaningless once the mirror runs (Sway/wl-mirror will
+  ///   slap their content over the source's pixels), so showing them at
+  ///   "their" position would mislead the user. We park them so the
+  ///   mirror tile is visible but clearly subordinate.
+  /// - **Disabled lane**: not enabled. Compositors typically leave their
+  ///   stored coords at (0, 0), which would otherwise stack them on top
+  ///   of the active tile at origin.
+  ///
+  /// When all tiles are inactive in some way (no anchor cluster) the
+  /// original coords are kept so the user still sees their last layout
+  /// instead of a single collapsed tile.
   static List<MonitorTileData> _parkDisabledBeside(
       List<MonitorTileData> mons) {
-    final enabled = mons.where((m) => m.enabled).toList(growable: false);
+    final activeIndependent = mons
+        .where((m) => m.enabled && m.mirrorOf == null)
+        .toList(growable: false);
+    final mirrors = mons
+        .where((m) => m.enabled && m.mirrorOf != null)
+        .toList(growable: false);
     final disabled = mons.where((m) => !m.enabled).toList(growable: false);
-    if (enabled.isEmpty || disabled.isEmpty) return mons;
+    if (activeIndependent.isEmpty || (mirrors.isEmpty && disabled.isEmpty)) {
+      return mons;
+    }
 
-    final activeMaxX = enabled
+    final activeMaxX = activeIndependent
         .map((m) => m.x + m.width / m.scale)
         .reduce(max);
-    final activeMinY = enabled.map((m) => m.y).reduce(min);
+    final activeMinY = activeIndependent.map((m) => m.y).reduce(min);
 
     final parked = <String, MonitorTileData>{};
-    var lane = activeMinY;
-    for (final m in disabled) {
-      final h = m.height / m.scale;
-      parked[m.id] = m.copyWith(
-        x: activeMaxX + _parkSpacing,
-        y: lane,
-      );
-      lane += h + _parkSpacing;
+    var nextX = activeMaxX + _parkSpacing;
+
+    if (mirrors.isNotEmpty) {
+      var lane = activeMinY;
+      double laneMaxX = nextX;
+      for (final m in mirrors) {
+        final w = m.width / m.scale;
+        final h = m.height / m.scale;
+        parked[m.id] = m.copyWith(x: nextX, y: lane);
+        lane += h + _parkSpacing;
+        if (nextX + w > laneMaxX) laneMaxX = nextX + w;
+      }
+      nextX = laneMaxX + _parkSpacing;
     }
+
+    if (disabled.isNotEmpty) {
+      var lane = activeMinY;
+      for (final m in disabled) {
+        final h = m.height / m.scale;
+        parked[m.id] = m.copyWith(x: nextX, y: lane);
+        lane += h + _parkSpacing;
+      }
+    }
+
     return [for (final m in mons) parked[m.id] ?? m];
   }
 
