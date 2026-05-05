@@ -4,6 +4,7 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/process_runner.dart';
 
 /// Fallback backend used when no Wayland output tool is detected. The UI
 /// remains usable as an offline profile editor, but live-apply actions
@@ -60,4 +61,7 @@ class NoopBackend implements MonitorService {
 
   @override
   Stream<List<MonitorTileData>> watchOutputs() => const Stream.empty();
+
+  @override
+  ProcessStream? spawnIdentifyBanner(String output, String label) => null;
 }

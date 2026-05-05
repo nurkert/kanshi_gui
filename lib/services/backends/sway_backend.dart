@@ -197,6 +197,19 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  ProcessStream? spawnIdentifyBanner(String output, String label) {
+    // swaynag is part of sway: a colored, dismissable notification bar on
+    // a chosen output. We crank the font way up so a single digit
+    // dominates the bar and is unmistakable from across the room.
+    return _runner.stream('swaynag', [
+      '-o', output,
+      '-m', label,
+      '-f', 'Sans Bold 200',
+      '-t', 'warning',
+    ]);
+  }
+
+  @override
   Stream<List<MonitorTileData>> watchOutputs() {
     final controller = StreamController<List<MonitorTileData>>.broadcast();
     ProcessStream? sub;

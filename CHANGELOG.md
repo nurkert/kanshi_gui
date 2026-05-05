@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.1 — 2026-05-05
+
+### Fixed
+
+- Mirror feature now actually mirrors. The previous release built the
+  `wl-mirror` invocation in the wrong order (`wl-mirror SRC
+  --fullscreen-output DST --fullscreen`), which wl-mirror rejected with
+  "unexpected trailing arguments after output name" — the user saw a
+  blank blue window appear on a random workspace. Both the live spawn
+  and the kanshi-config exec hook now use the correct order:
+  `wl-mirror --fullscreen-output DST SRC`. Parser accepts both orders
+  for forward compatibility.
+
+### Added
+
+- "Identify displays" lightbulb now also flashes the number on the
+  physical screen via `swaynag` (Sway only) — not just inside the GUI
+  canvas. Disabled and mirrored tiles are skipped (the latter would
+  otherwise paint twice on the source's pixels). On wlr-randr-based
+  compositors the in-GUI overlay remains the only identify aid.
+
 ## 1.2.0 — 2026-05-05
 
 ### Added

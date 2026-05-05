@@ -19,20 +19,22 @@ void main() {
   });
 
   group('MirrorRunner.start / stop', () {
-    test('spawns wl-mirror with src arg + fullscreen-output flag', () async {
+    test('spawns wl-mirror with --fullscreen-output flag and source last',
+        () async {
+      // wl-mirror's CLI requires the source positional to be the last
+      // argument. We assert the exact order so a regression to "src first
+      // / fullscreen flag last" gets caught.
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
-      // The single recorded call must be the spawn.
       expect(fake.calls, hasLength(1));
       expect(
           fake.calls.single,
           equals([
             'wl-mirror',
-            'DP-1',
             '--fullscreen-output',
             'DP-2',
-            '--fullscreen',
+            'DP-1',
           ]));
       expect(mr.activeDestinations, equals({'DP-2'}));
       expect(mr.mirrorSourceFor('DP-2'), equals('DP-1'));
@@ -53,8 +55,8 @@ void main() {
       await mr.start('DP-1', 'DP-2');
       await mr.start('DP-3', 'DP-2');
       expect(fake.calls, hasLength(2));
-      expect(fake.calls.last[1], equals('DP-3'),
-          reason: 'New src must be in the second invocation.');
+      expect(fake.calls.last.last, equals('DP-3'),
+          reason: 'New src must be the trailing positional.');
       expect(mr.mirrorSourceFor('DP-2'), equals('DP-3'));
     });
 
@@ -65,8 +67,7 @@ void main() {
       await mr.stop('DP-2');
       expect(mr.activeDestinations, isEmpty);
       // Closing the (now-detached) controller must not trigger a respawn.
-      fake.openStream('wl-mirror DP-1 --fullscreen-output DP-2 --fullscreen')
-          .close();
+      fake.openStream('wl-mirror --fullscreen-output DP-2 DP-1').close();
       await Future<void>.delayed(Duration.zero);
       expect(fake.calls, hasLength(1),
           reason: 'After stop, an exit on the stream must NOT respawn.');
@@ -90,7 +91,7 @@ void main() {
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
       // Simulate wl-mirror dying (e.g. user closed the fullscreen window).
-      final key = 'wl-mirror DP-1 --fullscreen-output DP-2 --fullscreen';
+      final key = 'wl-mirror --fullscreen-output DP-2 DP-1';
       await fake.openStream(key).close();
       await Future<void>.delayed(Duration.zero);
       expect(fake.calls, hasLength(2),
@@ -104,7 +105,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror DP-1 --fullscreen-output DP-2 --fullscreen';
+      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
 
       // Three rapid back-to-back deaths within the 30 s window. The
       // budget is 3, so the fourth death marks DP-2 failed.
@@ -122,7 +123,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror DP-1 --fullscreen-output DP-2 --fullscreen';
+      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
 
       // First death and respawn.
       await fake.openStream(key).close();
@@ -143,7 +144,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror DP-1 --fullscreen-output DP-2 --fullscreen';
+      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
       for (var i = 0; i < 4; i++) {
         await fake.openStream(key).close();
         await Future<void>.delayed(Duration.zero);

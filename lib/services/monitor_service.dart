@@ -62,6 +62,15 @@ abstract class MonitorService {
   /// listeners are safe.
   Stream<List<MonitorTileData>> watchOutputs();
 
+  /// Spawn an on-screen banner that displays [label] (typically a single
+  /// digit) on the physical [output]. Used by "Identify Displays" so the
+  /// user can map a tile in the GUI to the actual screen in front of
+  /// them. Returns a [ProcessStream] handle the caller kills when the
+  /// banner should disappear, or `null` when this backend cannot target
+  /// a specific output (e.g. wlr-randr — there is no portable on-screen
+  /// notification primitive across compositors).
+  ProcessStream? spawnIdentifyBanner(String output, String label) => null;
+
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway (via SWAYSOCK or `swaymsg` in PATH) → wlr-randr → noop.
   static Future<MonitorService> detect({ProcessRunner? runner}) async {

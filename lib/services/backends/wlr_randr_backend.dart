@@ -253,4 +253,12 @@ class WlrRandrBackend implements MonitorService {
       });
     return sorted.first;
   }
+
+  @override
+  ProcessStream? spawnIdentifyBanner(String output, String label) {
+    // No portable on-screen-banner-on-output primitive on the wlr-randr
+    // CLI surface — leave the GUI's in-canvas number overlay as the only
+    // identify aid for non-Sway compositors.
+    return null;
+  }
 }

@@ -128,8 +128,8 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      expect(rendered, contains("exec wl-mirror 'A'"));
-      expect(rendered, contains("--fullscreen-output 'B'"));
+      expect(rendered, contains("--fullscreen-output 'B' 'A'"),
+          reason: 'wl-mirror requires source-output positional last.');
 
       final reparsed =
           KanshiConfigParser.parse(rendered).single.monitors;
