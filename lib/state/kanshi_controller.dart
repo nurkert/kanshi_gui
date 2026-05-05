@@ -1161,8 +1161,8 @@ class KanshiController extends ChangeNotifier {
 
   Future<OpResult> restoreBackupAndApply() async {
     try {
-      final backup = File(config.backupPath);
-      if (!await backup.exists()) {
+      final backup = await config.newestBackup();
+      if (backup == null) {
         return const OpResult.err('No backup found.');
       }
       await backup.copy(config.configPath);
