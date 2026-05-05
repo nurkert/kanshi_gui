@@ -198,6 +198,83 @@ void main() {
     expect(c.pinnedLayoutBounds, isNull);
   });
 
+  test('hotplug while dragging releases the layout pin and ends the drag',
+      () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [
+      _mon(id: 'A', x: 0, y: 0),
+      _mon(id: 'B', x: 1920, y: 0),
+    ]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    c.beginDragSession('B');
+    expect(c.pinnedLayoutBounds, isNotNull);
+    // Yank B mid-drag.
+    fake.emitOutputs([_mon(id: 'A', x: 0, y: 0)]);
+    await Future<void>.delayed(Duration.zero); // let the stream listener run
+    expect(c.pinnedLayoutBounds, isNull,
+        reason: 'A vanished dragged tile must release the pin so the next '
+            'drag does not project against a stale bounding box.');
+  });
+
+  test('setActiveProfile clears the custom-mode revert memory', () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [
+      _mon(id: 'A', x: 0, y: 0),
+    ]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    // Apply a custom mode → seeds the revert memory for output A.
+    await c.applyCustomMode('A', 1280, 720, 60);
+    // A second profile mirroring the same hardware so we can switch.
+    c.createProfileFromCurrentSetup();
+    expect(c.profiles.length, greaterThanOrEqualTo(2));
+    c.setActiveProfile(0);
+    final r = await c.revertCustomMode('A');
+    expect(r.success, isFalse,
+        reason: 'Profile switch must drop the prior-mode cache so a revert '
+            'in the new profile context cannot replay an unrelated mode.');
+  });
+
+  test('rehydration prefers exact id over manufacturer for identical EDID',
+      () async {
+    // Two physical Samsungs, one on DP-1 and one on DP-2, same make/model.
+    // The first call to refreshConnectedMonitors must not collapse both
+    // profile entries onto whichever output appears first in the list.
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(outputs: [
+      _mon(id: 'DP-1', x: 0, y: 0),
+      _mon(id: 'DP-2', x: 1920, y: 0),
+    ]);
+    // Tag both as identical manufacturer to simulate same EDID.
+    fake.outputs = fake.outputs
+        .map((m) => MonitorTileData(
+              id: m.id,
+              manufacturer: 'Samsung 2560x1440',
+              x: m.x,
+              y: m.y,
+              width: m.width,
+              height: m.height,
+              scale: 1.0,
+              rotation: 0,
+              refresh: 60,
+              resolution: m.resolution,
+              orientation: 'landscape',
+              modes: const [],
+              enabled: true,
+            ))
+        .toList();
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    await c.refreshConnectedMonitors();
+    // Each profile entry must be matched to a different live output.
+    final ids = c.activeMonitors.map((m) => m.id).toSet();
+    expect(ids, containsAll({'DP-1', 'DP-2'}),
+        reason: 'Identical-EDID monitors must keep their distinct ids.');
+    expect(ids.length, equals(2),
+        reason: 'No two profile entries may collapse onto the same output.');
+  });
+
   test('controller propagates writeOptions from backend to ConfigService', () {
     final fake = FakeMonitorService(
         writeOptions: KanshiWriteOptions.neutral);
