@@ -56,6 +56,13 @@ class KanshiController extends ChangeNotifier {
   final Map<String, _DragSession> _dragSessions = {};
   static const _alignmentEscapeLimit = 2;
   Rect? _pinnedLayoutBounds;
+  /// Monotonically increasing token bumped whenever in-flight drag state
+  /// is invalidated (hotplug clearing sessions, profile switch, etc.).
+  /// Tiles snapshot this on `beginDragSession` and treat any later
+  /// `onPanUpdate` / `onPanEnd` whose snapshot doesn't match the current
+  /// epoch as stale — they snap back instead of writing into a session
+  /// the controller has already torn down.
+  int _dragCancelEpoch = 0;
 
   /// Scale values the slider rasters onto on release. Chosen for real-world
   /// HiDPI scenarios; intentionally excludes integer scales > 3 because
@@ -81,6 +88,12 @@ class KanshiController extends ChangeNotifier {
   }
 
   // ── Read-only accessors ────────────────────────────────────────────────
+  /// Snapshot of the cancel-epoch at the time of the call. Tiles record
+  /// this in `beginDragSession` and compare it on every drag update; a
+  /// mismatch means an external event (hotplug, profile switch) tore
+  /// down the drag and the gesture should be aborted to its start
+  /// position.
+  int get dragCancelEpoch => _dragCancelEpoch;
   List<Profile> get profiles => List.unmodifiable(_profiles);
   List<MonitorTileData> get currentMonitors =>
       List.unmodifiable(_currentMonitors);
@@ -178,13 +191,23 @@ class KanshiController extends ChangeNotifier {
       // drag session so the layout pin is released — otherwise the canvas
       // stays frozen on a bounding box that references the vanished tile
       // and subsequent drags see a stale, mismatched coordinate space.
+      // Any active drag — even on an unrelated tile — is cancelled too:
+      // the layout reflows around the new connected set, so a drag in
+      // flight would commit against a different coordinate space than
+      // it started in.
+      final hadActiveDrags =
+          _dragSessions.isNotEmpty || _pinnedLayoutBounds != null;
       for (final id in removed) {
         if (_dragSessions.containsKey(id)) {
           _dragSessions.remove(id);
         }
       }
-      if (_dragSessions.isEmpty && _pinnedLayoutBounds != null) {
-        _pinnedLayoutBounds = null;
+      if (removed.isNotEmpty || added.isNotEmpty) {
+        // Drop every in-flight session — the layout's bounds and snap
+        // neighbours just changed. Tiles will detect this via the
+        // mismatched epoch and snap back to their pre-drag position.
+        _cancelInFlightDrags();
+        if (hadActiveDrags) {/* notifyListeners is called below */}
       }
       _rehydrateProfilesAgainst(newOutputs);
       // Reconcile any wl-mirror processes against the new connected set —
@@ -336,6 +359,10 @@ class KanshiController extends ChangeNotifier {
 
   void setActiveProfile(int index) {
     _activeProfileIndex = index;
+    // A profile switch invalidates any in-flight drag — the layout it
+    // started in is no longer the layout we'd commit into. Cancel via
+    // the epoch token; the tile will snap back to its pre-drag origin.
+    _cancelInFlightDrags();
     // The "revert custom mode" memory is per-output but profile-scoped in
     // intent — a custom mode applied while Profile A was active should not
     // be revertable from Profile B (the prior mode belongs to A's idea of
@@ -501,8 +528,14 @@ class KanshiController extends ChangeNotifier {
   /// dragged tile pushing the bounding box outward (e.g. negative Y when
   /// stacked above origin) would re-scale and re-offset every other tile
   /// every frame.
-  void beginDragSession(String id) {
-    _dragSessions[id] = _DragSession();
+  /// Returns the cancel-epoch the caller should compare against during
+  /// the drag. If `controller.dragCancelEpoch` later differs, the drag
+  /// has been invalidated externally (hotplug, profile switch) and the
+  /// caller must treat the gesture as cancelled. The optional [rollback]
+  /// snapshot captures the tile state at drag-start so a cancellation
+  /// can restore the profile to what it was before the drag began.
+  int beginDragSession(String id, [MonitorTileData? rollback]) {
+    _dragSessions[id] = _DragSession()..rollbackOrigin = rollback;
     if (_activeProfileIndex != null) {
       // Pin against the truly-independent active cluster only — mirror
       // tiles and disabled ones are parked, so pinning a bounding box
@@ -517,6 +550,37 @@ class KanshiController extends ChangeNotifier {
         notifyListeners();
       }
     }
+    return _dragCancelEpoch;
+  }
+
+  /// Cancel every in-flight drag session: roll the profile back to each
+  /// session's pre-drag snapshot, drop the alignment-escape state, free
+  /// the pinned bounding box, and bump the cancel-epoch so any tile
+  /// mid-gesture detects the invalidation and snaps back. No-op when
+  /// there are no active sessions and no pinned bounds.
+  void _cancelInFlightDrags() {
+    if (_dragSessions.isEmpty && _pinnedLayoutBounds == null) return;
+    if (_activeProfileIndex != null) {
+      final mons = [..._profiles[_activeProfileIndex!].monitors];
+      var dirty = false;
+      for (final entry in _dragSessions.entries) {
+        final rollback = entry.value.rollbackOrigin;
+        if (rollback == null) continue;
+        final idx = mons.indexWhere((m) => m.id == entry.key);
+        if (idx == -1) continue;
+        mons[idx] = rollback;
+        dirty = true;
+      }
+      if (dirty) {
+        _profiles[_activeProfileIndex!] = Profile(
+          name: _profiles[_activeProfileIndex!].name,
+          monitors: mons,
+        );
+      }
+    }
+    _dragSessions.clear();
+    _pinnedLayoutBounds = null;
+    _dragCancelEpoch++;
   }
 
   /// UI calls this when the drag ends (mouse up). Clears the session so the
@@ -1255,10 +1319,15 @@ class KanshiController extends ChangeNotifier {
 /// the previous frame's alignment state so the controller can detect when
 /// the user has "broken out" of an alignment snap, and counts those breakouts
 /// per axis. After [_alignmentEscapeLimit] escapes the alignment magnet on
-/// that axis stays off until the next [beginDragSession] call.
+/// that axis stays off until the next [beginDragSession] call. Also carries
+/// the pre-drag tile snapshot so that an externally-driven cancellation
+/// (hotplug, profile switch) can roll the profile back to where it started
+/// — `updateMonitor` writes mid-drag positions into the profile that we'd
+/// otherwise commit by accident.
 class _DragSession {
   bool lastYAlignmentApplied = false;
   bool lastXAlignmentApplied = false;
   int yEscapeCount = 0;
   int xEscapeCount = 0;
+  MonitorTileData? rollbackOrigin;
 }
