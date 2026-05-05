@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.4 — 2026-05-05
+
+### Internal
+
+- Audited the coordinate-system contract for mixed-scale (1× + 2×)
+  layouts. The codebase is already internally consistent: tile
+  `x`/`y` are logical (post-scale) layout coordinates — the same
+  space Sway's `output position X Y` IPC and kanshi's config syntax
+  consume — while `width`/`height` are the physical panel mode
+  dimensions, with `scale` tying them together. A 4K display at
+  scale 2.0 placed flush-right of a 1080p neighbour sits at
+  `x = 1920`, not `x = 3840`. Locked the contract in place with
+  golden tests (`test/hidpi_mixed_scale_test.dart`) and a
+  load-bearing doc-comment on `MonitorTileData`.
+
 ## 1.3.3 — 2026-05-05
 
 ### Fixed
