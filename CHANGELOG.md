@@ -11,10 +11,12 @@
   the new ones. "Stop mirroring" releases the bond again.
 
   Sway 1.11 has no native `output mirror` IPC, so the engine is the
-  external `wl-mirror` tool — `apt install wl-mirror` is required for
-  this feature. On other backends (wlr-randr, noop) the menu entries
-  are hidden entirely; on Sway without wl-mirror installed, they are
-  also hidden until the binary is in `$PATH`.
+  external `wl-mirror` tool. The Debian package now `Recommends:
+  wl-mirror`, so a default `apt install kanshi-gui` pulls it in
+  automatically; users who don't need mirroring can opt out with
+  `--no-install-recommends`. On other backends (wlr-randr, noop) the
+  menu entries are hidden entirely; on Sway without wl-mirror
+  installed, they are also hidden until the binary is in `$PATH`.
 
   Mirrored tiles render with a cyan border + "⇄ Mirror of <src>" badge
   and are parked in their own lane beside the active cluster — so the
