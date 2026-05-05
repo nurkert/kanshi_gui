@@ -104,9 +104,13 @@ class KanshiConfigWriter {
       // The trailing `&` keeps kanshi from blocking on the long-running
       // wl-mirror window.
       for (final m in mons.where((m) => m.enabled && m.mirrorOf != null)) {
+        // wl-mirror requires the source-output positional last, after all
+        // flags. `--fullscreen-output` implies `--fullscreen`. Putting
+        // anything after the source name makes wl-mirror error out with
+        // "unexpected trailing arguments after output name".
         buffer.writeln(
-          "    exec wl-mirror '${m.mirrorOf}' "
-          "--fullscreen-output '${m.id}' --fullscreen &",
+          "    exec wl-mirror "
+          "--fullscreen-output '${m.id}' '${m.mirrorOf}' &",
         );
       }
     }

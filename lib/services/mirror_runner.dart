@@ -100,11 +100,16 @@ class MirrorRunner extends ChangeNotifier {
   }
 
   void _spawn(_MirrorEntry entry) {
+    // wl-mirror's CLI parser is strict about positional ordering: the
+    // source output name MUST be the last argument; any flag after it
+    // is rejected with "unexpected trailing arguments after output name"
+    // and the process bails out before opening a Wayland connection.
+    // `--fullscreen-output` already implies `--fullscreen`, so we drop
+    // the redundant explicit flag and put the source last.
     final ps = _runner.stream('wl-mirror', [
-      entry.srcId,
       '--fullscreen-output',
       entry.dstId,
-      '--fullscreen',
+      entry.srcId,
     ]);
     entry.stream = ps;
     entry.subscription = ps.lines.listen(

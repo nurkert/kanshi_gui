@@ -463,6 +463,31 @@ void main() {
     });
   });
 
+  test('identifyDisplays spawns a per-output banner when supported',
+      () async {
+    final cfg = _tmpConfig(tmp);
+    final fake = FakeMonitorService(
+      outputs: [
+        _mon(id: 'A', x: 0, y: 0),
+        _mon(id: 'B', x: 1920, y: 0),
+        _mon(id: 'C', x: 3840, y: 0, enabled: false),
+      ],
+    );
+    fake.identifyBannerSupported = true;
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    c.identifyDisplays();
+    // One banner per ENABLED tile, with the matching number, in
+    // top-to-bottom + left-to-right order.
+    expect(fake.identifyBannerCalls,
+        equals([
+          ['A', '1'],
+          ['B', '2'],
+        ]),
+        reason:
+            'Disabled tiles must not get banners; numbers match GUI order.');
+  });
+
   test('controller propagates writeOptions from backend to ConfigService', () {
     final fake = FakeMonitorService(
         writeOptions: KanshiWriteOptions.neutral);

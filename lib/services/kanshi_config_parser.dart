@@ -69,35 +69,97 @@ class KanshiConfigParser {
     return profiles;
   }
 
-  /// Second-pass enrichment: extracts `exec wl-mirror SRC --fullscreen-
-  /// output DST --fullscreen` directives from the profile block and
-  /// stamps the matching destination output with `mirrorOf: SRC`. Both
-  /// quoted (`'DP-1'`) and bare (`DP-1`) ids are supported so configs
-  /// hand-written outside the GUI still parse.
+  /// Second-pass enrichment: extracts `exec wl-mirror …` directives from
+  /// the profile block and stamps the matching destination output with
+  /// `mirrorOf: <source>`. Tokenises each line so we are tolerant to
+  /// either argument order (legacy `<src> --fullscreen-output <dst>` and
+  /// the canonical `--fullscreen-output <dst> <src>` wl-mirror demands)
+  /// and accept both quoted and bare ids. The destination is always the
+  /// `--fullscreen-output` value; the source is the last positional that
+  /// isn't a flag or a flag's value.
   static List<MonitorTileData> _applyMirrorExecs(
     List<MonitorTileData> outputs,
     String block,
   ) {
-    final mirrorRE = RegExp(
-      r"exec\s+wl-mirror\s+(?:'([^']+)'|(\S+))"
-      r"\s+(?:.*?)--fullscreen-output\s+(?:'([^']+)'|(\S+))",
-      caseSensitive: false,
-    );
     if (outputs.isEmpty) return outputs;
     final byId = {for (final o in outputs) o.id: o};
     var dirty = false;
-    for (final m in mirrorRE.allMatches(block)) {
-      final src = (m.group(1) ?? m.group(2) ?? '').trim();
-      final dst = (m.group(3) ?? m.group(4) ?? '').trim();
-      if (src.isEmpty || dst.isEmpty) continue;
+    for (final raw in block.split('\n')) {
+      final line = raw.trim();
+      final lower = line.toLowerCase();
+      if (!lower.startsWith('exec') || !lower.contains('wl-mirror')) {
+        continue;
+      }
+      final cmdIdx = lower.indexOf('wl-mirror');
+      var rest = line.substring(cmdIdx + 'wl-mirror'.length).trim();
+      if (rest.endsWith('&')) {
+        rest = rest.substring(0, rest.length - 1).trim();
+      }
+      final tokens = _tokenizeShell(rest);
+      // Identify which token positions are values to flags taking an
+      // argument (e.g. --fullscreen-output VALUE). For wl-mirror flags
+      // we treat the next token as a value when the flag is in the
+      // known-takes-arg set.
+      const takesArg = {
+        '--fullscreen-output',
+        '-F',
+        '--scaling',
+        '-s',
+        '--backend',
+        '-b',
+        '--transform',
+        '-t',
+        '--region',
+        '-r',
+        '--title',
+      };
+      final flagValueIndices = <int>{};
+      String? dst;
+      for (var i = 0; i < tokens.length; i++) {
+        final t = tokens[i];
+        if (takesArg.contains(t) && i + 1 < tokens.length) {
+          flagValueIndices.add(i + 1);
+          if (t == '--fullscreen-output' || t == '-F') dst = tokens[i + 1];
+        }
+      }
+      String? src;
+      for (var i = tokens.length - 1; i >= 0; i--) {
+        if (flagValueIndices.contains(i)) continue;
+        if (tokens[i].startsWith('-')) continue;
+        src = tokens[i];
+        break;
+      }
+      if (dst == null || src == null) continue;
       final tile = byId[dst];
       if (tile == null) continue;
       byId[dst] = tile.copyWith(mirrorOf: src);
       dirty = true;
     }
     if (!dirty) return outputs;
-    // Preserve original order while substituting updated tiles.
     return [for (final o in outputs) byId[o.id] ?? o];
+  }
+
+  /// Minimal shell tokenizer: splits on whitespace but respects single
+  /// quotes (so `'Some Brand 0'` stays one token).
+  static List<String> _tokenizeShell(String s) {
+    final tokens = <String>[];
+    var cur = StringBuffer();
+    var inQuote = false;
+    for (var i = 0; i < s.length; i++) {
+      final ch = s[i];
+      if (ch == "'") {
+        inQuote = !inQuote;
+      } else if (!inQuote && (ch == ' ' || ch == '\t')) {
+        if (cur.isNotEmpty) {
+          tokens.add(cur.toString());
+          cur = StringBuffer();
+        }
+      } else {
+        cur.write(ch);
+      }
+    }
+    if (cur.isNotEmpty) tokens.add(cur.toString());
+    return tokens;
   }
 
   /// Matches `profile foo {`, `profile 'foo bar' {`, `profile foo` (brace on
