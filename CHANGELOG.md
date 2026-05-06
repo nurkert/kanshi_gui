@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.4.2 — 2026-05-06
+
+### Fixed
+
+- `deleteProfile` now correctly shifts `_activeProfileIndex` down
+  when the deleted profile sat at a lower index than the active
+  one. Previously the active index pointed past the end of the
+  list (or at a different profile) → `RangeError` on the next
+  `activeProfile` access.
+- `undo` / `redo` now persist the restored snapshot to disk
+  immediately (bypassing the 600 ms debounce) and trigger
+  `kanshictl reload` so the live compositor catches up. Before
+  this fix the GUI showed the rolled-back layout while the
+  compositor still ran the post-mutation one — visually confusing
+  and easy to miss.
+- `undo` / `redo` cancel any pending custom-mode auto-revert
+  timer and any active SafetyNet guard on the way through. Without
+  this an `applyCustomMode` that was undone seconds before its
+  15-second auto-revert window expired would still fire its
+  revert callback and re-apply the pre-custom mode the user no
+  longer expected.
+- `setActiveProfile`, `renameProfile`, `deleteProfile` now bounds-
+  check their `index` argument: out-of-range calls are no-ops (or
+  return an `OpResult.err` for `renameProfile`) instead of throwing
+  `RangeError`.
+
+### Internal
+
+- Cleaned up dead branch and redundant pre-loop in the hotplug
+  listener: the per-id session removal that was duplicating
+  `_cancelInFlightDrags`'s work, plus the empty `if (hadActiveDrags)`
+  branch that did nothing.
+- New `test/end_to_end_smoke_test.dart` (12 tests) exercises a
+  realistic user journey through drag + mirror + undo + redo +
+  multi-profile flows with cross-feature invariant checks.
+- New `test/hardening_edges_test.dart` (17 tests) targets the
+  out-of-range guards, mirror-lifecycle/undo interactions,
+  layout-math zero-cases, config-write robustness on missing
+  directories, identify-on-fully-mirrored setups, and drag pipeline
+  edges (snapAndCommit without beginDragSession, no-movement
+  drags). 213 tests total, `flutter analyze` clean.
+
 ## 1.4.1 — 2026-05-05
 
 ### Added

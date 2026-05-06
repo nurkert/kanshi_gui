@@ -216,27 +216,12 @@ class KanshiController extends ChangeNotifier {
       final added = newIds.difference(oldIds);
       final removed = oldIds.difference(newIds);
       _currentMonitors = newOutputs;
-      // If a monitor disappears while the user is dragging it, end the
-      // drag session so the layout pin is released — otherwise the canvas
-      // stays frozen on a bounding box that references the vanished tile
-      // and subsequent drags see a stale, mismatched coordinate space.
-      // Any active drag — even on an unrelated tile — is cancelled too:
-      // the layout reflows around the new connected set, so a drag in
-      // flight would commit against a different coordinate space than
-      // it started in.
-      final hadActiveDrags =
-          _dragSessions.isNotEmpty || _pinnedLayoutBounds != null;
-      for (final id in removed) {
-        if (_dragSessions.containsKey(id)) {
-          _dragSessions.remove(id);
-        }
-      }
+      // Any in-flight drag becomes invalid the moment the connected set
+      // changes — the layout it started in is no longer the layout it
+      // would commit into. Cancel via the epoch token; the cancel helper
+      // is a no-op when no drag is active.
       if (removed.isNotEmpty || added.isNotEmpty) {
-        // Drop every in-flight session — the layout's bounds and snap
-        // neighbours just changed. Tiles will detect this via the
-        // mismatched epoch and snap back to their pre-drag position.
         _cancelInFlightDrags();
-        if (hadActiveDrags) {/* notifyListeners is called below */}
       }
       _rehydrateProfilesAgainst(newOutputs);
       // Reconcile any wl-mirror processes against the new connected set —
@@ -432,7 +417,7 @@ class KanshiController extends ChangeNotifier {
     while (_redoStack.length > _historyCap) {
       _redoStack.removeAt(0);
     }
-    _restoreSnapshot(entry);
+    await _restoreSnapshot(entry);
     return OpResult.ok('Undone: ${entry.label}');
   }
 
@@ -443,7 +428,7 @@ class KanshiController extends ChangeNotifier {
     while (_undoStack.length > _historyCap) {
       _undoStack.removeAt(0);
     }
-    _restoreSnapshot(entry);
+    await _restoreSnapshot(entry);
     return OpResult.ok('Redone: ${entry.label}');
   }
 
@@ -456,7 +441,7 @@ class KanshiController extends ChangeNotifier {
         label: label,
       );
 
-  void _restoreSnapshot(_HistoryEntry entry) {
+  Future<void> _restoreSnapshot(_HistoryEntry entry) async {
     _profiles = [
       for (final p in entry.profiles)
         Profile(name: p.name, monitors: [...p.monitors]),
@@ -465,13 +450,37 @@ class KanshiController extends ChangeNotifier {
     // Cancel any in-flight drag — its rollback origin is no longer
     // valid against the restored profile shape.
     _cancelInFlightDrags();
-    _scheduleSave();
-    // ignore: discarded_futures
-    _reconcileMirrors();
+    // Cancel any pending auto-revert from a custom-mode apply that may
+    // have been undone away. Without this, a 15-second timer scheduled
+    // by `applyCustomMode` would fire after an undo and re-apply a
+    // pre-custom mode the user no longer expects.
+    _revertScheduler.cancelAll();
+    safetyNet.cancelAll();
+    // Bypass the 600ms save debounce: an undo/redo must persist
+    // immediately so the kanshictl reload below reads the restored
+    // config, not whatever a future debounced write would have
+    // produced.
+    _saveTimer?.cancel();
+    try {
+      await config.saveProfiles(_profiles);
+    } catch (_) {
+      // Save failure surfaces as a stale config on disk; the live
+      // state below still reflects the snapshot via the explicit
+      // reload, so the user's undo intent is honoured visually.
+    }
+    await _reconcileMirrors();
+    // Reload the compositor profile so the live system catches up
+    // with the restored snapshot. Best-effort: kanshi may not be
+    // running on this host, in which case the user's next "Save &
+    // restart" click will pick up the change.
+    try {
+      await monitors.restartCompositorProfileApply();
+    } catch (_) {/* best effort */}
     notifyListeners();
   }
 
   void setActiveProfile(int index) {
+    if (index < 0 || index >= _profiles.length) return;
     if (_activeProfileIndex != index) {
       _pushHistory("activate '${_profiles[index].name}'");
     }
@@ -499,6 +508,9 @@ class KanshiController extends ChangeNotifier {
   }
 
   OpResult renameProfile(int index, String newName) {
+    if (index < 0 || index >= _profiles.length) {
+      return const OpResult.err('Profile index out of range.');
+    }
     final exists = _profiles.any((p) =>
         p.name.toLowerCase() == newName.toLowerCase() &&
         p != _profiles[index]);
@@ -513,9 +525,22 @@ class KanshiController extends ChangeNotifier {
   }
 
   void deleteProfile(int index) {
+    if (index < 0 || index >= _profiles.length) return;
     _pushHistory("delete '${_profiles[index].name}'");
-    if (_activeProfileIndex == index) _activeProfileIndex = null;
+    final wasActive = _activeProfileIndex;
     _profiles.removeAt(index);
+    // Adjust the active index so it keeps pointing at the same Profile
+    // object after the removal:
+    //   - exactly the deleted profile  → no active profile
+    //   - active index sits *after* the deleted one → shift down by one
+    //   - active index sits *before*   → unchanged
+    if (wasActive != null) {
+      if (wasActive == index) {
+        _activeProfileIndex = null;
+      } else if (wasActive > index) {
+        _activeProfileIndex = wasActive - 1;
+      }
+    }
     _scheduleSave();
     notifyListeners();
   }
