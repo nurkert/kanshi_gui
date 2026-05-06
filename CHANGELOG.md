@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.4.3 — 2026-05-06
+
+### Fixed
+
+- Mirroring no longer leaves orphan `wl-mirror` processes alive
+  after the user clicks "Stop mirroring", and no longer cycles
+  into the recursive picture-in-picture state observed in the
+  wild on a 2x Samsung + 1x InfoVision setup. Three coordinated
+  changes:
+
+  1. **Mirror state is now persisted as a `# kanshi_gui:mirror`
+     annotation, not an `exec wl-mirror` hook.** The exec hook
+     made kanshi a second lifecycle owner of every wl-mirror
+     process: every `kanshictl reload` re-ran the line and
+     spawned an additional wl-mirror window on the destination,
+     producing duplicates and — when two mirrors targeted each
+     other through different paths — recursive PIP. The
+     annotation pattern keeps kanshi blissfully ignorant of
+     mirroring; the GUI's MirrorRunner is the sole owner.
+  2. **`setMirror` and `setWorkspaceRank` now flush the save
+     synchronously before triggering `kanshictl reload`.**
+     Previously the 600 ms debounce meant the reload could read a
+     stale config (with the *previous* mirror's exec hook still
+     in it) and respawn the mirror we were about to tear down.
+  3. **`MirrorRunner.start` and `.stop` now scan the live
+     process table via `pgrep -fa wl-mirror` and kill any
+     external instance targeting the same destination.** Combined
+     with a new `purgeExternalNotMatching` sweep run from
+     `_reconcileMirrors`, this catches orphans left behind by
+     older releases, hand-edited kanshi configs that still hold
+     `exec wl-mirror` lines, or any GUI session that crashed
+     before its `dispose` could fire.
+
+  The parser still accepts the legacy `exec wl-mirror` form for
+  backward compatibility — old configs migrate silently on the
+  next save.
+
 ## 1.4.2 — 2026-05-06
 
 ### Fixed

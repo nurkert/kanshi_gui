@@ -14,10 +14,11 @@ class KanshiConfigParser {
 
   static List<Profile> parse(String content) {
     final profiles = <Profile>[];
-    // Rank annotations live inside `# kanshi_gui:rank …` comments, so
-    // pull them off the raw content before the comment stripper drops
-    // them. Keyed by profile name → output id → rank.
+    // Rank and mirror annotations live inside `# kanshi_gui:…` comments,
+    // so pull them off the raw content before the comment stripper drops
+    // them. Keyed by profile name → output id → value.
     final rankByProfile = _extractRankComments(content);
+    final mirrorByProfile = _extractMirrorComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -64,10 +65,17 @@ class KanshiConfigParser {
 
       final blockText = block.toString();
       final ranks = rankByProfile[header] ?? const <String, int>{};
+      final mirrors = mirrorByProfile[header] ?? const <String, String>{};
       profiles.add(Profile(
         name: header,
         monitors: _applyRanks(
-          _applyMirrorExecs(_parseOutputs(blockText), blockText),
+          // Mirror annotations override the legacy `exec wl-mirror` parsing
+          // — when both are present we trust the annotation, since older
+          // GUI versions wrote both and the annotation is canonical now.
+          _applyMirrors(
+            _applyMirrorExecs(_parseOutputs(blockText), blockText),
+            mirrors,
+          ),
           ranks,
         ),
       ));
@@ -75,6 +83,22 @@ class KanshiConfigParser {
     }
 
     return profiles;
+  }
+
+  /// Applies `# kanshi_gui:mirror '<dst>'='<src>'` annotations to the
+  /// destination tile's `mirrorOf` field. Preferred over scraping
+  /// `exec wl-mirror …` lines because the annotation is the canonical
+  /// persistence form (no exec hook → no kanshi-spawned wl-mirror
+  /// duplicate).
+  static List<MonitorTileData> _applyMirrors(
+    List<MonitorTileData> outputs,
+    Map<String, String> mirrors,
+  ) {
+    if (mirrors.isEmpty) return outputs;
+    return [
+      for (final o in outputs)
+        mirrors.containsKey(o.id) ? o.copyWith(mirrorOf: mirrors[o.id]) : o,
+    ];
   }
 
   /// Applies the per-profile rank map captured before comment-stripping.
@@ -87,6 +111,43 @@ class KanshiConfigParser {
       for (final o in outputs)
         ranks.containsKey(o.id) ? o.copyWith(workspaceRank: ranks[o.id]) : o,
     ];
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:mirror '<dst>'='<src>'` annotations out of each
+  /// profile body. Returned map is profile-name → dst-id → src-id.
+  static Map<String, Map<String, String>> _extractMirrorComments(
+    String content,
+  ) {
+    final out = <String, Map<String, String>>{};
+    final mirrorLine = RegExp(
+      r"^\s*#\s*kanshi_gui:mirror\s+'([^']+)'\s*=\s*'([^']+)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = mirrorLine.firstMatch(raw);
+        if (m != null) {
+          (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
+              m.group(2)!;
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
   }
 
   /// Walks the raw config text and pulls `# kanshi_gui:rank '<id>'=<n>`

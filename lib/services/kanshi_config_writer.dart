@@ -97,20 +97,22 @@ class KanshiConfigWriter {
     }
 
     if (options.injectMirrorExec) {
-      // For each enabled output that mirrors another, spawn wl-mirror so
-      // the mirror is restored on profile activation when kanshi_gui is
-      // not the active orchestrator. The single-quoted ids handle
-      // whitespace-bearing output names (e.g. EDID-derived "Some Co X 0").
-      // The trailing `&` keeps kanshi from blocking on the long-running
-      // wl-mirror window.
+      // Persist mirror relationships as `# kanshi_gui:mirror …` comment
+      // annotations rather than as `exec wl-mirror …` hooks. The exec
+      // hook approach made kanshi the *second* lifecycle owner of every
+      // wl-mirror process: every `kanshictl reload` re-ran the line and
+      // spawned an additional wl-mirror, which produced duplicate
+      // fullscreen windows on the destination, a cycle into
+      // picture-in-picture recursion when two mirrors targeted each
+      // other, and orphaned processes that survived the GUI's
+      // `setMirror(null)` because the GUI's MirrorRunner only owned its
+      // own children. The annotation pattern keeps kanshi blissfully
+      // ignorant of mirroring; the GUI's MirrorRunner is the sole
+      // owner. The mirror is restored on the next GUI launch via the
+      // parser reading these annotations back into `mirrorOf`.
       for (final m in mons.where((m) => m.enabled && m.mirrorOf != null)) {
-        // wl-mirror requires the source-output positional last, after all
-        // flags. `--fullscreen-output` implies `--fullscreen`. Putting
-        // anything after the source name makes wl-mirror error out with
-        // "unexpected trailing arguments after output name".
         buffer.writeln(
-          "    exec wl-mirror "
-          "--fullscreen-output '${m.id}' '${m.mirrorOf}' &",
+          "    # kanshi_gui:mirror '${m.id}'='${m.mirrorOf}'",
         );
       }
     }

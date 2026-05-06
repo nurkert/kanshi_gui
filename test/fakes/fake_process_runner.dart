@@ -57,12 +57,18 @@ class FakeProcessRunner implements ProcessRunner {
     return fresh;
   }
 
+  /// Sequential pids handed out by `stream()` so tests that exercise
+  /// the MirrorRunner's pid-aware logic can correlate kill calls to
+  /// specific spawns.
+  int _nextPid = 10000;
+
   @override
   ProcessStream stream(String executable, List<String> arguments) {
     final invocation = [executable, ...arguments];
     calls.add(invocation);
     final key = invocation.join(' ');
     final ctl = openStream(key);
+    final pid = _nextPid++;
     return ProcessStream(
       lines: ctl.stream,
       kill: () async {
@@ -72,6 +78,7 @@ class FakeProcessRunner implements ProcessRunner {
         // a fresh process with its own pipes each time.
         _streamControllers.remove(key);
       },
+      pid: Future.value(pid),
     );
   }
 }
