@@ -3,6 +3,13 @@ import 'package:kanshi_gui/services/mirror_runner.dart';
 
 import 'fakes/fake_process_runner.dart';
 
+/// Filters [calls] down to just the wl-mirror invocations, dropping
+/// `pgrep` / `kill` bookkeeping the runner does to clean up external
+/// processes. Lets tests assert on the spawn pattern without coupling
+/// to the orphan-purge plumbing.
+List<List<String>> _wlMirrorOnly(List<List<String>> calls) =>
+    [for (final c in calls) if (c.first == 'wl-mirror') c];
+
 void main() {
   group('MirrorRunner.isAvailable', () {
     test('true when wl-mirror is in PATH', () async {
@@ -27,9 +34,10 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
-      expect(fake.calls, hasLength(1));
+      final spawns = _wlMirrorOnly(fake.calls);
+      expect(spawns, hasLength(1));
       expect(
-          fake.calls.single,
+          spawns.single,
           equals([
             'wl-mirror',
             '--fullscreen-output',
@@ -45,7 +53,7 @@ void main() {
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
       await mr.start('DP-1', 'DP-2');
-      expect(fake.calls, hasLength(1),
+      expect(_wlMirrorOnly(fake.calls), hasLength(1),
           reason: 'Second start must not respawn wl-mirror.');
     });
 
@@ -54,8 +62,9 @@ void main() {
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
       await mr.start('DP-3', 'DP-2');
-      expect(fake.calls, hasLength(2));
-      expect(fake.calls.last.last, equals('DP-3'),
+      final spawns = _wlMirrorOnly(fake.calls);
+      expect(spawns, hasLength(2));
+      expect(spawns.last.last, equals('DP-3'),
           reason: 'New src must be the trailing positional.');
       expect(mr.mirrorSourceFor('DP-2'), equals('DP-3'));
     });
@@ -69,7 +78,7 @@ void main() {
       // Closing the (now-detached) controller must not trigger a respawn.
       fake.openStream('wl-mirror --fullscreen-output DP-2 DP-1').close();
       await Future<void>.delayed(Duration.zero);
-      expect(fake.calls, hasLength(1),
+      expect(_wlMirrorOnly(fake.calls), hasLength(1),
           reason: 'After stop, an exit on the stream must NOT respawn.');
     });
 
@@ -94,7 +103,7 @@ void main() {
       final key = 'wl-mirror --fullscreen-output DP-2 DP-1';
       await fake.openStream(key).close();
       await Future<void>.delayed(Duration.zero);
-      expect(fake.calls, hasLength(2),
+      expect(_wlMirrorOnly(fake.calls), hasLength(2),
           reason: 'Runner must respawn wl-mirror after an unintended exit.');
       expect(mr.activeDestinations, contains('DP-2'));
     });

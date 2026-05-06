@@ -50,4 +50,15 @@ class FakeMirrorRunner extends ChangeNotifier implements MirrorRunner {
       await stop(d);
     }
   }
+
+  /// Records calls so tests can assert the orphan-purge sweep happens.
+  /// The fake never actually has external processes to kill.
+  final List<Map<String, String>> purgeCalls = [];
+
+  @override
+  Future<void> purgeExternalNotMatching(
+    Map<String, String> desiredDstToSrc,
+  ) async {
+    purgeCalls.add(Map<String, String>.from(desiredDstToSrc));
+  }
 }

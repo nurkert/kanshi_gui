@@ -136,6 +136,7 @@ class FakeMonitorService implements MonitorService {
       kill: () async {
         if (!ctl.isClosed) await ctl.close();
       },
+      pid: Future.value(null),
     );
   }
 }

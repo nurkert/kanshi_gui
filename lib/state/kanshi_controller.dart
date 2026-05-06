@@ -456,27 +456,28 @@ class KanshiController extends ChangeNotifier {
     // pre-custom mode the user no longer expects.
     _revertScheduler.cancelAll();
     safetyNet.cancelAll();
-    // Bypass the 600ms save debounce: an undo/redo must persist
-    // immediately so the kanshictl reload below reads the restored
-    // config, not whatever a future debounced write would have
-    // produced.
+    // Bypass the 600ms save debounce so the kanshictl reload fired
+    // by _flushSaveAndReload reads the restored config, not whatever
+    // a future debounced write would have produced.
+    await _flushSaveAndReload();
+    await _reconcileMirrors();
+    notifyListeners();
+  }
+
+  /// Cancels the debounced save timer, writes the current `_profiles`
+  /// to disk, and triggers a `kanshictl reload`. All best-effort: any
+  /// failure surfaces as a stale config or non-restarted compositor,
+  /// but the in-memory state is already consistent so the GUI keeps
+  /// working. Used by every code path that needs the kanshi reload to
+  /// see the just-written config (mirror / rank / undo / redo).
+  Future<void> _flushSaveAndReload() async {
     _saveTimer?.cancel();
     try {
       await config.saveProfiles(_profiles);
-    } catch (_) {
-      // Save failure surfaces as a stale config on disk; the live
-      // state below still reflects the snapshot via the explicit
-      // reload, so the user's undo intent is honoured visually.
-    }
-    await _reconcileMirrors();
-    // Reload the compositor profile so the live system catches up
-    // with the restored snapshot. Best-effort: kanshi may not be
-    // running on this host, in which case the user's next "Save &
-    // restart" click will pick up the change.
+    } catch (_) {/* best effort */}
     try {
       await monitors.restartCompositorProfileApply();
     } catch (_) {/* best effort */}
-    notifyListeners();
   }
 
   void setActiveProfile(int index) {
@@ -922,10 +923,8 @@ class KanshiController extends ChangeNotifier {
     mons[idx] = mons[idx].copyWith(workspaceRank: rank);
     _profiles[_activeProfileIndex!] =
         Profile(name: profile.name, monitors: mons);
-    _scheduleSave();
-    try {
-      await monitors.restartCompositorProfileApply();
-    } catch (_) {/* config still updated; reload best-effort. */}
+    // Flush before reload to avoid a stale-config race in kanshi.
+    await _flushSaveAndReload();
     notifyListeners();
     return OpResult.ok(
       rank == null
@@ -1003,23 +1002,19 @@ class KanshiController extends ChangeNotifier {
       name: _profiles[_activeProfileIndex!].name,
       monitors: mons,
     );
-    _scheduleSave();
 
-    // Drive the live process state immediately. _reconcileMirrors handles
-    // both the "spawn new" and "kill old" cases by diffing against the
-    // current desired set.
+    // Flush the save *before* reconciling and reloading. The previous
+    // 600 ms-debounced save plus immediate `kanshictl reload` had a
+    // race window where kanshi could read a stale config (still
+    // listing the prior mirror) and re-spawn the mirror we're about
+    // to tear down. Now reconcile sees the fresh desired state and
+    // kanshi reads it too.
+    await _flushSaveAndReload();
+
+    // Drive the live process state. _reconcileMirrors handles both
+    // the "spawn new" and "kill old" cases by diffing against the
+    // current desired set, plus a sweep of orphaned externals.
     await _reconcileMirrors();
-
-    // Push the change into the active kanshi config so a future profile
-    // re-activation reproduces the mirror without our involvement. The
-    // restart is best-effort — failures are surfaced but don't undo the
-    // local state, since the wl-mirror process is already running.
-    try {
-      await monitors.restartCompositorProfileApply();
-    } catch (_) {
-      // Surface only if it matters to the user; for now silent — the
-      // live mirror works regardless.
-    }
 
     notifyListeners();
     if (srcId == null) {
@@ -1067,6 +1062,11 @@ class KanshiController extends ChangeNotifier {
     for (final entry in desired.entries) {
       await mirrorRunner.start(entry.value, entry.key);
     }
+    // Final sweep: kill any wl-mirror process the OS is running that
+    // doesn't belong to the desired set. Catches orphans left behind
+    // by an older `exec wl-mirror` kanshi config or a previous GUI
+    // session that crashed before its `dispose` could fire.
+    await mirrorRunner.purgeExternalNotMatching(desired);
   }
 
   // ── Compositor-driven actions ──────────────────────────────────────────
