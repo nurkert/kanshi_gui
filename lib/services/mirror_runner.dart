@@ -65,13 +65,23 @@ class MirrorRunner extends ChangeNotifier {
   /// Begin (or rebind) a mirror so that [dstId] shows what [srcId] is
   /// rendering. Idempotent for an existing same-(src, dst) pair. When the
   /// destination is already mirroring a different source the old process
-  /// is killed first.
+  /// is killed first. Also kills any *external* wl-mirror process
+  /// targeting [dstId] — they can show up when an older release left an
+  /// orphan or when a hand-edited kanshi config still has an
+  /// `exec wl-mirror …` line — so the runner is the single source of
+  /// truth for the destination's mirror state.
   Future<void> start(String srcId, String dstId) async {
     final existing = _entries[dstId];
     if (existing != null) {
-      if (existing.srcId == srcId) return; // already what we want
+      if (existing.srcId == srcId) {
+        // Even when the entry matches, sweep externals: a duplicate
+        // process would race with ours for the same destination.
+        await _killExternalForDst(dstId);
+        return;
+      }
       await stop(dstId);
     }
+    await _killExternalForDst(dstId);
     _failed.remove(dstId);
     final entry = _MirrorEntry(srcId: srcId, dstId: dstId);
     _entries[dstId] = entry;
@@ -79,17 +89,22 @@ class MirrorRunner extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Stop the wl-mirror running for [dstId]. No-op if none is running.
+  /// Stop the wl-mirror running for [dstId]. Kills both the runner-owned
+  /// process and any external wl-mirror that happens to target the same
+  /// destination, so the user's "Stop mirror" action is final regardless
+  /// of who originally spawned the process.
   Future<void> stop(String dstId) async {
     final entry = _entries.remove(dstId);
-    if (entry == null) return;
-    entry.intentionallyStopped = true;
-    await entry.subscription?.cancel();
-    entry.subscription = null;
-    final stream = entry.stream;
-    entry.stream = null;
-    if (stream != null) await stream.kill();
-    notifyListeners();
+    if (entry != null) {
+      entry.intentionallyStopped = true;
+      await entry.subscription?.cancel();
+      entry.subscription = null;
+      final stream = entry.stream;
+      entry.stream = null;
+      if (stream != null) await stream.kill();
+    }
+    await _killExternalForDst(dstId);
+    if (entry != null) notifyListeners();
   }
 
   /// Stop every active mirror. Used by `KanshiController.dispose` and on
@@ -97,6 +112,124 @@ class MirrorRunner extends ChangeNotifier {
   Future<void> stopAll() async {
     final ids = _entries.keys.toList(growable: false);
     await Future.wait(ids.map(stop));
+  }
+
+  /// Scans the live `wl-mirror` process table and kills every instance
+  /// whose destination is NOT a key in [desiredDstToSrc] OR whose source
+  /// disagrees with the desired source for that destination. Called from
+  /// `KanshiController._reconcileMirrors` so cold-start cleanup catches
+  /// any orphan a previous GUI / kanshi-exec hook session left behind.
+  Future<void> purgeExternalNotMatching(
+    Map<String, String> desiredDstToSrc,
+  ) async {
+    final running = await _scanRunning();
+    for (final p in running) {
+      final desiredSrc = desiredDstToSrc[p.dst];
+      // Keep the process iff the runner already owns it (managed entry
+      // matching same src) AND it matches desired. Anything else is
+      // either an orphan or a duplicate.
+      final managed = _entries[p.dst];
+      final ownedAndCorrect =
+          managed != null && managed.srcId == p.src && desiredSrc == p.src;
+      if (ownedAndCorrect) continue;
+      // Don't kill our own managed processes — start() already replaced
+      // them when they need replacing. Only target externals.
+      if (managed != null) continue;
+      await _killPid(p.pid);
+    }
+  }
+
+  /// Kill any wl-mirror process whose `--fullscreen-output <DST>` argv
+  /// points at [dstId] except the runner-owned process for that
+  /// destination (which is killed via its [ProcessStream] handle).
+  Future<void> _killExternalForDst(String dstId) async {
+    final running = await _scanRunning();
+    final managed = _entries[dstId];
+    for (final p in running) {
+      if (p.dst != dstId) continue;
+      if (managed != null && managed.pid != null && p.pid == managed.pid) {
+        continue;
+      }
+      await _killPid(p.pid);
+    }
+  }
+
+  Future<List<_RunningMirror>> _scanRunning() async {
+    try {
+      final r = await _runner.run('pgrep', ['-fa', 'wl-mirror']);
+      if (r.exitCode != 0) return const [];
+      return _parsePgrepOutput(r.stdout?.toString() ?? '');
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Parse `pgrep -fa wl-mirror` output into a list of (dst, src)
+  /// records keyed by pid. Public-ish (visible-for-testing) so tests
+  /// can validate the parsing without spawning a real process tree.
+  @visibleForTesting
+  static List<({int pid, String dst, String src})> parsePgrepForTest(
+    String stdout,
+  ) =>
+      _parsePgrepOutput(stdout)
+          .map((p) => (pid: p.pid, dst: p.dst, src: p.src))
+          .toList();
+
+  static List<_RunningMirror> _parsePgrepOutput(String stdout) {
+    final out = <_RunningMirror>[];
+    for (final raw in stdout.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      final parts = line.split(RegExp(r'\s+'));
+      if (parts.length < 2) continue;
+      final pid = int.tryParse(parts[0]);
+      if (pid == null) continue;
+      final argv = parts.sublist(1);
+      // The argv may also begin with the path-shell wrapper (e.g. `bash
+      // -c "wl-mirror …"`); we need the wl-mirror invocation specifically
+      // and bail if it isn't a direct one.
+      if (!argv.first.endsWith('wl-mirror')) continue;
+      String? dst;
+      String? src;
+      const takesArg = {
+        '--fullscreen-output',
+        '-F',
+        '--scaling',
+        '-s',
+        '--backend',
+        '-b',
+        '--transform',
+        '-t',
+        '--region',
+        '-r',
+        '--title',
+      };
+      final flagValueIdx = <int>{};
+      for (var i = 1; i < argv.length; i++) {
+        final t = argv[i];
+        if (takesArg.contains(t) && i + 1 < argv.length) {
+          flagValueIdx.add(i + 1);
+          if (t == '--fullscreen-output' || t == '-F') dst = argv[i + 1];
+        }
+      }
+      // wl-mirror's source positional is the last non-flag, non-flag-value
+      // argument; iterate backwards.
+      for (var i = argv.length - 1; i >= 1; i--) {
+        if (flagValueIdx.contains(i)) continue;
+        if (argv[i].startsWith('-')) continue;
+        src = argv[i];
+        break;
+      }
+      if (dst == null || src == null) continue;
+      out.add(_RunningMirror(pid: pid, dst: dst, src: src));
+    }
+    return out;
+  }
+
+  Future<void> _killPid(int pid) async {
+    try {
+      await _runner.run('kill', ['-TERM', '$pid']);
+    } catch (_) {/* best effort */}
   }
 
   void _spawn(_MirrorEntry entry) {
@@ -112,6 +245,12 @@ class MirrorRunner extends ChangeNotifier {
       entry.srcId,
     ]);
     entry.stream = ps;
+    // Resolve the pid asynchronously; we don't await because spawn
+    // continues regardless. _killExternalForDst handles the brief
+    // window where pid is null by skipping our managed entry only when
+    // its src/dst exactly matches the candidate.
+    // ignore: discarded_futures
+    ps.pid.then((p) => entry.pid = p);
     entry.subscription = ps.lines.listen(
       (_) {}, // we do not consume wl-mirror's stdout
       onDone: () => _handleExit(entry),
@@ -170,9 +309,21 @@ class _MirrorEntry {
   final String dstId;
   ProcessStream? stream;
   StreamSubscription<String>? subscription;
+  int? pid;
   int retryCount = 0;
   DateTime? lastRetryAt;
   bool intentionallyStopped = false;
 
   _MirrorEntry({required this.srcId, required this.dstId});
+}
+
+class _RunningMirror {
+  final int pid;
+  final String dst;
+  final String src;
+  const _RunningMirror({
+    required this.pid,
+    required this.dst,
+    required this.src,
+  });
 }

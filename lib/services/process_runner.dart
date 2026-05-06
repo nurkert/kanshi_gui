@@ -42,7 +42,17 @@ abstract class ProcessRunner {
 class ProcessStream {
   final Stream<String> lines;
   final Future<void> Function() kill;
-  const ProcessStream({required this.lines, required this.kill});
+  /// Future that resolves to the OS-level pid once the underlying
+  /// `Process.start` completes. Useful for callers (e.g. MirrorRunner)
+  /// that need to distinguish their own managed children from
+  /// independently-spawned siblings when scanning the live process
+  /// table.
+  final Future<int?> pid;
+  const ProcessStream({
+    required this.lines,
+    required this.kill,
+    required this.pid,
+  });
 }
 
 class DefaultProcessRunner implements ProcessRunner {
@@ -101,9 +111,11 @@ class DefaultProcessRunner implements ProcessRunner {
   @override
   ProcessStream stream(String executable, List<String> arguments) {
     final controller = StreamController<String>();
+    final pidCompleter = Completer<int?>();
     Process? proc;
     Process.start(executable, arguments).then((p) {
       proc = p;
+      pidCompleter.complete(p.pid);
       p.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -117,6 +129,7 @@ class DefaultProcessRunner implements ProcessRunner {
         if (!controller.isClosed) controller.close();
       });
     }).catchError((Object e, StackTrace st) {
+      if (!pidCompleter.isCompleted) pidCompleter.complete(null);
       controller.addError(e, st);
       controller.close();
     });
@@ -126,6 +139,7 @@ class DefaultProcessRunner implements ProcessRunner {
         proc?.kill(ProcessSignal.sigterm);
         await controller.close();
       },
+      pid: pidCompleter.future,
     );
   }
 

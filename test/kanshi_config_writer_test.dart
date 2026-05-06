@@ -218,15 +218,21 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      expect(rendered, contains("--fullscreen-output 'B' 'A'"),
-          reason: 'wl-mirror requires source-output positional last.');
+      // Mirror persistence is a `# kanshi_gui:mirror` comment, NOT an
+      // `exec wl-mirror` line: the latter caused kanshi to spawn a
+      // duplicate wl-mirror process on every reload, fighting the
+      // GUI's MirrorRunner for ownership.
+      expect(rendered, contains("# kanshi_gui:mirror 'B'='A'"),
+          reason: 'Mirror state is persisted as an annotation now.');
+      expect(rendered, isNot(contains('exec wl-mirror')),
+          reason: 'No exec hook → no duplicate wl-mirror processes.');
 
       final reparsed =
           KanshiConfigParser.parse(rendered).single.monitors;
       final a = reparsed.firstWhere((m) => m.id == 'A');
       final b = reparsed.firstWhere((m) => m.id == 'B');
       expect(a.mirrorOf, isNull,
-          reason: 'Source tile is unaffected by the exec hook.');
+          reason: 'Source tile is unaffected by the annotation.');
       expect(b.mirrorOf, equals('A'),
           reason: 'Destination tile must recover its mirror target.');
     });
