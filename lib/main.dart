@@ -74,7 +74,10 @@ class _KanshiAppState extends State<KanshiApp> {
               settings: widget.settings,
               onDone: () => setState(() => _showWizard = false),
             )
-          : HomePage(controller: widget.controller),
+          : HomePage(
+              controller: widget.controller,
+              settings: widget.settings,
+            ),
     );
   }
 }
