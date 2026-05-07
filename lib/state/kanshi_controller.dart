@@ -54,6 +54,13 @@ class KanshiController extends ChangeNotifier {
   int? _activeProfileIndex;
   bool _isApplyingBatch = false;
   Timer? _saveTimer;
+  /// Serialises [_reconcileMirrors] so concurrent calls (hotplug listener,
+  /// `setActiveProfile`, undo/redo, `setMirror`) cannot interleave inside
+  /// `MirrorRunner` and clobber each other's `_entries[dst]` state. Each
+  /// `_reconcileMirrors()` chains `_doReconcileMirrors` onto the previous
+  /// future; failures are caught at the chain boundary so a poisoned run
+  /// can't block subsequent reconciles.
+  Future<void> _reconcileChain = Future.value();
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
   final Map<String, double> _lastSnappedScale = {};
   List<SnapLine> _activeSnapLines = const [];
@@ -1093,48 +1100,75 @@ class KanshiController extends ChangeNotifier {
 
   /// Diff the active profile's intended mirror set against MirrorRunner's
   /// running set, then start/stop wl-mirror processes to converge. Called
-  /// from `setMirror`, `setActiveProfile`, hotplug, and `init`.
-  Future<void> _reconcileMirrors() async {
-    if (!supportsMirror) {
-      // Backend cannot mirror — make sure no leftovers are running.
-      if (mirrorRunner.activeDestinations.isNotEmpty) {
-        await mirrorRunner.stopAll();
-      }
-      return;
-    }
-    final connectedIds =
-        _currentMonitors.map((m) => m.id).toSet();
-    final desired = <String, String>{}; // destId -> srcId
-    if (_activeProfileIndex != null) {
-      for (final m in _profiles[_activeProfileIndex!].monitors) {
-        final src = m.mirrorOf;
-        if (src == null || !m.enabled) continue;
-        // Only spin up wl-mirror when both endpoints are physically
-        // present — otherwise wl-mirror would just exit, burn the retry
-        // budget and mark the destination failed.
-        if (!connectedIds.contains(m.id)) continue;
-        if (!connectedIds.contains(src)) continue;
-        desired[m.id] = src;
-      }
-    }
-    final running = mirrorRunner.activeDestinations;
+  /// from `setMirror`, `setActiveProfile`, hotplug, and `init`. Multiple
+  /// concurrent calls are serialised through [_reconcileChain] — without
+  /// the chain a hotplug-driven reconcile racing a profile-switch reconcile
+  /// could read each other's half-installed `_entries[dst]` and kill a
+  /// process the other had just spawned.
+  Future<void> _reconcileMirrors() {
+    final next = _reconcileChain.then((_) => _doReconcileMirrors());
+    // The chain must NOT be poisoned by one reconcile's exception — a
+    // `pgrep` IO error or a `kill` on a vanished pid would otherwise
+    // block every later reconcile via the unhandled error. The inner
+    // body in `_doReconcileMirrors` also catches and logs, so this
+    // outer `catchError` is a defence-in-depth: if a future refactor
+    // ever lets an exception escape, the chain still survives.
+    _reconcileChain = next.catchError((_) {});
+    return next;
+  }
 
-    // Stop mirrors no longer in the desired set, or whose source changed.
-    for (final dst in running) {
-      final wantSrc = desired[dst];
-      if (wantSrc == null) {
-        await mirrorRunner.stop(dst);
+  Future<void> _doReconcileMirrors() async {
+    try {
+      if (!supportsMirror) {
+        // Backend cannot mirror — make sure no leftovers are running.
+        if (mirrorRunner.activeDestinations.isNotEmpty) {
+          await mirrorRunner.stopAll();
+        }
+        return;
       }
+      final connectedIds =
+          _currentMonitors.map((m) => m.id).toSet();
+      final desired = <String, String>{}; // destId -> srcId
+      if (_activeProfileIndex != null) {
+        for (final m in _profiles[_activeProfileIndex!].monitors) {
+          final src = m.mirrorOf;
+          if (src == null || !m.enabled) continue;
+          // Only spin up wl-mirror when both endpoints are physically
+          // present — otherwise wl-mirror would just exit, burn the retry
+          // budget and mark the destination failed.
+          if (!connectedIds.contains(m.id)) continue;
+          if (!connectedIds.contains(src)) continue;
+          desired[m.id] = src;
+        }
+      }
+      final running = mirrorRunner.activeDestinations;
+
+      // Stop mirrors no longer in the desired set, or whose source changed.
+      for (final dst in running) {
+        final wantSrc = desired[dst];
+        if (wantSrc == null) {
+          await mirrorRunner.stop(dst);
+        }
+      }
+      // Start / rebind desired mirrors.
+      for (final entry in desired.entries) {
+        await mirrorRunner.start(entry.value, entry.key);
+      }
+      // Final sweep: kill any wl-mirror process the OS is running that
+      // doesn't belong to the desired set. Catches orphans left behind
+      // by an older `exec wl-mirror` kanshi config or a previous GUI
+      // session that crashed before its `dispose` could fire.
+      await mirrorRunner.purgeExternalNotMatching(desired);
+    } catch (e, st) {
+      // `mirrorRunner.start`/`purgeExternalNotMatching` shell out to
+      // `pgrep` and `kill`; either can fail if the system is starved
+      // for fds, the binaries are missing from PATH, or a pid races
+      // with our scan. Logging instead of rethrowing keeps the call
+      // sites' fire-and-forget semantics safe under any backend
+      // weather, and the `_reconcileChain` outer guard is a separate
+      // safety net.
+      debugPrint('reconcileMirrors failed: $e\n$st');
     }
-    // Start / rebind desired mirrors.
-    for (final entry in desired.entries) {
-      await mirrorRunner.start(entry.value, entry.key);
-    }
-    // Final sweep: kill any wl-mirror process the OS is running that
-    // doesn't belong to the desired set. Catches orphans left behind
-    // by an older `exec wl-mirror` kanshi config or a previous GUI
-    // session that crashed before its `dispose` could fire.
-    await mirrorRunner.purgeExternalNotMatching(desired);
   }
 
   // ── Compositor-driven actions ──────────────────────────────────────────
