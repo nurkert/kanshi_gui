@@ -126,6 +126,18 @@ class _HomePageState extends State<HomePage>
   @override
   void dispose() {
     c.removeListener(_onControllerChanged);
+    // Null the callback registrations the controller still holds so a
+    // post-dispose event (e.g. a hotplug delivered between the
+    // sub-cancel and the runtime tearing it down — also separately
+    // guarded inside the controller via `_isDisposed`) can't fire a
+    // stale closure that captures this disposed State's `context` and
+    // `widget.settings`. Without this, on wizard re-entry the
+    // previous HomePage's closures briefly co-exist with the fresh
+    // ones.
+    c.onHotplugToast = null;
+    c.onProfileSuggestion = null;
+    c.onAutoSwitchedProfile = null;
+    c.autoSwitchProfileEnabled = null;
     _iconController.dispose();
     super.dispose();
   }
