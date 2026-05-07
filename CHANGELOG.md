@@ -1,5 +1,93 @@
 # Changelog
 
+## 1.5.0 — 2026-05-07
+
+### Added
+
+- **Auto-switch to a matching profile on hotplug.** When a known
+  monitor set is plugged in, the GUI now switches to the matching
+  profile automatically and surfaces a toast with an Undo button
+  (Ctrl+Z also works). The behaviour is gated by a new toggle in
+  the AppBar gear menu (Settings → "Auto-switch profile on
+  hotplug"), default on. Persisted in
+  `~/.config/kanshi-gui/settings.json` via an atomic
+  write-tmp-then-rename so a crash can't half-write the file.
+  Mirror restoration comes for free: the active profile's
+  `# kanshi_gui:mirror` annotation triggers `_reconcileMirrors`
+  on every profile switch, so re-plugging a beamer that was set
+  up for mirroring brings the mirror back without user action.
+- **Settings dropdown in the AppBar.** A new gear icon hosts
+  GUI-private toggles, starting with the auto-switch flag. Adding
+  more knobs later is a matter of dropping another `SwitchListTile`
+  into the popup menu.
+- **Sidebar active-profile highlight follows the user's sway
+  accent.** The hard-coded teal of the active profile row now
+  reads `~/.config/sway/config`'s `client.focused` border colour
+  at startup (resolving `set $name #color` variables and
+  following `include` directives). The drag-time snap guides on
+  the layout canvas pick up the same accent. If sway isn't
+  installed or the config has no usable colour, both surfaces
+  fall back to their historical defaults — the reader is
+  best-effort and never errors the app.
+- **Snap threshold is no longer absurd.** The default snap
+  distance dropped from `500` to `60` logical pixels — the
+  former was effectively "always snap" (a quarter of a 1920-wide
+  monitor), making intentional small offsets impossible. Free
+  placement at e.g. 100 px away now stays free; snapping engages
+  only when the dragged tile is genuinely close to alignment.
+- **Profile-match dot in the sidebar.** Each profile row now
+  shows a small coloured dot at the start: green when every
+  profile output is connected (auto-switch would fire here),
+  amber for partial matches, grey when nothing matches. Tooltip
+  spells out the count and which outputs are missing. The data
+  was already computed for the suggestion-toast and auto-switch
+  logic; surfacing it makes the sidebar readable at a glance
+  instead of forcing the user to mentally map profile names to
+  physical setups.
+
+### Fixed
+
+- **Workspaces now relocate reliably across hotplug.** Three
+  coupled bugs were leaking windows onto the wrong output after
+  docking: (1) multiple `exec swaymsg "..."` lines raced against
+  each other because kanshi spawned each in its own fork/exec
+  (sway processed them out-of-order); (2) `workspace N output X`
+  is passive — it only specifies where workspace N is *created*,
+  never relocates one that already exists with windows; (3) bare
+  `workspace N` is matched by *name*, so a user with a named
+  workspace like `1: code` would silently get a fresh empty `1`
+  alongside their existing one. The writer now emits a single
+  chained `exec swaymsg "..."` invocation that declares every
+  workspace's home up front (using `workspace number N output X`
+  to target the numeric slot), then walks 1..9 issuing
+  `workspace number N; move workspace to output X` to actively
+  relocate each one. Final command is `workspace number 1` so
+  focus lands on the leftmost-rank monitor (typically the user's
+  primary attention area after docking).
+
+### Improved
+
+- **Profile matching is more robust against port reassignment.**
+  Manufacturer/model/serial info from EDID is now persisted in
+  the kanshi config as a
+  `# kanshi_gui:edid '<port>'='<manufacturer>'` comment
+  annotation. Previously the on-disk profile only knew the port
+  id, so plugging the same physical monitor into a different
+  port (e.g. HDMI-A-1 → HDMI-A-2) broke matching across
+  restarts. Within a single session, EDID rehydrates from live
+  outputs; the annotation extends that robustness across app
+  restarts.
+- **`_findProfileMatchingCurrent` now uses claim-based two-pass
+  matching.** A profile with a single Samsung output can no
+  longer spuriously match a desk with two physically identical
+  Samsungs (the old any-match logic let one profile slot claim
+  both connected outputs and trip a false-positive auto-switch).
+- **Undo against an auto-switch arms the suggestion cooldown.**
+  If the user undoes the auto-switch (toast button or Ctrl+Z), a
+  flaky cable wiggle that re-emits the same connected set will
+  not yank them back into the profile they just walked away from
+  for at least 30 seconds.
+
 ## 1.4.3 — 2026-05-06
 
 ### Fixed
