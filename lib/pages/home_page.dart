@@ -377,6 +377,7 @@ class _HomePageState extends State<HomePage>
                                   painter: SnapLinesPainter(
                                     lines: c.activeSnapLines,
                                     layout: layout,
+                                    accent: widget.activeAccent,
                                   ),
                                 ),
                               ),
