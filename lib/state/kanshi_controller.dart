@@ -1434,10 +1434,6 @@ class KanshiController extends ChangeNotifier {
   bool _matchesOutput(String a, String b) =>
       _normalizeOutputId(a) == _normalizeOutputId(b);
 
-  bool _monitorsMatch(MonitorTileData a, MonitorTileData b) =>
-      _matchesOutput(a.id, b.id) ||
-      _matchesOutput(a.manufacturer, b.manufacturer);
-
   String _resolveOutputName(String idOrManufacturer) {
     final norm = _normalizeOutputId(idOrManufacturer);
     for (final m in _currentMonitors) {
@@ -1527,21 +1523,109 @@ class KanshiController extends ChangeNotifier {
     cb(suggestion);
   }
 
-  int? _findProfileMatchingCurrent() {
-    final currentEnabled =
-        _currentMonitors.where((m) => m.enabled).toList();
-    for (var i = 0; i < _profiles.length; i++) {
-      final enabled =
-          _profiles[i].monitors.where((m) => m.enabled).toList();
-      if (enabled.length != currentEnabled.length) continue;
-      var allMatch = true;
-      for (final cm in currentEnabled) {
-        if (!enabled.any((pm) => _monitorsMatch(pm, cm))) {
-          allMatch = false;
+  /// Per-profile match status against the currently connected output
+  /// set. The sidebar surfaces this as a coloured dot so the user can
+  /// tell at a glance which profiles would auto-fire on dock vs which
+  /// are missing outputs.
+  ///
+  /// Uses two-pass claim tracking (id-exact, then manufacturer
+  /// fallback) — the same discipline as [_rehydrateProfilesAgainst]
+  /// and [findBestProfileSuggestion]. Without claim tracking, two
+  /// physically identical monitors with the same EDID-derived
+  /// manufacturer string would both pile onto the same profile slot
+  /// and a 1-Samsung profile would falsely look "full" against a
+  /// 2-Samsung desk.
+  ///
+  /// Status semantics:
+  ///   - [ProfileMatchStatus.full] — every profile slot is claimed by
+  ///     a distinct connected output AND the counts are equal. This
+  ///     is the condition the auto-switcher uses to decide whether to
+  ///     fire.
+  ///   - [ProfileMatchStatus.partial] — at least one profile slot is
+  ///     claimed but it isn't a 1-to-1 match (counts differ or some
+  ///     slots have no claimant).
+  ///   - [ProfileMatchStatus.none] — zero profile slots find a match,
+  ///     or the profile / connected set is empty.
+  ProfileMatchInfo profileMatchInfo(int index) {
+    if (index < 0 || index >= _profiles.length) {
+      return const ProfileMatchInfo(
+        status: ProfileMatchStatus.none,
+        matched: 0,
+        profileEnabled: 0,
+        currentEnabled: 0,
+        missing: [],
+      );
+    }
+    final pEnabled =
+        _profiles[index].monitors.where((m) => m.enabled).toList();
+    final cEnabled = _currentMonitors.where((m) => m.enabled).toList();
+    if (pEnabled.isEmpty || cEnabled.isEmpty) {
+      return ProfileMatchInfo(
+        status: ProfileMatchStatus.none,
+        matched: 0,
+        profileEnabled: pEnabled.length,
+        currentEnabled: cEnabled.length,
+        missing: [for (final m in pEnabled) m.id],
+      );
+    }
+    final claimedCurrent = <int>{};
+    final matchedSlots = <int>{};
+    // Pass 1: id-exact.
+    for (var i = 0; i < pEnabled.length; i++) {
+      for (var j = 0; j < cEnabled.length; j++) {
+        if (claimedCurrent.contains(j)) continue;
+        if (_matchesOutput(pEnabled[i].id, cEnabled[j].id)) {
+          claimedCurrent.add(j);
+          matchedSlots.add(i);
           break;
         }
       }
-      if (allMatch) return i;
+    }
+    // Pass 2: manufacturer fallback for profile slots still unmatched.
+    for (var i = 0; i < pEnabled.length; i++) {
+      if (matchedSlots.contains(i)) continue;
+      if (pEnabled[i].manufacturer.isEmpty) continue;
+      for (var j = 0; j < cEnabled.length; j++) {
+        if (claimedCurrent.contains(j)) continue;
+        if (cEnabled[j].manufacturer.isEmpty) continue;
+        if (_matchesOutput(
+            pEnabled[i].manufacturer, cEnabled[j].manufacturer)) {
+          claimedCurrent.add(j);
+          matchedSlots.add(i);
+          break;
+        }
+      }
+    }
+    final missing = <String>[
+      for (var i = 0; i < pEnabled.length; i++)
+        if (!matchedSlots.contains(i)) pEnabled[i].id,
+    ];
+    final ProfileMatchStatus status;
+    if (matchedSlots.length == pEnabled.length &&
+        pEnabled.length == cEnabled.length) {
+      status = ProfileMatchStatus.full;
+    } else if (matchedSlots.isEmpty) {
+      status = ProfileMatchStatus.none;
+    } else {
+      status = ProfileMatchStatus.partial;
+    }
+    return ProfileMatchInfo(
+      status: status,
+      matched: matchedSlots.length,
+      profileEnabled: pEnabled.length,
+      currentEnabled: cEnabled.length,
+      missing: missing,
+    );
+  }
+
+  /// Find a profile whose enabled outputs match the currently
+  /// connected set 1-to-1 — i.e. a [ProfileMatchStatus.full] match.
+  /// Returns the first such profile in declaration order, or null
+  /// when no profile is a complete fit.
+  int? _findProfileMatchingCurrent() {
+    if (_currentMonitors.where((m) => m.enabled).isEmpty) return null;
+    for (var i = 0; i < _profiles.length; i++) {
+      if (profileMatchInfo(i).status == ProfileMatchStatus.full) return i;
     }
     return null;
   }
@@ -1590,6 +1674,44 @@ class ProfileSuggestion {
     required this.confidence,
     required this.matchedOutputs,
     required this.totalOutputs,
+  });
+}
+
+/// At-a-glance compatibility of a saved profile with the currently
+/// connected output set, surfaced as a coloured dot in the sidebar.
+enum ProfileMatchStatus {
+  /// Every profile slot has a distinct connected output AND the
+  /// counts are equal — auto-switch would fire on this profile.
+  full,
+  /// At least one profile slot is matched but the fit isn't 1-to-1
+  /// (counts differ or some slots have no claimant).
+  partial,
+  /// Zero profile slots find a match (or the profile / connected set
+  /// is empty).
+  none,
+}
+
+/// Result of [KanshiController.profileMatchInfo]. The sidebar uses
+/// [status] for the dot colour and the rest of the fields to compose
+/// a tooltip like "2 of 3 outputs connected — DP-2 missing".
+class ProfileMatchInfo {
+  final ProfileMatchStatus status;
+  /// How many profile slots claimed a connected output.
+  final int matched;
+  /// Number of enabled monitors in the profile.
+  final int profileEnabled;
+  /// Number of enabled monitors currently connected.
+  final int currentEnabled;
+  /// Output ids from the profile that have no claimant in the
+  /// current connected set (i.e. what's "missing" from the user's
+  /// physical desk to make this profile a full match).
+  final List<String> missing;
+  const ProfileMatchInfo({
+    required this.status,
+    required this.matched,
+    required this.profileEnabled,
+    required this.currentEnabled,
+    required this.missing,
   });
 }
 
