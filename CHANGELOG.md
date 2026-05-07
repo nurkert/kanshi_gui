@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.5.1 — 2026-05-07
+
+### Fixed
+
+Audit-driven robustness pass over the freshly-landed 1.5.0 surface.
+Four parallel read-only audits (concurrency, workspace-writer,
+persistence, UI-reactivity) found the issues below; each fix lands
+as its own commit with focused tests.
+
+- **`_reconcileMirrors` now serialises concurrent calls.** The five
+  call sites — three of them fire-and-forget (hotplug listener,
+  `setActiveProfile`, `_restoreSnapshot`) — could interleave inside
+  the non-reentrant `MirrorRunner`. A second concurrent call for
+  the same destination would read the first's half-installed
+  `_entries[dst]` state and `await stop(dst)` on the just-spawned
+  wl-mirror process. Symptom in the wild: flapping mirrors during
+  rapid hotplug or hotplug-meets-undo events. Fix is a
+  per-controller `Future`-chain lock plus inner `try`/`catch` that
+  logs but doesn't poison the chain.
+- **Hotplug listener no longer fires after `dispose()`.**
+  `_outputSubscription?.cancel()` doesn't abort an in-flight
+  handler. The body would call `notifyListeners` on the disposed
+  `ChangeNotifier` (asserts in debug) and trigger fire-and-forget
+  `_reconcileMirrors` against a torn-down listener registration.
+  Added a `_isDisposed` flag set first in `dispose()` and checked
+  at the listener entry.
+- **Mirror destinations are excluded from workspace-rank
+  distribution.** The 1.5.0 chained-exec workspace block built
+  `enabledMons` from `mons.where((m) => m.enabled)` only —
+  destinations leaked in. wl-mirror's fullscreen surface occludes
+  anything sway draws on a destination, so workspaces landing
+  there were invisible. The 1.5.0 imperative `move workspace to
+  output` form made the misassignment durable across reloads.
+  Added the `m.mirrorOf == null` predicate matching
+  `LayoutMath.computeDisplay`.
+- **HomePage callbacks are cleared on dispose.** `c.onHotplugToast`,
+  `c.onProfileSuggestion`, `c.onAutoSwitchedProfile`,
+  `c.autoSwitchProfileEnabled`, plus the new `c.onConfigSaveBlocked`
+  are all nulled in `HomePage.dispose()`. Without this the closures
+  pinned the disposed `State` and pointed the controller at stale
+  `widget.settings` on wizard re-entry.
+- **EDID manufacturer round-trips losslessly via `\'` escape.** The
+  pre-fix writer stripped apostrophes from manufacturer before
+  emitting, but the matcher byte-compared against the unstripped
+  live data — manufacturers like `L'Hôtel` would silently drop out
+  of manufacturer-fallback matching after a save+load. Switched to
+  escape-and-unescape; backwards-compatible with 1.5.0-pre-fix
+  configs (which never contained apostrophes).
+- **GUI refuses to overwrite a kanshi config that uses `include`
+  directives.** kanshi's DSL supports splitting profiles across
+  files via `include <pattern>`. The GUI parses only the main file,
+  so a save would render-and-overwrite without preserving the
+  include line — orphaning every profile in the included files.
+  `ConfigService` now detects includes at first read and throws
+  `ConfigHasIncludesException` from `saveProfiles`. Both controller
+  save paths (`_flushSaveAndReload`, `_scheduleSave`) short-circuit
+  on the flag. HomePage shows a persistent SnackBar explaining
+  why edits aren't landing on disk.
+
 ## 1.5.0 — 2026-05-07
 
 ### Added
