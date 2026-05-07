@@ -5,6 +5,22 @@ import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 
+/// Thrown by [ConfigService.saveProfiles] when the live kanshi config
+/// uses `include` directives. Saving would render only the profiles
+/// the GUI parsed (the main file's profiles, NOT the included
+/// files') and would silently drop the `include` line, orphaning
+/// every profile in the included files. Refuse rather than corrupt.
+class ConfigHasIncludesException implements Exception {
+  final String configPath;
+  const ConfigHasIncludesException(this.configPath);
+  @override
+  String toString() =>
+      'kanshi config at $configPath uses `include` directives. '
+      'Saving would overwrite them and orphan profiles in the '
+      'included files. Move profiles into the main config to '
+      're-enable saving from the GUI.';
+}
+
 /// Thin filesystem layer around the kanshi config file. Parsing and rendering
 /// live in [KanshiConfigParser] / [KanshiConfigWriter] respectively so they
 /// can be unit-tested without touching disk.
@@ -49,7 +65,50 @@ class ConfigService {
     return KanshiConfigParser.parse(content);
   }
 
+  /// True iff the live kanshi config contains an `include <pattern>`
+  /// directive (kanshi's DSL feature for splitting profiles across
+  /// files). Result is cached after the first call to keep the save
+  /// hot-path fast — the file's include-status is treated as stable
+  /// for the lifetime of the controller; a user who edits in their
+  /// includes mid-session needs to relaunch the GUI.
+  ///
+  /// `#`-commented include lines do not count; the line is stripped
+  /// of trailing comments via the same simple split as
+  /// `KanshiConfigParser._stripComments`.
+  bool? _hasIncludesCache;
+  Future<bool> hasIncludeDirectives() async {
+    final cached = _hasIncludesCache;
+    if (cached != null) return cached;
+    final file = File(configPath);
+    if (!await file.exists()) {
+      _hasIncludesCache = false;
+      return false;
+    }
+    final content = await file.readAsString();
+    final result = content.split('\n').any((line) {
+      // Strip inline comments. We don't care about quoting here —
+      // kanshi profile names with literal `#` are not a real
+      // collision risk because the include directive lives outside
+      // any profile block.
+      final hashIdx = line.indexOf('#');
+      final stripped = (hashIdx == -1 ? line : line.substring(0, hashIdx))
+          .trim();
+      // `include <pattern>` — pattern must be non-empty.
+      return RegExp(r'^include\s+\S').hasMatch(stripped);
+    });
+    _hasIncludesCache = result;
+    return result;
+  }
+
   Future<void> saveProfiles(List<Profile> profiles) async {
+    // Refuse to save when the user's main config pulls in other files
+    // via `include`. We only parse the main file, so a render-and-
+    // overwrite would silently drop the `include` line and orphan
+    // every profile defined in the included files. Better to throw
+    // here than to corrupt the user's setup.
+    if (await hasIncludeDirectives()) {
+      throw ConfigHasIncludesException(configPath);
+    }
     final rendered =
         KanshiConfigWriter.render(profiles, options: writeOptions);
 

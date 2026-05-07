@@ -554,6 +554,45 @@ void main() {
     expect(cfg.writeOptions.injectSwayWorkspaceExec, isFalse);
   });
 
+  test('init detects include directives and sets configHasIncludes',
+      () async {
+    // A user whose kanshi config carries `include` directives must
+    // not have their save path fire — that would render-and-overwrite
+    // the main config, dropping the include line. The controller
+    // sets a flag at init time that the save paths short-circuit on,
+    // and surfaces a callback to the UI for the persistent banner.
+    final cfgPath = '${tmp.path}/config';
+    await File(cfgPath).writeAsString(
+      'include /etc/kanshi.d/work\nprofile foo {\n}\n',
+    );
+    final cfg = ConfigService(
+      configPath: cfgPath,
+      backupPrefix: '${tmp.path}/config.bak',
+      writeOptions: KanshiWriteOptions.neutral,
+    );
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    var blockedFires = 0;
+    c.onConfigSaveBlocked = () => blockedFires++;
+    await c.init();
+    expect(c.configHasIncludes, isTrue,
+        reason: 'init must detect include directives upfront so the '
+            'first mutation does not have to discover the issue '
+            'mid-flight.');
+    // `init` calls `ensureCurrentSetupMatches` which schedules a
+    // save — that schedule is what should fire the blocked callback.
+    expect(blockedFires, greaterThanOrEqualTo(1),
+        reason: 'At least the init-time save attempt must fire the '
+            'block callback so the UI surfaces the banner without '
+            'waiting for the user\'s first edit.');
+    // The original include-using file content survives untouched.
+    expect(
+      await File(cfgPath).readAsString(),
+      equals('include /etc/kanshi.d/work\nprofile foo {\n}\n'),
+      reason: 'A blocked save must not write to disk.',
+    );
+  });
+
   test('hotplug events delivered after dispose are dropped without crash',
       () async {
     // `_outputSubscription?.cancel()` does NOT abort the in-flight

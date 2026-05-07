@@ -68,6 +68,12 @@ class KanshiController extends ChangeNotifier {
   /// disposed `ChangeNotifier` (asserts in debug) or fire UI callbacks
   /// against a disposed widget.
   bool _isDisposed = false;
+  /// Set during [init] when the live kanshi config carries `include`
+  /// directives. While true, all save paths short-circuit and fire
+  /// [onConfigSaveBlocked] instead of writing — overwriting would
+  /// orphan profiles in the included files.
+  bool _configHasIncludes = false;
+  bool get configHasIncludes => _configHasIncludes;
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
   final Map<String, double> _lastSnappedScale = {};
   List<SnapLine> _activeSnapLines = const [];
@@ -90,6 +96,12 @@ class KanshiController extends ChangeNotifier {
   /// switch already happened — the toast is informational, not a
   /// prompt.
   void Function(String profileName)? onAutoSwitchedProfile;
+  /// Fired when a save was attempted but skipped because the user's
+  /// kanshi config uses `include` directives (saving would orphan
+  /// profiles in the included files). The HomePage surfaces this as
+  /// a persistent SnackBar so the user knows why their changes are
+  /// not landing on disk.
+  void Function()? onConfigSaveBlocked;
   /// Wallclock of the last manual profile switch. Auto-suggestions are
   /// suppressed for [_suggestionCooldown] after this so a user who just
   /// picked profile A on purpose doesn't get nagged into switching back.
@@ -238,6 +250,15 @@ class KanshiController extends ChangeNotifier {
   Future<void> init() async {
     await _loadConfig();
     await refreshConnectedMonitors();
+    // Detect include directives BEFORE `ensureCurrentSetupMatches` —
+    // that helper schedules a save, and we want the include-block
+    // flag to be in place so the schedule short-circuits cleanly
+    // instead of throwing later from inside the debounce timer.
+    try {
+      _configHasIncludes = await config.hasIncludeDirectives();
+    } catch (_) {
+      _configHasIncludes = false;
+    }
     await ensureCurrentSetupMatches();
     _subscribeHotplug();
     await _reconcileMirrors();
@@ -558,8 +579,24 @@ class KanshiController extends ChangeNotifier {
   /// see the just-written config (mirror / rank / undo / redo).
   Future<void> _flushSaveAndReload() async {
     _saveTimer?.cancel();
+    if (_configHasIncludes) {
+      // The user's main config pulls in other files via `include`.
+      // Saving would render only the profiles WE parsed (which
+      // didn't include the included files') and silently overwrite
+      // the include line — orphaning every profile in the included
+      // files. Surface a UI warning instead.
+      onConfigSaveBlocked?.call();
+      return;
+    }
     try {
       await config.saveProfiles(_profiles);
+    } on ConfigHasIncludesException {
+      // Race-safe fallback: if the user added an `include` directive
+      // since `init()` ran (we cached the answer there), the
+      // ConfigService throws this and we surface the same warning
+      // path as the upfront block.
+      _configHasIncludes = true;
+      onConfigSaveBlocked?.call();
     } catch (_) {/* best effort */}
     try {
       await monitors.restartCompositorProfileApply();
@@ -1543,8 +1580,25 @@ class KanshiController extends ChangeNotifier {
   // ── Internals ──────────────────────────────────────────────────────────
   void _scheduleSave() {
     _saveTimer?.cancel();
+    if (_configHasIncludes) {
+      // Same rationale as `_flushSaveAndReload`: don't render-and-
+      // overwrite a config we only partially parsed.
+      onConfigSaveBlocked?.call();
+      return;
+    }
     _saveTimer = Timer(const Duration(milliseconds: 600), () {
-      config.saveProfiles(_profiles);
+      // The save itself runs through ConfigService, which throws
+      // `ConfigHasIncludesException` if the user added an include
+      // since we last checked. Catch and route to the same UI path.
+      // Fire-and-forget by design — a debounced save's errors are
+      // best-effort and the next mutation will re-trigger.
+      // ignore: discarded_futures
+      config.saveProfiles(_profiles).catchError((Object e) {
+        if (e is ConfigHasIncludesException) {
+          _configHasIncludes = true;
+          onConfigSaveBlocked?.call();
+        }
+      });
     });
   }
 
