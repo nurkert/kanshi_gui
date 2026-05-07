@@ -372,6 +372,73 @@ void main() {
       expect(m.manufacturer, equals('BenQ Projector ABC123'));
     });
 
+    test('manufacturer with apostrophe round-trips losslessly', () {
+      // Pre-1.5.1 the writer stripped apostrophes from manufacturer
+      // before emitting, but the matcher byte-compared against the
+      // unstripped live data — so a `L'Hôtel Display` would silently
+      // fall out of manufacturer-fallback matching after a save/load.
+      // The fix escapes the apostrophe as `\'` and unescapes on read.
+      final p = Profile(
+        name: 'Apostrophe',
+        monitors: [
+          MonitorTileData(
+            id: 'HDMI-A-1',
+            manufacturer: "L'Hôtel Display",
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            rotation: 0,
+            refresh: 60,
+            resolution: '1920x1080',
+            orientation: 'landscape',
+          ),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render([p]);
+      expect(rendered, contains(r"\'Hôtel Display"),
+          reason: 'On-disk form must escape apostrophes, not strip '
+              'them, otherwise matching against live data lossily '
+              'differs by one byte.');
+      expect(rendered, isNot(contains("'L'Hôtel")),
+          reason: 'Bare unescaped apostrophe inside the value would '
+              'break the parser regex by closing the quote early.');
+      final reparsed = KanshiConfigParser.parse(rendered);
+      final m = reparsed.single.monitors.single;
+      expect(m.manufacturer, equals("L'Hôtel Display"),
+          reason: 'After unescape, the in-memory value is bit-identical '
+              'to what live sway/wlr-randr would emit.');
+    });
+
+    test('apostrophe-free manufacturer still round-trips', () {
+      // Sanity: the new escape-aware parser must not regress the
+      // common case where manufacturer has no apostrophes.
+      final p = Profile(
+        name: 'Plain',
+        monitors: [
+          MonitorTileData(
+            id: 'HDMI-A-1',
+            manufacturer: 'BenQ Projector ABC123',
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            rotation: 0,
+            refresh: 60,
+            resolution: '1920x1080',
+            orientation: 'landscape',
+          ),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render([p]);
+      final reparsed = KanshiConfigParser.parse(rendered);
+      expect(
+          reparsed.single.monitors.single.manufacturer,
+          equals('BenQ Projector ABC123'));
+    });
+
     test('writer skips the EDID annotation when manufacturer == id', () {
       // Hand-edited configs — and old configs round-tripped before the
       // annotation existed — set manufacturer to the port id by

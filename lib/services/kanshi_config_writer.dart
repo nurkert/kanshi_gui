@@ -112,12 +112,17 @@ class KanshiConfigWriter {
     for (final m in mons) {
       if (m.manufacturer.isEmpty) continue;
       if (m.manufacturer == m.id) continue;
-      // Manufacturer comes from EDID and is otherwise free-form. Strip
-      // single quotes so the comment never produces malformed syntax
-      // (the regex on the parser side uses single-quoted values). EDID
-      // strings I've ever seen are alphanumeric + spaces, so this is a
-      // belt-and-braces guard rather than a real lossy transform.
-      final safeManuf = m.manufacturer.replaceAll("'", '');
+      // Manufacturer comes from EDID and is otherwise free-form. We
+      // wrap the value in single quotes so the parser regex can rely
+      // on a stable terminator, but a `'` inside the value would
+      // close the quote prematurely. Escape literal apostrophes as
+      // `\'`; the parser unescapes them on read. Real-world EDID
+      // strings rarely contain apostrophes, but stripping them
+      // (the pre-1.5.1 behaviour) was lossy: downstream
+      // manufacturer-fallback matching byte-compares against the
+      // unstripped live data, so a manufacturer like `L'Hôtel`
+      // would silently drop out of matching after a save+load.
+      final safeManuf = m.manufacturer.replaceAll("'", r"\'");
       buffer.writeln(
         "    # kanshi_gui:edid '${m.id}'='$safeManuf'",
       );
