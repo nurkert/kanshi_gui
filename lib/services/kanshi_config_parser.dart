@@ -185,8 +185,15 @@ class KanshiConfigParser {
     String content,
   ) {
     final out = <String, Map<String, String>>{};
+    // Value group accepts either non-quote-non-backslash characters
+    // OR an escaped apostrophe (`\'`). The writer escapes apostrophes
+    // before emit; we unescape after match so the in-memory
+    // `manufacturer` string is identical to what the live backend
+    // produced. Configs written by 1.5.0-pre-fix never contained
+    // apostrophes (the writer stripped them) so the new pattern
+    // matches them trivially via the zero-or-more clause.
     final edidLine = RegExp(
-      r"^\s*#\s*kanshi_gui:edid\s+'([^']+)'\s*=\s*'(.*)'\s*$",
+      r"^\s*#\s*kanshi_gui:edid\s+'([^']+)'\s*=\s*'((?:[^'\\]|\\')*)'\s*$",
     );
     String? currentProfile;
     var depth = 0;
@@ -203,7 +210,7 @@ class KanshiConfigParser {
         final m = edidLine.firstMatch(raw);
         if (m != null) {
           (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
-              m.group(2)!;
+              m.group(2)!.replaceAll(r"\'", "'");
         }
         depth += _countChar(raw, '{') - _countChar(raw, '}');
         if (depth <= 0) {
