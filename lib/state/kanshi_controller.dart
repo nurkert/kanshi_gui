@@ -61,6 +61,13 @@ class KanshiController extends ChangeNotifier {
   /// future; failures are caught at the chain boundary so a poisoned run
   /// can't block subsequent reconciles.
   Future<void> _reconcileChain = Future.value();
+  /// Set in [dispose] before `super.dispose()`. Async paths that survive
+  /// past dispose (the hotplug listener body, fire-and-forget reconciles,
+  /// callbacks the controller fires after awaiting work) check this and
+  /// short-circuit so a stale event can't drive `notifyListeners` on a
+  /// disposed `ChangeNotifier` (asserts in debug) or fire UI callbacks
+  /// against a disposed widget.
+  bool _isDisposed = false;
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
   final Map<String, double> _lastSnappedScale = {};
   List<SnapLine> _activeSnapLines = const [];
@@ -239,6 +246,13 @@ class KanshiController extends ChangeNotifier {
   void _subscribeHotplug() {
     if (!monitors.isLive) return;
     _outputSubscription = monitors.watchOutputs().listen((newOutputs) {
+      // Cancelling the subscription does NOT abort an in-flight handler;
+      // the body must self-guard so a hotplug event delivered between
+      // `dispose()` setting the flag and the runtime tearing the
+      // listener down can't drive `notifyListeners` on a disposed
+      // controller (debug assertion) or fire callbacks against widgets
+      // that have already detached.
+      if (_isDisposed) return;
       final oldIds = _currentMonitors.map((m) => m.id).toSet();
       final newIds = newOutputs.map((m) => m.id).toSet();
       final added = newIds.difference(oldIds);
@@ -300,6 +314,10 @@ class KanshiController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Set the dispose flag FIRST so any in-flight async body that's
+    // about to call `notifyListeners` or fire a callback bails out
+    // before touching the post-dispose controller.
+    _isDisposed = true;
     _saveTimer?.cancel();
     _revertScheduler.cancelAll();
     safetyNet.cancelAll();
