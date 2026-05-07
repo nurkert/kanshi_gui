@@ -8,11 +8,15 @@ import 'package:kanshi_gui/widgets/profile_list_item.dart';
 class ProfileSidebar extends StatelessWidget {
   final KanshiController controller;
   final VoidCallback onCreateCurrentSetup;
+  /// Forwarded to each row's active-state highlight. See
+  /// [ProfileListItem.activeAccent].
+  final Color? activeAccent;
 
   const ProfileSidebar({
     super.key,
     required this.controller,
     required this.onCreateCurrentSetup,
+    this.activeAccent,
   });
 
   @override
@@ -28,6 +32,7 @@ class ProfileSidebar extends StatelessWidget {
                 return ProfileListItem(
                   profile: controller.profiles[i],
                   isActive: controller.activeProfileIndex == i,
+                  activeAccent: activeAccent,
                   onSelect: () => controller.setActiveProfile(i),
                   onNameChanged: (newName) {
                     final r = controller.renameProfile(i, newName);
