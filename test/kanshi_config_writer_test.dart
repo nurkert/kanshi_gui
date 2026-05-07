@@ -97,13 +97,13 @@ void main() {
       );
       // Leftmost L owns 1/4/7, middle M owns 2/5/8, rightmost R owns 3/6/9.
       for (final ws in [1, 4, 7]) {
-        expect(out, contains("workspace $ws output 'L'"));
+        expect(out, contains("workspace number $ws output 'L'"));
       }
       for (final ws in [2, 5, 8]) {
-        expect(out, contains("workspace $ws output 'M'"));
+        expect(out, contains("workspace number $ws output 'M'"));
       }
       for (final ws in [3, 6, 9]) {
-        expect(out, contains("workspace $ws output 'R'"));
+        expect(out, contains("workspace number $ws output 'R'"));
       }
     });
 
@@ -121,10 +121,10 @@ void main() {
       );
       // Left screen: 1/3/5/7/9, Right screen: 2/4/6/8.
       for (final ws in [1, 3, 5, 7, 9]) {
-        expect(out, contains("workspace $ws output 'Left'"));
+        expect(out, contains("workspace number $ws output 'Left'"));
       }
       for (final ws in [2, 4, 6, 8]) {
-        expect(out, contains("workspace $ws output 'Right'"));
+        expect(out, contains("workspace number $ws output 'Right'"));
       }
     });
 
@@ -144,10 +144,68 @@ void main() {
         options: KanshiWriteOptions.swayDefaults,
       );
       expect(out, contains("# kanshi_gui:rank 'L'=1"));
-      expect(out, contains("workspace 1 output 'R'"));
-      expect(out, contains("workspace 2 output 'L'"));
-      expect(out, contains("workspace 3 output 'R'"));
-      expect(out, contains("workspace 4 output 'L'"));
+      expect(out, contains("workspace number 1 output 'R'"));
+      expect(out, contains("workspace number 2 output 'L'"));
+      expect(out, contains("workspace number 3 output 'R'"));
+      expect(out, contains("workspace number 4 output 'L'"));
+    });
+
+    test(
+        'workspace assignment is one chained swaymsg call with explicit '
+        'move-to-output for each workspace', () {
+      // Two coupled bugs forced this design:
+      //
+      //  1. Multiple `exec swaymsg "..."` lines race because kanshi
+      //     spawns each in its own fork/exec; sway processes them
+      //     out-of-order. ONE chained invocation eliminates the race.
+      //
+      //  2. `workspace N output X` is passive — it sets the home for
+      //     newly-created workspaces but does NOT relocate ones that
+      //     already exist with windows. The user dockted with a window
+      //     on workspace 1 (laptop-only), then the docking layout
+      //     wasn't applied retroactively. Adding `workspace N; move
+      //     workspace to output X` actively moves existing workspaces.
+      final p = Profile(
+        name: 'Triple',
+        monitors: [
+          _mon(id: 'L', x: 0),
+          _mon(id: 'M', x: 1920),
+          _mon(id: 'R', x: 3840),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      // Exactly one `exec swaymsg` line in the workspace-assignment
+      // section. (The current-profile-marker uses `exec echo`, not
+      // swaymsg, so it doesn't count toward this assertion.)
+      final swayMsgLines =
+          out.split('\n').where((l) => l.contains('exec swaymsg')).toList();
+      expect(swayMsgLines, hasLength(1),
+          reason: 'Multiple exec swaymsg lines reintroduce the race that '
+              'leaked windows onto the wrong output during docking.');
+      final chained = swayMsgLines.single;
+      // Active relocation must be present for each workspace 1..9.
+      // Crucially we use `workspace number N` (not `workspace N`):
+      // bare `workspace N` would treat N as the workspace *name*, so
+      // a user with a named workspace like "1: code" would silently
+      // get a fresh empty "1" workspace alongside their existing one.
+      // The `number` keyword targets the numeric slot regardless of
+      // human-readable name.
+      for (var ws = 1; ws <= 9; ws++) {
+        expect(chained, contains("workspace number $ws"),
+            reason: 'Workspace $ws focus must use `number` to disambiguate '
+                'from any user-assigned workspace name.');
+        expect(chained, contains("move workspace to output"),
+            reason: 'Existing workspaces must be actively relocated.');
+      }
+      // Final command lands focus on workspace number 1 — leftmost
+      // rank, typically the user's primary screen after docking.
+      expect(chained.trimRight().endsWith('workspace number 1"'), isTrue,
+          reason: 'Chain must end on `workspace number 1` to give the '
+              'user a predictable focus landing instead of dropping them '
+              'on ws 9.');
     });
 
     test('round-trips workspaceRank through writer → parser', () {
