@@ -553,4 +553,39 @@ void main() {
     KanshiController(monitors: fake, config: cfg);
     expect(cfg.writeOptions.injectSwayWorkspaceExec, isFalse);
   });
+
+  test('hotplug events delivered after dispose are dropped without crash',
+      () async {
+    // `_outputSubscription?.cancel()` does NOT abort the in-flight
+    // listener body if a hotplug event is delivered between dispose
+    // and the runtime tearing the listener down. Without the
+    // `_isDisposed` guard the body would call `notifyListeners` on a
+    // disposed `ChangeNotifier` (debug assertion) and fire callbacks
+    // against widgets that have already detached.
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = KanshiController(monitors: fake, config: _tmpConfig(tmp));
+    await c.init();
+    var totalNotifies = 0;
+    c.addListener(() => totalNotifies++);
+    c.dispose();
+    // Snapshot any notifies fired during dispose itself — those come
+    // from in-process scheduler/safetyNet teardown and aren't what
+    // we're testing.
+    final notifiesAtDispose = totalNotifies;
+    // Push a hotplug — the listener body must short-circuit on the
+    // `_isDisposed` flag. The assertion-level check is that this call
+    // doesn't throw `FlutterError: A KanshiController was used after
+    // being disposed`.
+    expect(
+      () => fake.emitOutputs([_mon(id: 'A'), _mon(id: 'B', x: 1920)]),
+      returnsNormally,
+      reason: 'Hotplug delivered after dispose must not fault.',
+    );
+    // Yield so any microtask the listener body might have queued has a
+    // chance to run.
+    await Future<void>.delayed(Duration.zero);
+    expect(totalNotifies, equals(notifiesAtDispose),
+        reason: 'No notifyListeners should fire from a post-dispose '
+            'hotplug body.');
+  });
 }
