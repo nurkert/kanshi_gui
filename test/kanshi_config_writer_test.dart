@@ -128,6 +128,37 @@ void main() {
       }
     });
 
+    test(
+        'mirror destinations excluded from chained workspace-exec line',
+        () {
+      // Same coverage as the test above but scoped to JUST the chained
+      // `exec swaymsg "..."` line, sidestepping the per-output `output
+      // 'B' enable …` line that is supposed to mention B.
+      final p = Profile(
+        name: 'Mirror',
+        monitors: [
+          _mon(id: 'A', x: 0),
+          _mon(id: 'B', x: 1920, mirrorOf: 'A'),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      final chain = out
+          .split('\n')
+          .firstWhere((l) => l.contains('exec swaymsg'));
+      // Every workspace declaration AND every move command must
+      // target A only.
+      for (var ws = 1; ws <= 9; ws++) {
+        expect(chain, contains("workspace number $ws output 'A'"));
+      }
+      expect(chain, isNot(contains("output 'B'")),
+          reason: 'No workspace-target reference to B in the chain.');
+      expect(chain, isNot(contains("move workspace to output 'B'")),
+          reason: 'No active move targeting B in the chain.');
+    });
+
     test('explicit workspaceRank overrides X-derived rank', () {
       final p = Profile(
         name: 'Override',
