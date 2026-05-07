@@ -36,8 +36,17 @@ class KanshiController extends ChangeNotifier {
       CustomModeRevertScheduler();
   final SafetyNet safetyNet = SafetyNet();
 
-  /// Snap distance used by the layout helpers. Public so widgets that need
-  /// to mirror the value (e.g. for cursor hints) can read it.
+  /// Snap distance used by the layout helpers, in *logical* (sway-coord)
+  /// pixels — same units as `MonitorTileData.x/y`. Public so widgets
+  /// that need to mirror the value (e.g. for cursor hints) can read
+  /// it.
+  ///
+  /// 60 was chosen as a balance: it's small enough that an intentional
+  /// ~100 px gap between two monitors stays free (no surprise snap
+  /// pulling the user to alignment), yet generous enough that "near
+  /// flush against the neighbour" reliably engages. The historical
+  /// default was 500, which was effectively "always snap" because for
+  /// a 1920-wide monitor 500 px is more than a quarter of the screen.
   final double snapThreshold;
 
   List<Profile> _profiles = [];
@@ -107,7 +116,7 @@ class KanshiController extends ChangeNotifier {
     required this.monitors,
     required this.config,
     MirrorRunner? mirrorRunner,
-    this.snapThreshold = 500.0,
+    this.snapThreshold = 60.0,
   }) : mirrorRunner = mirrorRunner ?? MirrorRunner() {
     config.writeOptions = monitors.writeOptions;
     safetyNet.onChange((_) => notifyListeners());

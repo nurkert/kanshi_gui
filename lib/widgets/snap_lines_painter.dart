@@ -10,17 +10,24 @@ import 'dart:math' as math;
 class SnapLinesPainter extends CustomPainter {
   final List<SnapLine> lines;
   final DisplayLayout layout;
+  /// Optional accent colour — when non-null, the guides paint in this
+  /// hue (with a fixed 0.85 alpha) so they pick up the user's sway
+  /// `client.focused` border colour. Null falls back to the original
+  /// material-blue (`#4FC3F7`).
+  final Color? accent;
 
   const SnapLinesPainter({
     required this.lines,
     required this.layout,
+    this.accent,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (lines.isEmpty) return;
+    final base = accent ?? const Color(0xFF4FC3F7);
     final paint = Paint()
-      ..color = const Color(0xFF4FC3F7).withValues(alpha: 0.85)
+      ..color = base.withValues(alpha: 0.85)
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
 
@@ -54,5 +61,5 @@ class SnapLinesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SnapLinesPainter old) =>
-      old.lines != lines || old.layout != layout;
+      old.lines != lines || old.layout != layout || old.accent != accent;
 }
