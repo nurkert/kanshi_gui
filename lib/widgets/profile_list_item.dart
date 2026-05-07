@@ -10,6 +10,14 @@ class ProfileListItem extends StatefulWidget {
   final Function(String) onNameChanged;
   final VoidCallback? onDelete;
   final bool exists;
+  /// Background colour for the active row. Threaded from
+  /// `main.dart` after reading `~/.config/sway/config` so the GUI's
+  /// active-profile highlight matches the user's sway accent (the
+  /// border colour around their focused window). Null falls back to
+  /// the historical teal — used when sway isn't installed, when the
+  /// config has no `client.focused` directive, or when reading fails
+  /// for any other reason.
+  final Color? activeAccent;
 
   const ProfileListItem({
     super.key,
@@ -19,6 +27,7 @@ class ProfileListItem extends StatefulWidget {
     required this.onNameChanged,
     required this.onDelete,
     required this.exists,
+    this.activeAccent,
   });
 
   @override
@@ -43,8 +52,12 @@ class _ProfileListItemState extends State<ProfileListItem> {
 
   @override
   Widget build(BuildContext context) {
-    // Setze unterschiedliche Hintergrundfarben:
-    Color backgroundColor = widget.isActive ? Colors.teal.shade300 : Colors.transparent;
+    // Active row picks up the user's sway accent (typically the
+    // border colour around their focused window). The teal fallback
+    // matches what the app shipped before the accent reader existed.
+    final accent = widget.activeAccent ?? Colors.teal.shade300;
+    Color backgroundColor =
+        widget.isActive ? accent : Colors.transparent;
     return Container(
       color: backgroundColor,
       child: ListTile(

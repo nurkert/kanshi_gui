@@ -7,6 +7,7 @@ import 'package:kanshi_gui/pages/home_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/sway_theme.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
 /*
@@ -40,15 +41,29 @@ Future<void> main() async {
   await controller.init();
 
   final settings = await AppSettings.load();
+  // Best-effort sway accent lookup; null means the sidebar falls back
+  // to its built-in teal. We do this once at startup rather than on
+  // every rebuild because the sway config rarely changes and an FS
+  // watcher would be more code than it's worth.
+  final accent = await SwayThemeReader.readAccentColor();
 
-  runApp(KanshiApp(controller: controller, settings: settings));
+  runApp(KanshiApp(
+    controller: controller,
+    settings: settings,
+    accent: accent,
+  ));
 }
 
 class KanshiApp extends StatefulWidget {
   final KanshiController controller;
   final AppSettings settings;
-  const KanshiApp(
-      {super.key, required this.controller, required this.settings});
+  final Color? accent;
+  const KanshiApp({
+    super.key,
+    required this.controller,
+    required this.settings,
+    this.accent,
+  });
 
   @override
   State<KanshiApp> createState() => _KanshiAppState();
@@ -77,6 +92,7 @@ class _KanshiAppState extends State<KanshiApp> {
           : HomePage(
               controller: widget.controller,
               settings: widget.settings,
+              activeAccent: widget.accent,
             ),
     );
   }

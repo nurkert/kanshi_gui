@@ -19,10 +19,15 @@ import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 class HomePage extends StatefulWidget {
   final KanshiController controller;
   final AppSettings settings;
+  /// Active-row highlight in the sidebar — read once at startup from
+  /// `~/.config/sway/config`'s `client.focused` directive, null means
+  /// "no usable accent in sway config, fall back to teal".
+  final Color? activeAccent;
   const HomePage({
     super.key,
     required this.controller,
     required this.settings,
+    this.activeAccent,
   });
 
   @override
@@ -487,6 +492,7 @@ class _HomePageState extends State<HomePage>
                   width: 320,
                   child: ProfileSidebar(
                     controller: c,
+                    activeAccent: widget.activeAccent,
                     onCreateCurrentSetup: c.createProfileFromCurrentSetup,
                   ),
                 ),
