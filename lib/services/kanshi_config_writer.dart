@@ -160,7 +160,15 @@ class KanshiConfigWriter {
       // `# kanshi_gui:rank '<id>'=<n>` comments below so they survive an
       // app restart.
       const maxWorkspaces = 9;
-      final enabledMons = mons.where((m) => m.enabled).toList();
+      // Mirror destinations are physically present but their pixels
+      // are owned by wl-mirror's fullscreen surface. Including them
+      // in the rank list would assign workspaces to a screen the user
+      // can never see (the mirror occludes anything sway draws
+      // beneath it). The on-canvas display path
+      // (`LayoutMath.computeDisplay`) already filters destinations
+      // out of `displayMonitors` for the same reason.
+      final enabledMons =
+          mons.where((m) => m.enabled && m.mirrorOf == null).toList();
       final ranked = resolveWorkspaceRanks(enabledMons);
       final n = ranked.length;
       if (n > 0) {
