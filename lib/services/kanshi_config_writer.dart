@@ -171,25 +171,59 @@ class KanshiConfigWriter {
             );
           }
         }
-        // Pre-anchor each monitor on a high temporary workspace before
-        // assigning the real low-numbered ones, so Sway doesn't move
-        // workspace 1 (and friends) to the wrong output mid-pass.
-        final tmpBase = maxWorkspaces + 1;
-        for (var i = 0; i < n; i++) {
-          final ws = tmpBase + i;
-          buffer.writeln(
-            "    exec swaymsg \"workspace $ws output '${ranked[i].id}'; "
-            "workspace $ws\"",
-          );
-        }
+        // Build ONE chained swaymsg invocation rather than emitting N
+        // separate `exec swaymsg "..."` lines. Two reasons:
+        //
+        //  1. Race elimination — kanshi spawns each `exec` in its own
+        //     fork/exec. Multiple parallel invocations land in sway
+        //     out-of-order; workspace 5 could be processed before
+        //     workspace 2 and leak windows onto the wrong output.
+        //     A single compound command is processed in declared order
+        //     by sway's IPC.
+        //
+        //  2. Sway's `workspace N output X` is *passive* — it only
+        //     specifies where workspace N is created at runtime; it
+        //     does NOT move existing workspaces. To relocate
+        //     workspaces that already exist with windows (e.g. ws 1
+        //     opened before docking), we focus each in turn and run
+        //     `move workspace to output X`. This forces the move for
+        //     existing workspaces and is a no-op for empty ones.
+        //
+        // The pass first declares every output target up front
+        // (so the later `workspace N` focus picks the right home)
+        // then walks the workspaces and moves each one into place.
+        // We end the chain with `workspace 1` so focus lands on the
+        // leftmost-rank monitor — typically the user's primary
+        // attention area after docking, and stable across runs.
+        final parts = <String>[];
+        // Pre-anchor each output's destination — declares "workspace
+        // owned by this output if/when it's created or moved here".
+        // Use `workspace number N` (not `workspace N`) so we target the
+        // *numeric slot* regardless of any human-readable name the user
+        // may have assigned (e.g. `1: code`). Without `number`, sway
+        // interprets `workspace 1` as the workspace literally named
+        // "1" and would create a fresh empty one alongside the user's
+        // named "1: code", silently fragmenting their setup.
         for (var ws = 1; ws <= maxWorkspaces; ws++) {
           final rank = (ws - 1) % n;
-          final id = ranked[rank].id;
-          buffer.writeln(
-            "    exec swaymsg \"workspace $ws output '$id'; "
-            "workspace $ws\"",
-          );
+          parts.add("workspace number $ws output '${ranked[rank].id}'");
         }
+        // Now actively move each workspace into place. `workspace
+        // number N` matches the numeric slot (creating it if absent
+        // and focusing it); `move workspace to output X` relocates the
+        // focused workspace to the desired output.
+        for (var ws = 1; ws <= maxWorkspaces; ws++) {
+          final rank = (ws - 1) % n;
+          parts.add("workspace number $ws");
+          parts.add("move workspace to output '${ranked[rank].id}'");
+        }
+        // Land focus on workspace number 1 — leftmost rank, usually the
+        // user's primary screen post-docking. Without this final focus,
+        // we'd leave the user on workspace 9.
+        parts.add('workspace number 1');
+        buffer.writeln(
+          "    exec swaymsg \"${parts.join('; ')}\"",
+        );
       }
     }
 
