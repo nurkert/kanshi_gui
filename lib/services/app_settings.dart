@@ -7,10 +7,15 @@ import 'dart:io';
 class AppSettings {
   final String filePath;
   bool firstRunDone;
+  /// When true, plugging a known monitor set in switches the GUI to the
+  /// matching profile automatically (with an Undo toast). When false the
+  /// hotplug listener falls back to the suggestion SnackBar.
+  bool autoSwitchProfile;
 
   AppSettings({
     required this.filePath,
     this.firstRunDone = false,
+    this.autoSwitchProfile = true,
   });
 
   static String _defaultPath() {
@@ -30,6 +35,11 @@ class AppSettings {
       return AppSettings(
         filePath: p,
         firstRunDone: json['firstRunDone'] == true,
+        // Missing key → keep the default (true). An older settings.json
+        // upgrades silently on next save.
+        autoSwitchProfile: json['autoSwitchProfile'] is bool
+            ? json['autoSwitchProfile'] as bool
+            : true,
       );
     } catch (_) {
       return AppSettings(filePath: p);
@@ -37,10 +47,19 @@ class AppSettings {
   }
 
   Future<void> save() async {
-    final file = File(filePath);
-    await file.create(recursive: true);
-    await file.writeAsString(jsonEncode({
+    final json = jsonEncode({
       'firstRunDone': firstRunDone,
-    }));
+      'autoSwitchProfile': autoSwitchProfile,
+    });
+    // Atomic write: fully populate `<path>.tmp`, fsync via flush, then
+    // rename over the live file. A crash mid-write leaves either the
+    // old contents (still valid) or the new contents (still valid) —
+    // never a half-truncated JSON that would parse-fail and silently
+    // reset every setting on the next launch.
+    final live = File(filePath);
+    await live.create(recursive: true);
+    final tmp = File('$filePath.tmp');
+    await tmp.writeAsString(json, flush: true);
+    await tmp.rename(filePath);
   }
 }

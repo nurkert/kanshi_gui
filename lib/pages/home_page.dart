@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
@@ -17,7 +18,12 @@ import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 /// pure UI composition.
 class HomePage extends StatefulWidget {
   final KanshiController controller;
-  const HomePage({super.key, required this.controller});
+  final AppSettings settings;
+  const HomePage({
+    super.key,
+    required this.controller,
+    required this.settings,
+  });
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -75,6 +81,27 @@ class _HomePageState extends State<HomePage>
           action: SnackBarAction(
             label: 'Switch',
             onPressed: () => c.setActiveProfile(s.profileIndex),
+          ),
+        ),
+      );
+    };
+    // Auto-switch flag is read on every hotplug event, so changing it
+    // via the settings menu takes effect on the next event without any
+    // re-wiring.
+    c.autoSwitchProfileEnabled = () => widget.settings.autoSwitchProfile;
+    c.onAutoSwitchedProfile = (name) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          content: Text("Switched to profile '$name'"),
+          action: SnackBarAction(
+            label: 'Undo',
+            // The auto-switch was pushed onto the undo stack like any
+            // other mutation, so undo() walks back to the previous
+            // active profile.
+            // ignore: discarded_futures
+            onPressed: () => c.undo(),
           ),
         ),
       );
@@ -314,6 +341,7 @@ class _HomePageState extends State<HomePage>
                   tooltip: 'Reload & restart kanshi',
                   onPressed: () async => _toast(await c.reloadAndApply()),
                 ),
+                _SettingsMenu(settings: widget.settings),
               ],
             ),
             bottomNavigationBar: SafetyNetBanner(controller: c),
@@ -589,4 +617,57 @@ class _HomePageState extends State<HomePage>
     _toast(await c.pushLiveApply(committed));
   }
 
+}
+
+/// Gear-icon menu in the AppBar holding GUI-private toggles. The
+/// kanshi config itself is unaffected — these settings live in
+/// `~/.config/kanshi-gui/settings.json` and are read on startup plus
+/// re-read on each hotplug event (via the controller's
+/// `autoSwitchProfileEnabled` callback) so flipping the toggle takes
+/// effect on the next event without an app restart.
+class _SettingsMenu extends StatefulWidget {
+  final AppSettings settings;
+  const _SettingsMenu({required this.settings});
+
+  @override
+  State<_SettingsMenu> createState() => _SettingsMenuState();
+}
+
+class _SettingsMenuState extends State<_SettingsMenu> {
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<void>(
+      icon: const Icon(Icons.settings),
+      tooltip: 'Settings',
+      itemBuilder: (context) => [
+        PopupMenuItem<void>(
+          // Tap target is the whole row, but the switch handles the
+          // toggle itself so we don't need an onTap on the menu item.
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: StatefulBuilder(
+            builder: (context, setLocalState) {
+              return SwitchListTile(
+                dense: true,
+                title: const Text('Auto-switch profile on hotplug'),
+                subtitle: const Text(
+                  'Switch to the matching profile when a known monitor '
+                  'set is plugged in.',
+                ),
+                value: widget.settings.autoSwitchProfile,
+                onChanged: (v) {
+                  setLocalState(() {
+                    widget.settings.autoSwitchProfile = v;
+                  });
+                  // Persist asynchronously; UI doesn't need to wait.
+                  // ignore: discarded_futures
+                  widget.settings.save();
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }

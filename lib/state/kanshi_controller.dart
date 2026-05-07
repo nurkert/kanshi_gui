@@ -53,8 +53,20 @@ class KanshiController extends ChangeNotifier {
   /// Fired after a hotplug event when the connected output set matches a
   /// non-active profile better than the currently active one (confidence
   /// > 0.5). The HomePage typically surfaces this as a SnackBar with a
-  /// "Switch" action; the controller never auto-switches on its own.
+  /// "Switch" action; the controller never auto-switches on its own
+  /// from the suggestion path.
   void Function(ProfileSuggestion suggestion)? onProfileSuggestion;
+  /// Pulled by the hotplug listener to decide whether to auto-switch on
+  /// an exact profile match. Defaults to "no" so the controller stays
+  /// inert until the host page wires its AppSettings flag in. Returning
+  /// false keeps the legacy suggestion-toast behaviour.
+  bool Function()? autoSwitchProfileEnabled;
+  /// Fired after the hotplug listener auto-switches to a matching
+  /// profile. The HomePage surfaces this as a non-blocking toast with
+  /// an Undo action. Distinct from [onProfileSuggestion] because the
+  /// switch already happened — the toast is informational, not a
+  /// prompt.
+  void Function(String profileName)? onAutoSwitchedProfile;
   /// Wallclock of the last manual profile switch. Auto-suggestions are
   /// suppressed for [_suggestionCooldown] after this so a user who just
   /// picked profile A on purpose doesn't get nagged into switching back.
@@ -224,12 +236,22 @@ class KanshiController extends ChangeNotifier {
         _cancelInFlightDrags();
       }
       _rehydrateProfilesAgainst(newOutputs);
+      // Auto-switch takes precedence over the suggestion toast. We only
+      // act on an *exact* match (every connected output claims a
+      // distinct profile slot via id-then-manufacturer) so the user
+      // doesn't get yanked out of a manually-chosen profile by a fuzzy
+      // partial match. The suggestion path still covers fuzzy matches.
+      final didAutoSwitch = _maybeAutoSwitchProfile();
       // Reconcile any wl-mirror processes against the new connected set —
       // a yanked source/destination ends naturally on its own, but a
-      // re-attached mirror partner needs a respawn.
-      // ignore: discarded_futures
-      _reconcileMirrors();
-      _maybeFireProfileSuggestion();
+      // re-attached mirror partner needs a respawn. setActiveProfile
+      // already triggered a reconcile when we auto-switched; only fire
+      // a fresh one when no switch happened.
+      if (!didAutoSwitch) {
+        // ignore: discarded_futures
+        _reconcileMirrors();
+        _maybeFireProfileSuggestion();
+      }
       notifyListeners();
       for (final id in added) {
         onHotplugToast?.call('$id connected');
@@ -238,6 +260,26 @@ class KanshiController extends ChangeNotifier {
         onHotplugToast?.call('$id disconnected');
       }
     });
+  }
+
+  /// Returns true when the listener actually switched profiles. The
+  /// caller uses this to suppress the suggestion-toast (which would
+  /// otherwise fire for a *different* fuzzy match the same hotplug
+  /// event uncovered) and the redundant mirror-reconcile pass.
+  bool _maybeAutoSwitchProfile() {
+    if (autoSwitchProfileEnabled?.call() != true) return false;
+    final since = _lastManualProfileSwitchAt;
+    if (since != null &&
+        DateTime.now().difference(since) < _suggestionCooldown) {
+      return false;
+    }
+    final matchIdx = _findProfileMatchingCurrent();
+    if (matchIdx == null) return false;
+    if (matchIdx == _activeProfileIndex) return false;
+    final name = _profiles[matchIdx].name;
+    setActiveProfile(matchIdx, isManual: false);
+    onAutoSwitchedProfile?.call(name);
+    return true;
   }
 
   @override
@@ -442,11 +484,21 @@ class KanshiController extends ChangeNotifier {
       );
 
   Future<void> _restoreSnapshot(_HistoryEntry entry) async {
+    final activeChanged = _activeProfileIndex != entry.activeIndex;
     _profiles = [
       for (final p in entry.profiles)
         Profile(name: p.name, monitors: [...p.monitors]),
     ];
     _activeProfileIndex = entry.activeIndex;
+    // If undoing rolled the user *back* to a different active profile
+    // (e.g. they hit Undo on the auto-switch toast), arm the
+    // suggestion-cooldown so a flaky cable wiggle doesn't immediately
+    // bounce the auto-switcher right back to the profile we just
+    // walked away from. Treat the undo itself as the user's "manual"
+    // intent.
+    if (activeChanged) {
+      _lastManualProfileSwitchAt = DateTime.now();
+    }
     // Cancel any in-flight drag — its rollback origin is no longer
     // valid against the restored profile shape.
     _cancelInFlightDrags();
@@ -480,13 +532,20 @@ class KanshiController extends ChangeNotifier {
     } catch (_) {/* best effort */}
   }
 
-  void setActiveProfile(int index) {
+  /// Switch to profile [index]. [isManual] is true for user-driven
+  /// changes (sidebar click, suggestion-toast button) and false for
+  /// the hotplug auto-switch path. Only manual switches arm the
+  /// suggestion-cooldown so the auto-switch path doesn't accidentally
+  /// silence its own future suggestions.
+  void setActiveProfile(int index, {bool isManual = true}) {
     if (index < 0 || index >= _profiles.length) return;
     if (_activeProfileIndex != index) {
       _pushHistory("activate '${_profiles[index].name}'");
     }
     _activeProfileIndex = index;
-    _lastManualProfileSwitchAt = DateTime.now();
+    if (isManual) {
+      _lastManualProfileSwitchAt = DateTime.now();
+    }
     // A profile switch invalidates any in-flight drag — the layout it
     // started in is no longer the layout we'd commit into. Cancel via
     // the epoch token; the tile will snap back to its pre-drag origin.
