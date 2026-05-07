@@ -33,6 +33,11 @@ class ProfileSidebar extends StatelessWidget {
                   profile: controller.profiles[i],
                   isActive: controller.activeProfileIndex == i,
                   activeAccent: activeAccent,
+                  // The dot updates on every controller rebuild,
+                  // so hotplug events that change the connected
+                  // set are reflected immediately without a
+                  // separate watcher path.
+                  matchInfo: controller.profileMatchInfo(i),
                   onSelect: () => controller.setActiveProfile(i),
                   onNameChanged: (newName) {
                     final r = controller.renameProfile(i, newName);
