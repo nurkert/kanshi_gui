@@ -249,6 +249,50 @@ void main() {
       expect(rendered, isNot(contains('wl-mirror')));
     });
 
+    test('manufacturer survives writer→parser via the EDID annotation', () {
+      // Without the `# kanshi_gui:edid` annotation the parser had no
+      // signal for manufacturer (it falls back to `manufacturer = id`),
+      // so a profile saved with a known beamer's EDID would match by
+      // port id only — re-plugging the beamer into a different port
+      // would leak it from the matcher. The annotation closes that gap.
+      final p = Profile(
+        name: 'Beamer',
+        monitors: [
+          MonitorTileData(
+            id: 'HDMI-A-1',
+            manufacturer: 'BenQ Projector ABC123',
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            rotation: 0,
+            refresh: 60,
+            resolution: '1920x1080',
+            orientation: 'landscape',
+          ),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render([p]);
+      expect(rendered,
+          contains("# kanshi_gui:edid 'HDMI-A-1'='BenQ Projector ABC123'"),
+          reason: 'EDID-derived manufacturer is the only thing that ties a '
+              'profile to a physical device across port reassignment.');
+      final reparsed = KanshiConfigParser.parse(rendered);
+      final m = reparsed.single.monitors.single;
+      expect(m.manufacturer, equals('BenQ Projector ABC123'));
+    });
+
+    test('writer skips the EDID annotation when manufacturer == id', () {
+      // Hand-edited configs — and old configs round-tripped before the
+      // annotation existed — set manufacturer to the port id by
+      // default. Emitting `# kanshi_gui:edid 'eDP-1'='eDP-1'` would be
+      // pure noise and clutter the config.
+      final p = Profile(name: 'X', monitors: [_mon(id: 'eDP-1')]);
+      final out = KanshiConfigWriter.render([p]);
+      expect(out, isNot(contains('kanshi_gui:edid')));
+    });
+
     test('parser tolerates bare-id wl-mirror exec lines', () {
       // Hand-written / non-GUI configs may omit single quotes.
       const raw = '''

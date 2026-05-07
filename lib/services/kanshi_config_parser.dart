@@ -19,6 +19,7 @@ class KanshiConfigParser {
     // them. Keyed by profile name → output id → value.
     final rankByProfile = _extractRankComments(content);
     final mirrorByProfile = _extractMirrorComments(content);
+    final edidByProfile = _extractEdidComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -66,17 +67,22 @@ class KanshiConfigParser {
       final blockText = block.toString();
       final ranks = rankByProfile[header] ?? const <String, int>{};
       final mirrors = mirrorByProfile[header] ?? const <String, String>{};
+      final edids = edidByProfile[header] ?? const <String, String>{};
       profiles.add(Profile(
         name: header,
-        monitors: _applyRanks(
-          // Mirror annotations override the legacy `exec wl-mirror` parsing
-          // — when both are present we trust the annotation, since older
-          // GUI versions wrote both and the annotation is canonical now.
-          _applyMirrors(
-            _applyMirrorExecs(_parseOutputs(blockText), blockText),
-            mirrors,
+        monitors: _applyEdids(
+          _applyRanks(
+            // Mirror annotations override the legacy `exec wl-mirror`
+            // parsing — when both are present we trust the annotation,
+            // since older GUI versions wrote both and the annotation is
+            // canonical now.
+            _applyMirrors(
+              _applyMirrorExecs(_parseOutputs(blockText), blockText),
+              mirrors,
+            ),
+            ranks,
           ),
-          ranks,
+          edids,
         ),
       ));
       i = j + 1;
@@ -98,6 +104,27 @@ class KanshiConfigParser {
     return [
       for (final o in outputs)
         mirrors.containsKey(o.id) ? o.copyWith(mirrorOf: mirrors[o.id]) : o,
+    ];
+  }
+
+  /// Applies `# kanshi_gui:edid '<id>'='<manufacturer>'` annotations to
+  /// the matching tile's `manufacturer` field. The fallback in
+  /// `_parseOutputs` sets `manufacturer = id` (we have no other signal
+  /// from the kanshi DSL), so the EDID annotation is the only path that
+  /// preserves real manufacturer/model/serial info across a save/load
+  /// cycle. Auto-switch and the suggestion scorer both rely on this
+  /// to match a profile to a physical device after the device moves
+  /// between ports.
+  static List<MonitorTileData> _applyEdids(
+    List<MonitorTileData> outputs,
+    Map<String, String> edids,
+  ) {
+    if (edids.isEmpty) return outputs;
+    return [
+      for (final o in outputs)
+        edids.containsKey(o.id) && edids[o.id]!.isNotEmpty
+            ? o.copyWith(manufacturer: edids[o.id])
+            : o,
     ];
   }
 
@@ -136,6 +163,44 @@ class KanshiConfigParser {
         }
       } else {
         final m = mirrorLine.firstMatch(raw);
+        if (m != null) {
+          (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
+              m.group(2)!;
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:edid '<id>'='<manufacturer>'` annotations out of
+  /// each profile body. Returned map is profile-name → output-id →
+  /// manufacturer string.
+  static Map<String, Map<String, String>> _extractEdidComments(
+    String content,
+  ) {
+    final out = <String, Map<String, String>>{};
+    final edidLine = RegExp(
+      r"^\s*#\s*kanshi_gui:edid\s+'([^']+)'\s*=\s*'(.*)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = edidLine.firstMatch(raw);
         if (m != null) {
           (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
               m.group(2)!;
