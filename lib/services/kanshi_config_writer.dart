@@ -96,6 +96,33 @@ class KanshiConfigWriter {
       );
     }
 
+    // Persist EDID-derived manufacturer info as a comment annotation so
+    // profile matching survives a restart even when the user plugs the
+    // same physical monitor into a different port (port id changes,
+    // manufacturer/model/serial does not). Without this, the parser
+    // would fall back to "manufacturer = port id" and the rehydrate +
+    // match logic could only ever match on port id.
+    //
+    // We only emit when the manufacturer string carries information
+    // beyond the port id itself (the parser's default for hand-edited
+    // configs is `manufacturer == id` — round-tripping that would just
+    // be noise) and we always emit irrespective of writer options
+    // because the cost is one comment line per monitor and the
+    // robustness payoff is meaningful for the auto-switch path.
+    for (final m in mons) {
+      if (m.manufacturer.isEmpty) continue;
+      if (m.manufacturer == m.id) continue;
+      // Manufacturer comes from EDID and is otherwise free-form. Strip
+      // single quotes so the comment never produces malformed syntax
+      // (the regex on the parser side uses single-quoted values). EDID
+      // strings I've ever seen are alphanumeric + spaces, so this is a
+      // belt-and-braces guard rather than a real lossy transform.
+      final safeManuf = m.manufacturer.replaceAll("'", '');
+      buffer.writeln(
+        "    # kanshi_gui:edid '${m.id}'='$safeManuf'",
+      );
+    }
+
     if (options.injectMirrorExec) {
       // Persist mirror relationships as `# kanshi_gui:mirror …` comment
       // annotations rather than as `exec wl-mirror …` hooks. The exec
