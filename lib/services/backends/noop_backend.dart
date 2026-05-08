@@ -64,4 +64,10 @@ class NoopBackend implements MonitorService {
 
   @override
   ProcessStream? spawnIdentifyBanner(String output, String label) => null;
+
+  @override
+  Future<Map<int, String>> getWorkspaceOutputs() async => const {};
+
+  @override
+  Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
 }

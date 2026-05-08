@@ -22,6 +22,7 @@ MonitorTileData _mon({
   int rotation = 0,
   double refresh = 60,
   List<MonitorMode> modes = const [],
+  String? mirrorOf,
 }) {
   return MonitorTileData(
     id: id,
@@ -37,6 +38,7 @@ MonitorTileData _mon({
     orientation: w >= h ? 'landscape' : 'portrait',
     enabled: enabled,
     modes: modes,
+    mirrorOf: mirrorOf,
   );
 }
 
@@ -626,5 +628,103 @@ void main() {
     expect(totalNotifies, equals(notifiesAtDispose),
         reason: 'No notifyListeners should fire from a post-dispose '
             'hotplug body.');
+  });
+
+  group('verify-and-fix workspace placement on init', () {
+    test('reapplies the chain when live workspace_outputs disagree with ranks',
+        () async {
+      // Cold-boot scenario: the kanshi `exec swaymsg "…"` ran during
+      // sway's output discovery and lost the race, so workspaces 1
+      // and 2 ended up on the wrong outputs. The controller must
+      // detect the mismatch and reapply the chain.
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(outputs: [liveA, liveB])
+        ..workspaceOutputs = {1: 'B', 2: 'A'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, hasLength(1),
+          reason: 'A mismatched workspace mapping must trigger a reapply.');
+      final chain = fake.workspaceChainCalls.single;
+      expect(chain, contains("workspace number 1 output 'A'"));
+      expect(chain, contains("workspace number 2 output 'B'"));
+      expect(chain.split('; ').last, equals('workspace number 1'));
+    });
+
+    test('does not reapply when live mapping already matches the desired ranks',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(outputs: [liveA, liveB])
+        ..workspaceOutputs = {1: 'A', 2: 'B'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, isEmpty,
+          reason: 'A correct mapping must NOT trigger a redundant reapply.');
+    });
+
+    test('skips workspaces sway has not created yet', () async {
+      // On a quiet boot sway may only have ws 1 created (the focused
+      // initial workspace). Absence is not mismatch — the chain's
+      // `workspace number N output X` already declared the home for
+      // any future workspace. We only reapply when an *existing*
+      // workspace lives on the wrong output.
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(outputs: [liveA, liveB])
+        ..workspaceOutputs = {1: 'A'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, isEmpty,
+          reason:
+              'A partial live mapping that agrees with the ranks for the '
+              'existing workspace must not trigger a reapply.');
+    });
+
+    test('excludes mirror destinations from the desired ranks', () async {
+      // A 2-monitor profile with B mirroring A has only 1 ranked
+      // output — the mirror destination is occluded by wl-mirror.
+      // If the live mapping has ws 1 on A (the only rank), no
+      // reapply. If it's on B (which shouldn't happen in steady
+      // state but might during a race), reapply with chain that
+      // sends *every* ws to A.
+      // Need the writer to preserve the mirror annotation across the
+      // round-trip — neutral options drop it. Use swayDefaults here.
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      final profile = Profile(name: 'Mirror', monitors: [
+        _mon(id: 'A'),
+        _mon(id: 'B', x: 1920, mirrorOf: 'A'),
+      ]);
+      await cfg.saveProfiles([profile]);
+      final fake = FakeMonitorService(outputs: [liveA, liveB])
+        ..workspaceOutputs = {1: 'B'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, hasLength(1));
+      final chain = fake.workspaceChainCalls.single;
+      // Every workspace target (1..9) must reference A only.
+      for (var ws = 1; ws <= 9; ws++) {
+        expect(chain, contains("workspace number $ws output 'A'"));
+      }
+      expect(chain, isNot(contains("output 'B'")));
+    });
   });
 }

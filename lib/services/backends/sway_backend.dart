@@ -210,6 +210,38 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  Future<Map<int, String>> getWorkspaceOutputs() async {
+    final bin = await _binary();
+    final result = await _runner.run(bin, ['-t', 'get_workspaces']);
+    if (result.exitCode != 0) {
+      throw Exception('swaymsg get_workspaces failed: ${result.stderr}');
+    }
+    final list = jsonDecode(result.stdout as String) as List;
+    final out = <int, String>{};
+    for (final raw in list) {
+      final ws = raw as Map<String, dynamic>;
+      // `num` is -1 for workspaces with non-numeric names; only the
+      // numeric slots are addressable via `workspace number N`, so the
+      // verify-and-fix path only cares about those.
+      final num = ws['num'];
+      if (num is! int || num < 1) continue;
+      final output = (ws['output'] ?? '').toString();
+      if (output.isEmpty) continue;
+      out[num] = output;
+    }
+    return out;
+  }
+
+  @override
+  Future<ProcessResult?> applyWorkspaceChain(String chain) async {
+    final bin = await _binary();
+    // Pass the chain as a single argument — swaymsg joins arguments
+    // with a space anyway, but a single-arg call keeps the literal
+    // semicolon separators intact and skips any shell quoting subtlety.
+    return _runner.run(bin, [chain]);
+  }
+
+  @override
   Stream<List<MonitorTileData>> watchOutputs() {
     final controller = StreamController<List<MonitorTileData>>.broadcast();
     ProcessStream? sub;

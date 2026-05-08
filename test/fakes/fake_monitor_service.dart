@@ -139,4 +139,23 @@ class FakeMonitorService implements MonitorService {
       pid: Future.value(null),
     );
   }
+
+  /// Tests seed this with the live `workspace_num → output_name` mapping
+  /// they want [getWorkspaceOutputs] to return; defaults to empty so
+  /// existing tests don't break.
+  Map<int, String> workspaceOutputs = const {};
+  final List<String> workspaceChainCalls = [];
+
+  @override
+  Future<Map<int, String>> getWorkspaceOutputs() async {
+    calls.add('getWorkspaceOutputs');
+    return workspaceOutputs;
+  }
+
+  @override
+  Future<ProcessResult?> applyWorkspaceChain(String chain) async {
+    calls.add('applyWorkspaceChain');
+    workspaceChainCalls.add(chain);
+    return ProcessResult(0, 0, '', '');
+  }
 }

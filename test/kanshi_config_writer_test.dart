@@ -260,6 +260,73 @@ void main() {
     });
   });
 
+  group('buildSwayWorkspaceChain', () {
+    test('returns null for an empty rank list', () {
+      expect(buildSwayWorkspaceChain(const []), isNull);
+    });
+
+    test('emits the same chain the writer embeds', () {
+      // Independent regression on the extracted helper: the embedded
+      // chain in the writer must be byte-identical to a direct call
+      // with the same ranks.
+      final p = Profile(
+        name: 'Desk',
+        monitors: [
+          _mon(id: 'A', x: 0),
+          _mon(id: 'B', x: 1920),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      final embedded = rendered
+          .split('\n')
+          .firstWhere((l) => l.contains('exec swaymsg'));
+      // Strip the wrapping `    exec swaymsg "` and trailing `"`.
+      final inner = embedded
+          .trim()
+          .replaceFirst('exec swaymsg "', '')
+          .replaceFirst(RegExp(r'"$'), '');
+      final ranked = resolveWorkspaceRanks([
+        _mon(id: 'A', x: 0),
+        _mon(id: 'B', x: 1920),
+      ]);
+      expect(buildSwayWorkspaceChain(ranked), equals(inner));
+    });
+
+    test('three monitors interleave 1/4/7, 2/5/8, 3/6/9 left to right', () {
+      final ranked = resolveWorkspaceRanks([
+        _mon(id: 'L', x: 0),
+        _mon(id: 'M', x: 1920),
+        _mon(id: 'R', x: 3840),
+      ]);
+      final chain = buildSwayWorkspaceChain(ranked)!;
+      // Pre-anchor declarations: every workspace rank lands on the
+      // expected output.
+      for (final ws in [1, 4, 7]) {
+        expect(chain, contains("workspace number $ws output 'L'"));
+      }
+      for (final ws in [2, 5, 8]) {
+        expect(chain, contains("workspace number $ws output 'M'"));
+      }
+      for (final ws in [3, 6, 9]) {
+        expect(chain, contains("workspace number $ws output 'R'"));
+      }
+      // Ends on workspace 1 to land focus on the leftmost output.
+      expect(chain.split('; ').last, equals('workspace number 1'));
+    });
+
+    test('respects the provided maxWorkspaces ceiling', () {
+      final ranked = resolveWorkspaceRanks([_mon(id: 'A', x: 0)]);
+      final chain = buildSwayWorkspaceChain(ranked, maxWorkspaces: 3)!;
+      // Pass 1: 3 pre-anchors. Pass 2: 3 × (focus + move) = 6.
+      // Plus the trailing `workspace number 1` focus = 10 statements.
+      expect(chain.split('; ').length, equals(3 + 2 * 3 + 1));
+      expect(chain, isNot(contains('workspace number 4')));
+    });
+  });
+
   group('Round-trip: writer → parser', () {
     test('preserves monitor count and properties for a 2-monitor profile', () {
       final p = Profile(
