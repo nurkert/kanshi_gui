@@ -71,6 +71,21 @@ abstract class MonitorService {
   /// notification primitive across compositors).
   ProcessStream? spawnIdentifyBanner(String output, String label) => null;
 
+  /// Returns the live `workspace_number → output_name` mapping. Used by
+  /// the controller's verify-and-fix path to compare the actual sway
+  /// state against the desired ranks computed from the active profile.
+  /// Backends that don't have a workspace concept return an empty map.
+  Future<Map<int, String>> getWorkspaceOutputs() async => const {};
+
+  /// Sends a pre-built compound swaymsg command (workspace
+  /// declarations + move-to-output + final focus) to the compositor.
+  /// Returns null when the backend can't speak swaymsg. The chain is
+  /// the same one [KanshiConfigWriter.render] embeds via the kanshi
+  /// `exec` line, but invoking it directly from the GUI lets us
+  /// recover from cold-boot races where kanshi's exec ran against a
+  /// not-yet-settled output set.
+  Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
+
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway (via SWAYSOCK or `swaymsg` in PATH) → wlr-randr → noop.
   static Future<MonitorService> detect({ProcessRunner? runner}) async {

@@ -261,4 +261,10 @@ class WlrRandrBackend implements MonitorService {
     // identify aid for non-Sway compositors.
     return null;
   }
+
+  @override
+  Future<Map<int, String>> getWorkspaceOutputs() async => const {};
+
+  @override
+  Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
 }

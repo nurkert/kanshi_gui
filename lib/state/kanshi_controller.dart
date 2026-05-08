@@ -7,6 +7,7 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/config_service.dart';
+import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
@@ -262,6 +263,98 @@ class KanshiController extends ChangeNotifier {
     await ensureCurrentSetupMatches();
     _subscribeHotplug();
     await _reconcileMirrors();
+    // Self-healing pass: kanshi's `exec swaymsg "…"` chain ran once
+    // when it activated the profile, but on a cold boot that exec
+    // can race against sway's output discovery — if an output isn't
+    // yet known by name when the chain fires, sway silently drops the
+    // affected `output 'X'` targets and workspaces land in whatever
+    // order they were first created (typically reverse of left-to-
+    // right). Verify the live mapping against the desired one and
+    // reapply only on mismatch. Idempotent and best-effort: any
+    // backend that doesn't speak swaymsg returns an empty map and
+    // this becomes a no-op.
+    await _verifyAndFixWorkspacePlacement();
+  }
+
+  /// Reads the live `workspace_number → output_name` mapping from the
+  /// compositor, compares it to the mapping the active profile would
+  /// produce, and reapplies the chained swaymsg command if they differ.
+  /// Called after [init] to recover from cold-boot races where kanshi's
+  /// own exec hook ran against a not-yet-settled output set.
+  ///
+  /// Best-effort: any failure (`getWorkspaceOutputs` throws, the chain
+  /// returns non-zero) is logged and swallowed — this is a robustness
+  /// nicety, not a correctness invariant. The next hotplug will re-run
+  /// the chain via kanshi's own exec line in any case.
+  Future<void> _verifyAndFixWorkspacePlacement() async {
+    if (_isDisposed) return;
+    if (!monitors.isLive) return;
+    final activeIdx = _activeProfileIndex;
+    if (activeIdx == null) return;
+    try {
+      // Compute the desired mapping from the active profile's enabled,
+      // non-mirror outputs — the same predicate the writer applies when
+      // rendering the kanshi exec line.
+      final desiredMons = _profiles[activeIdx]
+          .monitors
+          .where((m) => m.enabled && m.mirrorOf == null)
+          .toList();
+      if (desiredMons.isEmpty) return;
+      // Resolve the desired mapping against *live* output ids — a
+      // profile's monitor.id may be a manufacturer fallback that doesn't
+      // match what sway currently calls the port. _resolveOutputName
+      // does the lookup; skip outputs we can't resolve to a live name
+      // (they'd produce sway warnings either way).
+      final connectedIds = _currentMonitors.map((m) => m.id).toSet();
+      final resolved = <MonitorTileData>[];
+      for (final m in desiredMons) {
+        final live = _resolveOutputName(m.id);
+        if (!connectedIds.contains(live)) continue;
+        resolved.add(m.copyWith(id: live));
+      }
+      if (resolved.isEmpty) return;
+      final ranked = resolveWorkspaceRanks(resolved);
+      if (ranked.isEmpty) return;
+
+      // Build the desired ws→output map the same way the chain does:
+      // ws (1..maxWorkspaces) → ranked[(ws-1) mod n].id.
+      const maxWs = 9;
+      final n = ranked.length;
+      final desired = <int, String>{
+        for (var ws = 1; ws <= maxWs; ws++)
+          ws: ranked[(ws - 1) % n].id,
+      };
+
+      Map<int, String> actual;
+      try {
+        actual = await monitors.getWorkspaceOutputs();
+      } catch (e) {
+        debugPrint('verifyWorkspacePlacement: getWorkspaceOutputs failed: $e');
+        return;
+      }
+      if (_isDisposed) return;
+      // Only check the workspaces the compositor actually has — sway
+      // doesn't pre-create empty workspaces, so absence is "we'll
+      // create it on first focus, the chain's `workspace number N
+      // output X` already declared the home". A mismatch on any
+      // *existing* workspace is what matters: it means a workspace
+      // already lives on the wrong output and needs `move workspace
+      // to output` to relocate.
+      final mismatched = actual.entries.any((e) {
+        final want = desired[e.key];
+        return want != null && want != e.value;
+      });
+      if (!mismatched) return;
+      final chain = buildSwayWorkspaceChain(ranked);
+      if (chain == null) return;
+      try {
+        await monitors.applyWorkspaceChain(chain);
+      } catch (e) {
+        debugPrint('verifyWorkspacePlacement: applyWorkspaceChain failed: $e');
+      }
+    } catch (e, st) {
+      debugPrint('verifyWorkspacePlacement failed: $e\n$st');
+    }
   }
 
   void _subscribeHotplug() {

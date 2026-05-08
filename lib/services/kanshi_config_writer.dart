@@ -150,93 +150,19 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
-      // Workspaces are distributed **interleaved** by left-to-right
-      // position. With N enabled outputs ranked 0..N-1 from left to right,
-      // workspace `w` (1-indexed) lands on the monitor whose rank equals
-      // `(w - 1) mod N`. So two screens give the left one workspaces
-      // 1/3/5/7/9 and the right one 2/4/6/8; three screens give
-      // 1/4/7, 2/5/8, 3/6/9. The number-keys 1..9 thus walk left-to-right
-      // across the displays, looping back as you press higher numbers.
-      //
-      // Each monitor's rank defaults to its X-sorted index but can be
-      // overridden via `MonitorTileData.workspaceRank` — useful when the
-      // physical arrangement of identical monitors doesn't match what the
-      // user perceives as "screen 1 / 2 / 3". Overrides are persisted as
-      // `# kanshi_gui:rank '<id>'=<n>` comments below so they survive an
-      // app restart.
-      const maxWorkspaces = 9;
-      // Mirror destinations are physically present but their pixels
-      // are owned by wl-mirror's fullscreen surface. Including them
-      // in the rank list would assign workspaces to a screen the user
-      // can never see (the mirror occludes anything sway draws
-      // beneath it). The on-canvas display path
-      // (`LayoutMath.computeDisplay`) already filters destinations
-      // out of `displayMonitors` for the same reason.
-      final enabledMons =
-          mons.where((m) => m.enabled && m.mirrorOf == null).toList();
-      final ranked = resolveWorkspaceRanks(enabledMons);
-      final n = ranked.length;
-      if (n > 0) {
-        for (final entry in ranked) {
-          if (entry.explicit) {
-            buffer.writeln(
-              "    # kanshi_gui:rank '${entry.id}'=${entry.rank}",
-            );
-          }
+      final ranked = resolveWorkspaceRanks(
+        mons.where((m) => m.enabled && m.mirrorOf == null).toList(),
+      );
+      for (final entry in ranked) {
+        if (entry.explicit) {
+          buffer.writeln(
+            "    # kanshi_gui:rank '${entry.id}'=${entry.rank}",
+          );
         }
-        // Build ONE chained swaymsg invocation rather than emitting N
-        // separate `exec swaymsg "..."` lines. Two reasons:
-        //
-        //  1. Race elimination — kanshi spawns each `exec` in its own
-        //     fork/exec. Multiple parallel invocations land in sway
-        //     out-of-order; workspace 5 could be processed before
-        //     workspace 2 and leak windows onto the wrong output.
-        //     A single compound command is processed in declared order
-        //     by sway's IPC.
-        //
-        //  2. Sway's `workspace N output X` is *passive* — it only
-        //     specifies where workspace N is created at runtime; it
-        //     does NOT move existing workspaces. To relocate
-        //     workspaces that already exist with windows (e.g. ws 1
-        //     opened before docking), we focus each in turn and run
-        //     `move workspace to output X`. This forces the move for
-        //     existing workspaces and is a no-op for empty ones.
-        //
-        // The pass first declares every output target up front
-        // (so the later `workspace N` focus picks the right home)
-        // then walks the workspaces and moves each one into place.
-        // We end the chain with `workspace 1` so focus lands on the
-        // leftmost-rank monitor — typically the user's primary
-        // attention area after docking, and stable across runs.
-        final parts = <String>[];
-        // Pre-anchor each output's destination — declares "workspace
-        // owned by this output if/when it's created or moved here".
-        // Use `workspace number N` (not `workspace N`) so we target the
-        // *numeric slot* regardless of any human-readable name the user
-        // may have assigned (e.g. `1: code`). Without `number`, sway
-        // interprets `workspace 1` as the workspace literally named
-        // "1" and would create a fresh empty one alongside the user's
-        // named "1: code", silently fragmenting their setup.
-        for (var ws = 1; ws <= maxWorkspaces; ws++) {
-          final rank = (ws - 1) % n;
-          parts.add("workspace number $ws output '${ranked[rank].id}'");
-        }
-        // Now actively move each workspace into place. `workspace
-        // number N` matches the numeric slot (creating it if absent
-        // and focusing it); `move workspace to output X` relocates the
-        // focused workspace to the desired output.
-        for (var ws = 1; ws <= maxWorkspaces; ws++) {
-          final rank = (ws - 1) % n;
-          parts.add("workspace number $ws");
-          parts.add("move workspace to output '${ranked[rank].id}'");
-        }
-        // Land focus on workspace number 1 — leftmost rank, usually the
-        // user's primary screen post-docking. Without this final focus,
-        // we'd leave the user on workspace 9.
-        parts.add('workspace number 1');
-        buffer.writeln(
-          "    exec swaymsg \"${parts.join('; ')}\"",
-        );
+      }
+      final chain = buildSwayWorkspaceChain(ranked);
+      if (chain != null) {
+        buffer.writeln("    exec swaymsg \"$chain\"");
       }
     }
 
@@ -319,6 +245,73 @@ class KanshiConfigWriter {
     final isInt = (hz - hz.round()).abs() < 0.01;
     return isInt ? hz.round().toString() : hz.toStringAsFixed(3);
   }
+}
+
+/// Builds the semicolon-joined `swaymsg` command that distributes the
+/// numeric workspaces 1..[maxWorkspaces] across the ranked outputs.
+///
+/// Workspaces are distributed **interleaved** by left-to-right
+/// position. With N ranked outputs (0..N-1 left-to-right), workspace
+/// `w` (1-indexed) lands on the rank `(w - 1) mod N`. Two screens give
+/// the left one workspaces 1/3/5/7/9 and the right one 2/4/6/8;
+/// three screens give 1/4/7, 2/5/8, 3/6/9 — the number-keys 1..9
+/// walk left-to-right across the displays, looping back as you press
+/// higher numbers.
+///
+/// Caller supplies a pre-computed ranked list (typically via
+/// [resolveWorkspaceRanks]) so the controller-side verify-and-fix path
+/// (which also wants to know the desired ws→output mapping for
+/// comparison) doesn't have to re-derive it.
+///
+/// Returns `null` when [ranked] is empty — there's no workspace
+/// distribution to express.
+///
+/// Why a single chained invocation instead of N separate `exec swaymsg`
+/// lines:
+///
+///  1. Race elimination — kanshi spawns each `exec` in its own
+///     fork/exec. Multiple parallel invocations land in sway
+///     out-of-order; workspace 5 could be processed before workspace 2
+///     and leak windows onto the wrong output. A single compound
+///     command is processed in declared order by sway's IPC.
+///
+///  2. Sway's `workspace N output X` is *passive* — it only specifies
+///     where workspace N is created at runtime; it does NOT move
+///     existing workspaces. To relocate workspaces that already exist
+///     with windows (e.g. ws 1 opened before docking), we focus each
+///     in turn and run `move workspace to output X`. This forces the
+///     move for existing workspaces and is a no-op for empty ones.
+///
+/// The chain first declares every output target up front (so the later
+/// `workspace N` focus picks the right home), then walks the workspaces
+/// and moves each one into place, and ends on `workspace number 1` so
+/// focus lands on the leftmost-rank monitor — typically the user's
+/// primary attention area after docking, and stable across runs.
+///
+/// Uses `workspace number N` (not `workspace N`) so we target the
+/// *numeric slot* regardless of any human-readable name the user may
+/// have assigned (e.g. `1: code`). Without `number`, sway interprets
+/// `workspace 1` as the workspace literally named "1" and would create
+/// a fresh empty one alongside the user's named "1: code", silently
+/// fragmenting their setup.
+String? buildSwayWorkspaceChain(
+  List<WorkspaceRankEntry> ranked, {
+  int maxWorkspaces = 9,
+}) {
+  final n = ranked.length;
+  if (n == 0) return null;
+  final parts = <String>[];
+  for (var ws = 1; ws <= maxWorkspaces; ws++) {
+    final rank = (ws - 1) % n;
+    parts.add("workspace number $ws output '${ranked[rank].id}'");
+  }
+  for (var ws = 1; ws <= maxWorkspaces; ws++) {
+    final rank = (ws - 1) % n;
+    parts.add("workspace number $ws");
+    parts.add("move workspace to output '${ranked[rank].id}'");
+  }
+  parts.add('workspace number 1');
+  return parts.join('; ');
 }
 
 class WorkspaceRankEntry {
