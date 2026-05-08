@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.2 — 2026-05-08
+
+### Fixed
+
+- **Workspace placement self-heals on app start.** On a cold boot
+  with a docking station already attached, kanshi's `exec swaymsg
+  "…"` chain — emitted once per profile activation — could lose its
+  race against sway's output discovery. If an output was not yet
+  known by name when the chain ran, sway silently dropped the
+  affected `output 'X'` targets and workspaces ended up wherever
+  they were first created (typically the reverse of left-to-right,
+  e.g. 3 / 2 / 1). The GUI now verifies the live `workspace_number
+  → output_name` mapping after `init()` against the desired ranks
+  computed from the active profile's enabled, non-mirror outputs and
+  reapplies the chain only on mismatch. Idempotent — no extra
+  swaymsg call when sway is already in the desired state. The chain
+  builder is now a top-level helper (`buildSwayWorkspaceChain`) so
+  the writer's embedded `exec` line and the controller's recovery
+  path stay byte-identical.
+
 ## 1.5.1 — 2026-05-07
 
 ### Fixed
