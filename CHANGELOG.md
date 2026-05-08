@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.3 — 2026-05-08
+
+### Fixed
+
+- **Backend detection no longer misfires on non-Sway compositors.**
+  `MonitorService.detect` used to pick `SwayBackend` whenever `swaymsg`
+  was anywhere in `PATH`, which broke users on niri / river / Hyprland
+  who keep the sway package installed for tooling reasons. Detection
+  now requires a *running* sway IPC socket (`SWAYSOCK` env var pointing
+  at an existing path); without it, the wlr-randr fallback takes over,
+  giving non-Sway users basic monitor management (position / mode /
+  scale / rotate / enable-disable) instead of a dead UI. The Sway-only
+  features (mirror via wl-mirror, swaynag identify-banners, automatic
+  workspace placement, sway-accent theming) stay gated behind their
+  capability flags. Reported in #26.
+- **Verify-and-fix workspace pass short-circuits on non-Sway backends.**
+  The post-init self-heal added in 1.5.2 would still pay an IPC
+  round-trip on backends that don't emit the workspace `exec` chain
+  in the first place. Gated explicitly on
+  `writeOptions.injectSwayWorkspaceExec`.
+
 ## 1.5.2 — 2026-05-08
 
 ### Fixed
