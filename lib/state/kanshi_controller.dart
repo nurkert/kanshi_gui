@@ -289,6 +289,13 @@ class KanshiController extends ChangeNotifier {
   Future<void> _verifyAndFixWorkspacePlacement() async {
     if (_isDisposed) return;
     if (!monitors.isLive) return;
+    // The chain only makes sense on backends that opt in to the Sway
+    // workspace exec — on wlr-randr / niri / etc. the writer doesn't
+    // emit one in the first place and the live `get_workspaces` IPC
+    // doesn't exist. Short-circuit explicitly so we don't burn an
+    // IPC round-trip just to read an empty map back from the default
+    // no-op impl.
+    if (!monitors.writeOptions.injectSwayWorkspaceExec) return;
     final activeIdx = _activeProfileIndex;
     if (activeIdx == null) return;
     try {

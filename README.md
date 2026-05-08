@@ -17,7 +17,9 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 - **First-run wizard** — picks up your detected layout and proposes a sensible profile name.
 - **Profile management** — create, rename, delete; switch with one click.
 - **kanshictl-aware reload** — uses `kanshictl reload` when available so re-applying a profile no longer flickers the screen.
-- **Compositor-agnostic** — auto-selects between `swaymsg` (Sway, full feature set) and `wlr-randr` (Hyprland / Wayfire / other wlroots) at startup; falls back to an offline editor when neither is installed.
+- **Compositor-agnostic** — auto-selects between `swaymsg` (Sway, full feature set) and `wlr-randr` (Hyprland / Wayfire / niri / other wlroots-style compositors) at startup; falls back to an offline editor when neither is installed.
+
+> **Heads-up:** the rich features (mirror onto another output, identify-banners on each screen, automatic workspace placement across monitors, sway-accent theming) are **Sway-specific** because they rely on `swaymsg` IPC, `swaynag`, and `wl-mirror`. On non-Sway compositors (Hyprland, niri, river, …) the GUI gracefully degrades to position / mode / scale / rotate / enable-disable, which is what most users actually need.
 
 ## Getting Started
 
@@ -25,13 +27,15 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 - 	**Wayland session**: This application is designed specifically for Wayland compositors. The level of support depends on which output-control tool is available — see the matrix below.
 
-	| Compositor | Backend | Live apply | Sway workspace `exec` injected |
+	| Compositor | Backend | Live apply | Mirror / identify / workspace placement |
 	|------------|---------|:---:|:---:|
 	| Sway | `swaymsg` | ✅ | ✅ (default) |
-	| Hyprland / Wayfire / other wlroots | `wlr-randr` | ✅ | ❌ |
+	| Hyprland / Wayfire / niri / other wlroots-style | `wlr-randr` | ✅ | ❌ (basic layout only) |
 	| GNOME on Wayland | _not yet supported_ | ❌ (offline editor only) | ❌ |
 
-	The app auto-detects the backend at startup. If neither `swaymsg` nor `wlr-randr` is installed, kanshi_gui still works as an offline profile editor (toggle/mode actions are disabled).
+	The app auto-detects the backend at startup. Sway requires a *running* sway IPC socket (`SWAYSOCK` env var pointing at an existing path) — having `swaymsg` installed is not enough, so non-Sway sessions with the sway tooling around still land on the wlr-randr fallback. If neither `swaymsg` nor `wlr-randr` is installed, kanshi_gui still works as an offline profile editor (toggle/mode actions are disabled).
+
+	Non-Sway compositor support is community-driven: open an issue with reproduction steps if something doesn't behave the way it should.
 - [**kanshi**](https://sr.ht/~emersion/kanshi/): Ensure [kanshi](https://sr.ht/~emersion/kanshi/) is installed and configured (with a working `~/.config/kanshi/config` file) on your system. 
 - **Flutter SDK**: Required to build the GUI yourself - [(Installation Guide)](https://flutter.dev/docs/get-started/install)
 

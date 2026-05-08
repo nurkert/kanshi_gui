@@ -87,13 +87,35 @@ abstract class MonitorService {
   Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
 
   /// Auto-detects the most appropriate backend for the current session.
-  /// Order: Sway (via SWAYSOCK or `swaymsg` in PATH) → wlr-randr → noop.
-  static Future<MonitorService> detect({ProcessRunner? runner}) async {
+  /// Order: Sway → wlr-randr → noop.
+  ///
+  /// Sway requires a *running* sway IPC socket (`SWAYSOCK` env var
+  /// pointing at an existing path). Earlier releases also accepted
+  /// "swaymsg is in PATH" as a Sway signal, but that misfires on
+  /// non-sway compositors where users keep `swaymsg` installed for
+  /// tooling/config-interop reasons (e.g. niri, river). Without a
+  /// running sway, every IPC call would fail and the GUI would be
+  /// effectively broken — the wlr-randr fallback at least gives them
+  /// basic monitor management, since most non-sway wlroots-style
+  /// compositors (and niri via Smithay) speak the wlr-output-management
+  /// protocol that wlr-randr uses.
+  ///
+  /// [environment] and [socketExists] are injection points for tests
+  /// — defaults read the live process environment and check the real
+  /// filesystem.
+  static Future<MonitorService> detect({
+    ProcessRunner? runner,
+    Map<String, String>? environment,
+    Future<bool> Function(String path)? socketExists,
+  }) async {
     final r = runner ?? const DefaultProcessRunner();
-
-    final swaysock = Platform.environment['SWAYSOCK'];
-    if ((swaysock != null && swaysock.isNotEmpty) ||
-        await r.exists('swaymsg')) {
+    final env = environment ?? Platform.environment;
+    final swaysock = env['SWAYSOCK'];
+    final exists = socketExists ?? (p) => File(p).exists();
+    final hasLiveSway = swaysock != null &&
+        swaysock.isNotEmpty &&
+        await exists(swaysock);
+    if (hasLiveSway && await r.exists('swaymsg')) {
       return SwayBackend(runner: r);
     }
     if (await r.exists('wlr-randr')) {

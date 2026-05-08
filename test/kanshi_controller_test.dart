@@ -643,8 +643,10 @@ void main() {
       await cfg.saveProfiles([
         Profile(name: 'Desk', monitors: [liveA, liveB]),
       ]);
-      final fake = FakeMonitorService(outputs: [liveA, liveB])
-        ..workspaceOutputs = {1: 'B', 2: 'A'};
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {1: 'B', 2: 'A'};
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
       expect(fake.workspaceChainCalls, hasLength(1),
@@ -663,8 +665,10 @@ void main() {
       await cfg.saveProfiles([
         Profile(name: 'Desk', monitors: [liveA, liveB]),
       ]);
-      final fake = FakeMonitorService(outputs: [liveA, liveB])
-        ..workspaceOutputs = {1: 'A', 2: 'B'};
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {1: 'A', 2: 'B'};
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
       expect(fake.workspaceChainCalls, isEmpty,
@@ -683,14 +687,43 @@ void main() {
       await cfg.saveProfiles([
         Profile(name: 'Desk', monitors: [liveA, liveB]),
       ]);
-      final fake = FakeMonitorService(outputs: [liveA, liveB])
-        ..workspaceOutputs = {1: 'A'};
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {1: 'A'};
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
       expect(fake.workspaceChainCalls, isEmpty,
           reason:
               'A partial live mapping that agrees with the ranks for the '
               'existing workspace must not trigger a reapply.');
+    });
+
+    test('skips entirely on backends without injectSwayWorkspaceExec',
+        () async {
+      // Non-Sway compositors (wlr-randr / niri / etc.) use
+      // `KanshiWriteOptions.neutral`, which doesn't emit the workspace
+      // chain in the first place. Asking sway-shaped IPC questions on
+      // those backends would be a wasted round-trip and would also
+      // misbehave if `getWorkspaceOutputs` ever returned something
+      // non-empty by mistake. Gate the whole verify path explicitly.
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        // Default for non-Sway backends.
+        writeOptions: KanshiWriteOptions.neutral,
+      )..workspaceOutputs = {1: 'B', 2: 'A'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, isEmpty,
+          reason: 'Non-Sway backend must not invoke the chain.');
+      expect(fake.calls.where((c) => c == 'getWorkspaceOutputs'), isEmpty,
+          reason: 'Non-Sway backend must not even read workspace state.');
     });
 
     test('excludes mirror destinations from the desired ranks', () async {
@@ -714,8 +747,10 @@ void main() {
         _mon(id: 'B', x: 1920, mirrorOf: 'A'),
       ]);
       await cfg.saveProfiles([profile]);
-      final fake = FakeMonitorService(outputs: [liveA, liveB])
-        ..workspaceOutputs = {1: 'B'};
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {1: 'B'};
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
       expect(fake.workspaceChainCalls, hasLength(1));
