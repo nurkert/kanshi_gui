@@ -69,8 +69,8 @@ class WlrRandrBackend implements MonitorService {
       orElse: () =>
           modesRaw.isNotEmpty ? modesRaw.first : <String, dynamic>{},
     );
-    final width = (current['width'] as num?)?.toDouble() ?? 1920.0;
-    final height = (current['height'] as num?)?.toDouble() ?? 1080.0;
+    final baseW = (current['width'] as num?)?.toDouble() ?? 1920.0;
+    final baseH = (current['height'] as num?)?.toDouble() ?? 1080.0;
     final refresh = (current['refresh'] as num?)?.toDouble() ?? 60.0;
 
     final position = (output['position'] as Map<String, dynamic>?) ??
@@ -84,9 +84,12 @@ class WlrRandrBackend implements MonitorService {
     };
     final scale = (output['scale'] as num?)?.toDouble() ?? 1.0;
 
-    final orientation = (rotation % 180 == 0)
-        ? (width >= height ? 'landscape' : 'portrait')
-        : (width >= height ? 'portrait' : 'landscape');
+    // wlr-randr reports the mode in its native (unrotated) orientation;
+    // the rest of the app stores width/height already rotated to match
+    // the visible rect.
+    final width = (rotation % 180 == 0) ? baseW : baseH;
+    final height = (rotation % 180 == 0) ? baseH : baseW;
+    final orientation = (rotation % 180 == 0) ? 'landscape' : 'portrait';
 
     return MonitorTileData(
       id: name.isNotEmpty ? name : fullName,
@@ -98,7 +101,7 @@ class WlrRandrBackend implements MonitorService {
       scale: scale,
       rotation: rotation,
       refresh: refresh,
-      resolution: '${width.toInt()}x${height.toInt()}',
+      resolution: '${baseW.toInt()}x${baseH.toInt()}',
       orientation: orientation,
       modes: modes,
       enabled: enabled,
