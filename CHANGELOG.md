@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.5 — 2026-05-10
+
+### Fixed
+
+- **Scale changes propagate through edge-snap chains and to the
+  compositor.** Two bugs combined to leave the layout in a state where
+  the GUI showed monitors flush but sway had a gap (mouse couldn't
+  cross) and a downstream tile visually overlapped its neighbour:
+  - `scaleMonitor` only nudged the *direct* edge-snapped neighbours of
+    the scaled tile. In a chain A → B → C, scaling A pushed B but left
+    C anchored to its old position, so C ended up overlapping B in
+    the canvas. Replaced with a BFS over the pre-change edge graph so
+    every transitively-snapped tile follows.
+  - `onScaleCommit` only pushed the scaled tile's new state to sway.
+    Neighbour positions that `scaleMonitor` had moved stayed at their
+    old compositor values — the GUI looked fine but sway opened a gap
+    between the scaled monitor and its neighbour. The commit now
+    live-applies every tile whose `x`, `y`, or `scale` actually
+    changed in the same step.
+
 ## 1.5.4 — 2026-05-10
 
 ### Fixed
