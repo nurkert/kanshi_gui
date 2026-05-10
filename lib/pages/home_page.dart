@@ -471,12 +471,32 @@ class _HomePageState extends State<HomePage>
                                 onScale: (s) =>
                                     c.scaleMonitor(tile.id, s),
                                 onScaleCommit: (s) async {
+                                  // scaleMonitor also nudges edge-snapped
+                                  // neighbours so they stay flush; without
+                                  // applying those movements live, sway is
+                                  // left with the old positions and gaps
+                                  // open up between monitors that the GUI
+                                  // shows as touching.
+                                  final pre = {
+                                    for (final m in c.activeMonitors)
+                                      m.id: m,
+                                  };
                                   c.scaleMonitor(tile.id, s,
                                       committing: true);
-                                  final m = c.activeMonitors.firstWhere(
-                                      (x) => x.id == tile.id,
-                                      orElse: () => tile);
-                                  _toast(await c.pushLiveApply(m));
+                                  for (final m in c.activeMonitors) {
+                                    final before = pre[m.id];
+                                    if (before == null) continue;
+                                    final changed = m.id == tile.id ||
+                                        before.x != m.x ||
+                                        before.y != m.y ||
+                                        before.scale != m.scale;
+                                    if (!changed) continue;
+                                    final r = await c.pushLiveApply(m);
+                                    if (!r.success) {
+                                      _toast(r);
+                                      break;
+                                    }
+                                  }
                                 },
                                 onModeChange: (m) async =>
                                     _toast(await c.applyMode(tile.id, m)),

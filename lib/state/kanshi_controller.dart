@@ -841,27 +841,58 @@ class KanshiController extends ChangeNotifier {
       _pushHistory('scale $id to ${newScale.toStringAsFixed(2)}');
     }
 
+    // BFS over the *pre-change* edge graph: when monitor A moves, any
+    // monitor B that was edge-snapped to A in the original layout has
+    // to follow, and any C that was snapped to B follows B, and so on.
+    // Without this, only the scaled tile's direct neighbours stay
+    // flush; a 3-monitor chain (A → B → C) loses contact between B
+    // and C the moment A's scale changes.
+    final originals = [for (final m in mons) m];
     final centre = mons[idx];
-    for (var i = 0; i < mons.length; i++) {
-      if (i == idx) continue;
-      var other = mons[i];
-      final centreRight = centre.x + centre.width / centre.scale;
-      final centreBottom = centre.y + centre.height / centre.scale;
-      if ((other.x - centreRight).abs() <= snapThreshold) {
-        other = other.copyWith(x: centre.x + centre.width / newScale);
-      } else if (((other.x + other.width / other.scale) - centre.x).abs() <=
-          snapThreshold) {
-        other = other.copyWith(x: centre.x - other.width / other.scale);
-      }
-      if ((other.y - centreBottom).abs() <= snapThreshold) {
-        other = other.copyWith(y: centre.y + centre.height / newScale);
-      } else if (((other.y + other.height / other.scale) - centre.y).abs() <=
-          snapThreshold) {
-        other = other.copyWith(y: centre.y - other.height / other.scale);
-      }
-      mons[i] = other;
-    }
     mons[idx] = centre.copyWith(scale: newScale);
+    final visited = <int>{idx};
+    final queue = <int>[idx];
+    while (queue.isNotEmpty) {
+      final ci = queue.removeAt(0);
+      final origC = originals[ci];
+      final newC = mons[ci];
+      final origCRight = origC.x + origC.width / origC.scale;
+      final origCBottom = origC.y + origC.height / origC.scale;
+      final newCRight = newC.x + newC.width / newC.scale;
+      final newCBottom = newC.y + newC.height / newC.scale;
+      for (var i = 0; i < mons.length; i++) {
+        if (visited.contains(i)) continue;
+        final origOther = originals[i];
+        var x = mons[i].x;
+        var y = mons[i].y;
+        var moved = false;
+        if ((origOther.x - origCRight).abs() <= snapThreshold) {
+          x = newCRight;
+          moved = true;
+        } else if (((origOther.x + origOther.width / origOther.scale) -
+                    origC.x)
+                .abs() <=
+            snapThreshold) {
+          x = newC.x - origOther.width / origOther.scale;
+          moved = true;
+        }
+        if ((origOther.y - origCBottom).abs() <= snapThreshold) {
+          y = newCBottom;
+          moved = true;
+        } else if (((origOther.y + origOther.height / origOther.scale) -
+                    origC.y)
+                .abs() <=
+            snapThreshold) {
+          y = newC.y - origOther.height / origOther.scale;
+          moved = true;
+        }
+        if (moved) {
+          mons[i] = mons[i].copyWith(x: x, y: y);
+          visited.add(i);
+          queue.add(i);
+        }
+      }
+    }
     _profiles[_activeProfileIndex!] =
         Profile(name: _profiles[_activeProfileIndex!].name, monitors: mons);
     _scheduleSave();
