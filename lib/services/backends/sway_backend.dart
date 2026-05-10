@@ -91,8 +91,8 @@ class SwayBackend implements MonitorService {
       });
     }
 
-    final width = (currentMode?['width'] as num?)?.toDouble() ?? 1920.0;
-    final height = (currentMode?['height'] as num?)?.toDouble() ?? 1080.0;
+    final baseW = (currentMode?['width'] as num?)?.toDouble() ?? 1920.0;
+    final baseH = (currentMode?['height'] as num?)?.toDouble() ?? 1080.0;
     final refresh =
         ((currentMode?['refresh'] as num?)?.toDouble() ?? 60000.0) / 1000.0;
     final scale = (output['scale'] as num?)?.toDouble() ?? 1.0;
@@ -103,9 +103,13 @@ class SwayBackend implements MonitorService {
       '270' || 'flipped-270' => 270,
       _ => 0,
     };
-    final orientation = (rotation % 180 == 0)
-        ? (width >= height ? 'landscape' : 'portrait')
-        : (width >= height ? 'portrait' : 'landscape');
+    // Sway IPC reports current_mode in the panel's native (unrotated)
+    // orientation, but the rest of the app stores width/height already
+    // rotated to match the visible rect. Swap on portrait transforms so
+    // the layout renders the tile vertically.
+    final width = (rotation % 180 == 0) ? baseW : baseH;
+    final height = (rotation % 180 == 0) ? baseH : baseW;
+    final orientation = (rotation % 180 == 0) ? 'landscape' : 'portrait';
 
     return MonitorTileData(
       id: outputName,
@@ -117,7 +121,7 @@ class SwayBackend implements MonitorService {
       scale: scale,
       rotation: rotation,
       refresh: refresh,
-      resolution: '${width.toInt()}x${height.toInt()}',
+      resolution: '${baseW.toInt()}x${baseH.toInt()}',
       orientation: orientation,
       modes: modes,
       enabled: isActive,
