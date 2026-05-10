@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.4 — 2026-05-10
+
+### Fixed
+
+- **Rotated outputs render vertically again.** The Sway and wlr-randr
+  backends populated `MonitorTileData.width/height` straight from the
+  compositor's `current_mode`, which is reported in the panel's native
+  (unrotated) orientation. The rest of the app — config parser, writer,
+  in-GUI rotation handler — already stores width/height post-rotation,
+  so a 90°/270° monitor came back as a landscape tile with a "portrait"
+  label until the user rotated it through the GUI. Both backends now
+  swap on portrait transforms so the layout matches what Sway's `rect`
+  reports.
+
 ## 1.5.3 — 2026-05-08
 
 ### Fixed
