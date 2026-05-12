@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.5.8 — 2026-05-12
+
+### Fixed
+
+- **Workspaces above N (3 on a 3-monitor setup, 2 on a dual-monitor
+  setup) no longer land on whichever output the cursor happens to
+  be on.** The Sway workspace-distribution chain was emitting the
+  output bindings with the `number` keyword:
+
+      workspace number 5 output 'DP-5'
+
+  Sway parses this and returns `success: true`, but the binding never
+  takes effect — `workspace_outputs` is keyed by workspace name, and
+  the `number` variant stores under a key sway never looks up at
+  workspace creation time. With no binding in force, `$mod+5` from
+  a different output created ws 5 on the focused output rather than
+  its assigned home, exactly as users had been reporting.
+
+  Phase 1 of the chain (the persistent output binding) now emits
+  the no-`number` form:
+
+      workspace 5 output 'DP-5'
+
+  Empirically verified against sway 1.11: the binding survives
+  workspace destruction + recreation, so every `$mod+N` from then on
+  goes to the assigned monitor regardless of which output is currently
+  focused. Phase 2 (the focus + force-move pass that relocates
+  pre-existing workspaces) still uses `workspace number N` so the
+  rename-safety guarantee for users who renamed their workspaces
+  (e.g. `1: code`) is preserved.
+
+  As a side effect, the workspace layout now self-applies at session
+  start without the GUI being open: kanshi runs the `exec swaymsg
+  "…"` line on every profile match, and the bindings it lays down are
+  persistent for the rest of the sway session.
+
 ## 1.5.7 — 2026-05-12
 
 ### Fixed

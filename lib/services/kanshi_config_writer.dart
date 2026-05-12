@@ -300,17 +300,31 @@ class KanshiConfigWriter {
 ///     move for existing workspaces and is a no-op for empty ones.
 ///
 /// The chain first declares every output target up front (so the later
-/// `workspace N` focus picks the right home), then walks the workspaces
-/// and moves each one into place, and ends on `workspace number 1` so
-/// focus lands on the leftmost-rank monitor — typically the user's
-/// primary attention area after docking, and stable across runs.
+/// `workspace N` focus picks the right home AND so any *future*
+/// workspace creation during the session lands on the assigned
+/// monitor without help from kanshi_gui), then walks the workspaces
+/// and moves each one into place, and ends on `workspace number 1`
+/// so focus lands on the leftmost-rank monitor — typically the
+/// user's primary attention area after docking, and stable across
+/// runs.
 ///
-/// Uses `workspace number N` (not `workspace N`) so we target the
-/// *numeric slot* regardless of any human-readable name the user may
-/// have assigned (e.g. `1: code`). Without `number`, sway interprets
-/// `workspace 1` as the workspace literally named "1" and would create
-/// a fresh empty one alongside the user's named "1: code", silently
-/// fragmenting their setup.
+/// Phase-1 (the output binding) deliberately uses `workspace N output X`
+/// rather than `workspace number N output X`. Sway stores the binding
+/// in its `workspace_outputs` list keyed by workspace name; the
+/// `number` variant produces a `success:true` IPC reply but the stored
+/// key does not match what sway looks up when a workspace is later
+/// created with `workspace number N`, so the binding never takes
+/// effect on workspace destruction + recreation. Without the binding,
+/// a $mod+5 from a different output creates ws 5 on the focused
+/// output instead of its assigned home — the long-standing complaint
+/// that workspaces above 3 (or above N for N monitors) "open wherever
+/// the cursor is". This binding persists for the whole sway session.
+///
+/// Phase-2 keeps `workspace number N` for the focus + force-move
+/// because the rename concern (`1: code`) is real: a user who renamed
+/// their numeric workspaces needs the numeric-slot selector here,
+/// otherwise the unsuffixed form would create an empty "1" alongside
+/// the live "1: code" and silently fragment their setup.
 String? buildSwayWorkspaceChain(
   List<WorkspaceRankEntry> ranked, {
   int maxWorkspaces = 9,
@@ -320,10 +334,14 @@ String? buildSwayWorkspaceChain(
   final parts = <String>[];
   for (var ws = 1; ws <= maxWorkspaces; ws++) {
     final rank = (ws - 1) % n;
-    parts.add("workspace number $ws output '${ranked[rank].id}'");
+    // Phase 1: persistent output binding. NO `number` keyword — see
+    // the docstring above for why.
+    parts.add("workspace $ws output '${ranked[rank].id}'");
   }
   for (var ws = 1; ws <= maxWorkspaces; ws++) {
     final rank = (ws - 1) % n;
+    // Phase 2: focus the numeric slot (renamed-workspace safe) and
+    // force-move any pre-existing workspace to its new home output.
     parts.add("workspace number $ws");
     parts.add("move workspace to output '${ranked[rank].id}'");
   }
