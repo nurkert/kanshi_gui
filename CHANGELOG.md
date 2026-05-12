@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.9 — 2026-05-12
+
+### Fixed
+
+- **Profile-suggestion banner no longer pesters with strictly worse
+  alternatives.** `findBestProfileSuggestion` always returned the
+  best non-active profile that cleared the 0.5 confidence floor —
+  but never compared it against the active profile's own score. The
+  result: a user on a 3-of-3-output profile was nagged "Setup matches
+  profile 'Mobile' (2 of 3 outputs)" every hotplug, because the
+  alternative cleared the floor even though it was a strict
+  regression. The function now also scores the active profile and
+  suppresses the suggestion unless the candidate strictly beats it.
+  Tied candidates also no longer trigger — switching sideways between
+  two equivalent profiles produces no user-visible improvement.
+
 ## 1.5.8 — 2026-05-12
 
 ### Fixed
