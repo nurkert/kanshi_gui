@@ -30,13 +30,23 @@ class ConfigHasIncludesException implements Exception {
 /// to `<backupPrefix>.<unix-ms>` and the new content is written via
 /// `<configPath>.tmp` + atomic `rename`. The backup directory is pruned to
 /// the newest [maxBackups] entries.
+///
+/// Saves are also content-deduplicated: when the rendered profiles produce
+/// byte-identical output to the live config, [saveProfiles] returns
+/// without writing or creating a backup. This prevents drag-then-cancel
+/// cycles, undo/redo round-trips, and profile-switch-and-back from
+/// littering the backup directory with identical snapshots — a long-
+/// standing complaint that turned `~/.config/kanshi/` into a wall of
+/// near-duplicate files.
 class ConfigService {
   /// Default location of the kanshi config (`~/.config/kanshi/config`).
   final String configPath;
   /// Backup files use this as their prefix and append `.<unix-ms>`. Older
   /// releases used the prefix verbatim as a single backup file; the
   /// rotation introduced in 1.3.1 keeps the prefix for compat with the
-  /// constructor argument while writing timestamped variants.
+  /// constructor argument while writing timestamped variants. 1.5.7
+  /// relocates the default into a `backups/` sub-directory so the main
+  /// config dir stays tidy.
   final String backupPrefix;
   /// How many timestamped backups to retain. Older ones are pruned after
   /// each successful save.
@@ -55,7 +65,7 @@ class ConfigService {
   })  : configPath = configPath ??
             "${Platform.environment['HOME']}/.config/kanshi/config",
         backupPrefix = backupPrefix ??
-            "${Platform.environment['HOME']}/.config/kanshi/config.bak",
+            "${Platform.environment['HOME']}/.config/kanshi/backups/config.bak",
         writeOptions = writeOptions ?? KanshiWriteOptions.swayDefaults;
 
   Future<List<Profile>> loadProfiles() async {
@@ -114,6 +124,28 @@ class ConfigService {
 
     final file = File(configPath);
     await Directory(file.parent.path).create(recursive: true);
+
+    // One-time relocation of any legacy `<configDir>/config.bak[.<ts>]`
+    // files into the new `<configDir>/backups/` layout. Lazy + idempotent.
+    await _migrateLegacyBackupsIfNeeded();
+
+    // Skip-if-identical: when the rendered output is byte-for-byte the
+    // same as the live config, suppress the save entirely. Without
+    // this, drag-then-drop-back / undo-redo round-trips / profile-
+    // switch-and-back each produce an identical backup snapshot,
+    // burning through the rotation ring within minutes.
+    if (await file.exists()) {
+      try {
+        final current = await file.readAsString();
+        if (current == rendered) return;
+      } catch (_) {
+        // Read failed (permissions, disk error, …) — fall through and
+        // let the write attempt either succeed or surface the real
+        // error from there.
+      }
+    }
+
+    await Directory(File(backupPrefix).parent.path).create(recursive: true);
 
     File? backup;
     if (await file.exists()) {
@@ -186,6 +218,73 @@ class ConfigService {
     final list = await listBackups();
     if (list.length <= maxBackups) return;
     for (final f in list.skip(maxBackups)) {
+      try {
+        await f.delete();
+      } catch (_) {/* best effort */}
+    }
+  }
+
+  /// Set once we've checked / completed the one-time relocation of
+  /// legacy backups for the lifetime of this [ConfigService] instance.
+  /// Subsequent saves skip the scan; instance-scoped is fine because
+  /// after the first migration the source directory has no matching
+  /// files left to move anyway.
+  bool _legacyMigrationDone = false;
+
+  /// Move any `config.bak[.<ts>]` files that pre-1.5.7 releases dropped
+  /// next to the live config into the new `<backupDir>/` layout, and
+  /// delete the pre-1.3.1 single-file `config.bak` (no suffix) since
+  /// the rotation logic has never been able to clean it up. Skipped
+  /// when backup and config directories coincide (test fixtures and
+  /// users who explicitly opt into the old layout).
+  Future<void> _migrateLegacyBackupsIfNeeded() async {
+    if (_legacyMigrationDone) return;
+    _legacyMigrationDone = true;
+
+    final configDir = File(configPath).parent.path;
+    final backupFile = File(backupPrefix);
+    final backupDir = backupFile.parent.path;
+    if (configDir == backupDir) return;
+
+    final liveDir = Directory(configDir);
+    if (!await liveDir.exists()) return;
+    final base = backupFile.uri.pathSegments.last; // e.g. "config.bak"
+
+    final toMigrate = <File>[];
+    final toDelete = <File>[];
+    await for (final ent in liveDir.list(followLinks: false)) {
+      if (ent is! File) continue;
+      final name = ent.uri.pathSegments.last;
+      if (name == base) {
+        // Pre-rotation single-file backup — orphan since 1.3.1.
+        toDelete.add(ent);
+        continue;
+      }
+      if (!name.startsWith('$base.')) continue;
+      final suffix = name.substring(base.length + 1);
+      // Only relocate the canonical timestamped form. Anything else
+      // (e.g. `config.bak.notes`) is the user's — leave it alone.
+      if (int.tryParse(suffix) == null) continue;
+      toMigrate.add(ent);
+    }
+
+    if (toMigrate.isNotEmpty) {
+      await Directory(backupDir).create(recursive: true);
+    }
+    for (final src in toMigrate) {
+      final name = src.uri.pathSegments.last;
+      final dest = '$backupDir/$name';
+      try {
+        await src.rename(dest);
+      } catch (_) {
+        // Cross-filesystem rename fails with EXDEV — copy then delete.
+        try {
+          await src.copy(dest);
+          await src.delete();
+        } catch (_) {/* best effort */}
+      }
+    }
+    for (final f in toDelete) {
       try {
         await f.delete();
       } catch (_) {/* best effort */}

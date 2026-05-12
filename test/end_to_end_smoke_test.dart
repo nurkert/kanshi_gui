@@ -117,30 +117,34 @@ void main() {
       expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf, isNull);
     });
 
-    test('every save adds a backup so a five-step session leaves four .bak files',
+    test(
+        'identical-content saves are deduped; only real changes leave backups',
         () async {
+      // 1.5.7 short-circuits saveProfiles when the rendered output
+      // matches the live config byte-for-byte. The prior behaviour
+      // (every save snapshots, even no-op ones) was burning through
+      // the rotation ring during drag-then-cancel / undo-redo cycles.
       final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
       final cfg = _tmpCfg(tmp);
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      // Five explicit saves spaced apart so timestamped names differ.
+      // Five repeated saves of an unchanged profile list — must produce
+      // zero new backups, not five.
       for (var i = 0; i < 5; i++) {
         await cfg.saveProfiles(c.profiles);
         await Future<void>.delayed(const Duration(milliseconds: 5));
       }
-      final backups = await cfg.listBackups();
-      // First save in the loop overwrites the init-time write, so 5 saves
-      // produce at most 5 backups (each save snapshots the prior state).
-      // The init-write counts as the "prior state" for the first loop save.
-      expect(backups.length, greaterThanOrEqualTo(4),
-          reason: 'Each save snapshots the prior live config to a backup.');
-      expect(backups.length, lessThanOrEqualTo(6));
-      // Files are listed newest-first.
-      final ts0 = int.parse(
-          backups.first.path.substring(backups.first.path.lastIndexOf('.') + 1));
-      final tsLast = int.parse(
-          backups.last.path.substring(backups.last.path.lastIndexOf('.') + 1));
-      expect(ts0, greaterThanOrEqualTo(tsLast));
+      var backups = await cfg.listBackups();
+      expect(backups, isEmpty,
+          reason: 'Identical-content saves must not create backups.');
+
+      // Mutate the profile list and save: now we expect exactly one
+      // backup (snapshot of the previous live config).
+      c.renameProfile(c.activeProfileIndex!, 'renamed');
+      await cfg.saveProfiles(c.profiles);
+      backups = await cfg.listBackups();
+      expect(backups, hasLength(1),
+          reason: 'A real change must still snapshot the prior config.');
     });
 
     test('detectMirrorDropTarget pipes into setMirror cleanly', () async {
