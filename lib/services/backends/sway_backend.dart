@@ -246,6 +246,80 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  Future<void> evacuateOutputWorkspaces(
+    String dstId,
+    List<String> targets,
+  ) async {
+    if (targets.isEmpty) return;
+    final bin = await _binary();
+    final result = await _runner.run(bin, ['-t', 'get_workspaces']);
+    if (result.exitCode != 0) return;
+    final list = jsonDecode(result.stdout as String) as List;
+    final parts = <String>[];
+    var i = 0;
+    String? refocus;
+    for (final raw in list) {
+      final ws = raw as Map<String, dynamic>;
+      final output = (ws['output'] ?? '').toString();
+      final num = ws['num'];
+      final name = (ws['name'] ?? '').toString();
+      // Remember whatever the user is currently looking at so we can
+      // restore focus once the moves are done — without this the chain
+      // would leave focus on whichever ws got moved last.
+      if (ws['focused'] == true) {
+        refocus = (num is int && num >= 1)
+            ? 'workspace number $num'
+            : (name.isNotEmpty ? 'workspace ${_quoteWsName(name)}' : null);
+      }
+      if (output != dstId) continue;
+      if (name.isEmpty && (num is! int || num < 1)) continue;
+      final target = targets[i % targets.length];
+      i++;
+      // Prefer `workspace number N` for numeric slots so we hit the
+      // canonical slot regardless of any free-form name (`1: code`).
+      parts.add((num is int && num >= 1)
+          ? 'workspace number $num'
+          : 'workspace ${_quoteWsName(name)}');
+      parts.add("move workspace to output '$target'");
+    }
+    if (parts.isEmpty) return;
+    if (refocus != null) parts.add(refocus);
+    await _runner.run(bin, [parts.join('; ')]);
+  }
+
+  @override
+  Future<bool> waitForOutputClear(
+    String dstId, {
+    Duration timeout = const Duration(milliseconds: 400),
+  }) async {
+    final bin = await _binary();
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final r = await _runner.run(bin, ['-t', 'get_workspaces']);
+        if (r.exitCode == 0) {
+          final list = jsonDecode(r.stdout as String) as List;
+          final any = list.any((raw) {
+            final ws = raw as Map<String, dynamic>;
+            return (ws['output'] ?? '').toString() == dstId;
+          });
+          if (!any) return true;
+        }
+      } catch (_) {/* swallow and retry */}
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    return false;
+  }
+
+  /// Wraps a workspace name in double quotes for swaymsg, escaping
+  /// embedded `"` and `\` so a free-form name survives the IPC parser
+  /// (e.g. `1: code "main"`).
+  static String _quoteWsName(String name) {
+    final escaped = name.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    return '"$escaped"';
+  }
+
+  @override
   Stream<List<MonitorTileData>> watchOutputs() {
     final controller = StreamController<List<MonitorTileData>>.broadcast();
     ProcessStream? sub;
