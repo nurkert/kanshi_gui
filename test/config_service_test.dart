@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -22,7 +23,29 @@ void main() {
         maxBackups: maxBackups,
       );
 
-  Profile profileNamed(String name) => Profile(name: name, monitors: []);
+  // Each profile carries a single monitor whose id matches the profile
+  // name, so the rendered output differs between profiles. The empty-
+  // monitors form would render to "" for every profile and the dedupe
+  // short-circuit in `saveProfiles` (1.5.7+) would block back-to-back
+  // saves we are trying to exercise here.
+  Profile profileNamed(String name) => Profile(
+        name: name,
+        monitors: [
+          MonitorTileData(
+            id: name,
+            manufacturer: name,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            rotation: 0,
+            refresh: 60,
+            resolution: '1920x1080',
+            orientation: 'landscape',
+          ),
+        ],
+      );
 
   group('ConfigService.saveProfiles backup rotation', () {
     test('first save creates no backup (no prior live config)', () async {
@@ -97,6 +120,151 @@ void main() {
       final backups = await cfg.listBackups();
       expect(backups, hasLength(1));
       expect(backups.first.path, isNot(contains('notes')));
+    });
+
+    test('save short-circuits when rendered content matches live config',
+        () async {
+      final cfg = make();
+      await cfg.saveProfiles([profileNamed('a')]);
+      // Second save renders the same profiles — must NOT touch disk:
+      // no new backup, and the live config's mtime stays put.
+      final live = File('${tmp.path}/config');
+      final beforeMtime = live.statSync().modified;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await cfg.saveProfiles([profileNamed('a')]);
+      final backups = await cfg.listBackups();
+      expect(backups, isEmpty,
+          reason: 'Identical content must not produce a backup.');
+      expect(live.statSync().modified, equals(beforeMtime),
+          reason: 'Identical content must not rewrite the live file.');
+    });
+
+    test('save still writes when content differs from live config',
+        () async {
+      // Sanity check that dedupe does not over-fire: a real change
+      // produces both the new live config and the timestamped backup.
+      final cfg = make();
+      await cfg.saveProfiles([profileNamed('a')]);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await cfg.saveProfiles([profileNamed('b')]);
+      final backups = await cfg.listBackups();
+      expect(backups, hasLength(1));
+      expect(File('${tmp.path}/config').readAsStringSync(),
+          contains('profile \'b\''));
+    });
+  });
+
+  group('legacy backup migration', () {
+    test('relocates pre-1.5.7 timestamped backups into the new dir',
+        () async {
+      // Simulate the pre-1.5.7 layout: backups sat next to the live
+      // config, not in a `backups/` sub-directory.
+      File('${tmp.path}/config').writeAsStringSync('# stub\n');
+      File('${tmp.path}/config.bak.1700000000001')
+          .writeAsStringSync('old1\n');
+      File('${tmp.path}/config.bak.1700000000002')
+          .writeAsStringSync('old2\n');
+
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/backups/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      // Trigger the lazy migration by performing a save.
+      await cfg.saveProfiles([profileNamed('a')]);
+
+      expect(File('${tmp.path}/config.bak.1700000000001').existsSync(),
+          isFalse,
+          reason: 'Legacy timestamped backup must be moved into '
+              '${tmp.path}/backups/.');
+      expect(File('${tmp.path}/backups/config.bak.1700000000001')
+              .existsSync(),
+          isTrue);
+      expect(File('${tmp.path}/backups/config.bak.1700000000002')
+              .existsSync(),
+          isTrue);
+      // Content survives the move.
+      expect(
+        File('${tmp.path}/backups/config.bak.1700000000001').readAsStringSync(),
+        equals('old1\n'),
+      );
+    });
+
+    test('deletes the orphaned pre-1.3.1 single-file backup', () async {
+      File('${tmp.path}/config').writeAsStringSync('# stub\n');
+      File('${tmp.path}/config.bak')
+          .writeAsStringSync('pre-rotation orphan\n');
+
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/backups/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      await cfg.saveProfiles([profileNamed('a')]);
+
+      expect(File('${tmp.path}/config.bak').existsSync(), isFalse,
+          reason: 'Pre-rotation orphan must be cleaned up.');
+    });
+
+    test('does not touch unrelated sibling files', () async {
+      // Files that share the prefix but have a non-numeric suffix are
+      // none of our business — leave them where the user put them.
+      File('${tmp.path}/config').writeAsStringSync('# stub\n');
+      File('${tmp.path}/config.bak.notes').writeAsStringSync('user note\n');
+
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/backups/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      await cfg.saveProfiles([profileNamed('a')]);
+
+      expect(File('${tmp.path}/config.bak.notes').existsSync(), isTrue);
+      expect(File('${tmp.path}/backups/config.bak.notes').existsSync(),
+          isFalse);
+    });
+
+    test('migration is idempotent and skipped after first save', () async {
+      File('${tmp.path}/config').writeAsStringSync('# stub\n');
+      File('${tmp.path}/config.bak.1700000000001')
+          .writeAsStringSync('old\n');
+
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/backups/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      await cfg.saveProfiles([profileNamed('a')]);
+      // Drop another legacy file post-migration: the second save MUST
+      // NOT pick it up — migration runs once per ConfigService, by
+      // design (avoids racing the rotation if a user accidentally
+      // restores a backup back into the old location).
+      File('${tmp.path}/config.bak.1700000000003')
+          .writeAsStringSync('stale\n');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await cfg.saveProfiles([profileNamed('b')]);
+
+      expect(File('${tmp.path}/config.bak.1700000000003').existsSync(),
+          isTrue,
+          reason: 'Second save must not re-run migration.');
+    });
+
+    test('no-op when backup dir coincides with config dir', () async {
+      // The legacy-layout integration tests above still drive saves in
+      // the old shape; the migration code must be a clean no-op there.
+      // This test enforces that contract explicitly.
+      File('${tmp.path}/config').writeAsStringSync('# stub\n');
+      File('${tmp.path}/config.bak').writeAsStringSync('keep me\n');
+
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      await cfg.saveProfiles([profileNamed('a')]);
+
+      expect(File('${tmp.path}/config.bak').existsSync(), isTrue,
+          reason: 'Same-dir layout disables the legacy migration.');
     });
   });
 

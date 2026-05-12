@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.5.7 — 2026-05-12
+
+### Fixed
+
+- **Mirror destination no longer leaves an input dead-zone.** The 1.5.6
+  mirror fix kept the destination output at its original position in
+  Sway's coordinate space, which meant the user could still move the
+  cursor onto the (now-empty) destination and "lose" interactivity —
+  `wl-mirror` paints the source's pixels there but Sway routes input
+  to whichever output the cursor is over. The writer now emits the
+  mirror destination at the *source's* `position` so the rectangles
+  overlap; cursor at the shared coords stays on the source and
+  `wl-mirror` keeps painting the destination because it targets by
+  output name, not by position.
+- **Drag-then-cancel and undo/redo cycles no longer spam the backup
+  directory.** `ConfigService.saveProfiles` now short-circuits when
+  the rendered output is byte-identical to the live config: no
+  backup, no atomic write, no prune. Eliminates the "wall of
+  near-duplicate `config.bak.<unix-ms>` files within minutes" pattern
+  reported by users who fiddle with layouts.
+
+### Changed
+
+- **Backups moved out of `~/.config/kanshi/` into `~/.config/kanshi/
+  backups/`.** Default `backupPrefix` now lands timestamped backups in
+  a dedicated sub-directory so the main config directory stays tidy.
+  Existing `config.bak.<ts>` files are relocated lazily on the first
+  save by the new release, and the orphaned pre-1.3.1 single-file
+  `config.bak` (which no rotation logic ever cleaned up) is removed
+  in the same migration pass. Idempotent; the migration runs once per
+  process.
+
 ## 1.5.6 — 2026-05-12
 
 ### Fixed

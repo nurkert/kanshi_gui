@@ -159,6 +159,34 @@ void main() {
           reason: 'No active move targeting B in the chain.');
     });
 
+    test('mirror destinations are positioned at the source\'s coordinates',
+        () {
+      // wl-mirror keeps painting the destination's pixels (it targets
+      // by output name, not by position), but Sway still treats the
+      // destination as its own interactive area with its own cursor
+      // routing. Stacking the rectangles in Sway's coord space
+      // eliminates the dead zone the user can otherwise wander into.
+      final p = Profile(
+        name: 'Mirror',
+        monitors: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0, mirrorOf: 'A'),
+        ],
+      );
+      final out = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.neutral,
+      );
+      // Both A and B share position 0,0 — B's own x=1920 is overridden.
+      expect(out, contains("output 'A' enable"));
+      expect(out, contains("output 'B' enable"));
+      expect(out, contains("position 0,0"));
+      expect(out, isNot(contains("position 1920,0")),
+          reason: "Mirror destination must not retain its own x; it "
+              "borrows the source's position so Sway has no input "
+              "dead-zone.");
+    });
+
     test('explicit workspaceRank overrides X-derived rank', () {
       final p = Profile(
         name: 'Override',
