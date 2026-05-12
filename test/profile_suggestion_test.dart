@@ -89,7 +89,72 @@ void main() {
       expect(c.findBestProfileSuggestion(), isNull);
     });
 
-    test('exact id match on a different profile scores 1.0', () async {
+    test('an exact-match candidate beats a partial-match active profile',
+        () async {
+      // Active = single-output profile; only 1 of the 2 connected
+      // outputs is claimed → active conf = 0.5. Candidate covers both,
+      // conf = 1.0 → strict-better gate is satisfied.
+      final c = await buildController(
+        connected: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
+        profiles: [
+          Profile(name: 'solo', monitors: [_mon(id: 'A')]),
+          Profile(
+            name: 'desk',
+            monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
+          ),
+        ],
+      );
+      // 'desk' was auto-picked at init (full match for the connected
+      // set). Force the test scenario by switching to the weaker
+      // profile manually.
+      c.setActiveProfile(0);
+      final s = c.findBestProfileSuggestion();
+      expect(s, isNotNull);
+      expect(s!.profileName, 'desk');
+      expect(s.confidence, equals(1.0));
+      expect(s.matchedOutputs, 2);
+      expect(s.totalOutputs, 2);
+    });
+
+    test(
+        'does NOT suggest a worse fit when the active profile already covers '
+        'every connected output', () async {
+      // This was the user-reported bug: kanshi_gui was nagging "Setup
+      // matches profile X (2 of 3 outputs)" while the active profile
+      // already covered all 3 outputs. Strict-better gating fixes it.
+      final c = await buildController(
+        connected: [
+          _mon(id: 'A'),
+          _mon(id: 'B', x: 1920),
+          _mon(id: 'C', x: 3840),
+        ],
+        profiles: [
+          // Active: full match (3/3).
+          Profile(
+            name: 'triple',
+            monitors: [
+              _mon(id: 'A'),
+              _mon(id: 'B', x: 1920),
+              _mon(id: 'C', x: 3840),
+            ],
+          ),
+          // Candidate: only 2/3 — strictly worse.
+          Profile(
+            name: 'docked',
+            monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
+          ),
+        ],
+      );
+      expect(c.findBestProfileSuggestion(), isNull,
+          reason:
+              'Active is already a perfect fit; offering a strictly worse '
+              'alternative is noise, not a suggestion.');
+    });
+
+    test('ties between equivalent profiles do not produce a suggestion',
+        () async {
+      // Two profiles that both score 1.0 against the live set. There
+      // is no meaningful reason to nudge the user to switch sideways.
       final c = await buildController(
         connected: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
         profiles: [
@@ -97,59 +162,24 @@ void main() {
             name: 'desk',
             monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
           ),
-          // Same outputs, different name — both match the connected set.
           Profile(
             name: 'desk-alt',
             monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
           ),
         ],
       );
-      // 'desk' is auto-picked (first match wins). 'desk-alt' is the
-      // only other candidate.
-      final s = c.findBestProfileSuggestion();
-      expect(s, isNotNull);
-      expect(s!.profileName, 'desk-alt');
-      expect(s.confidence, equals(1.0));
-      expect(s.matchedOutputs, 2);
-      expect(s.totalOutputs, 2);
+      expect(c.findBestProfileSuggestion(), isNull,
+          reason: 'Tied candidates must not trigger a suggestion.');
     });
 
-
-    test('partial match degrades confidence proportionally', () async {
-      // Connected has 3 outputs; the candidate profile has 2 — only 2
-      // matches possible, denom = max(2, 3) = 3, confidence = 2/3.
-      final c = await buildController(
-        connected: [
-          _mon(id: 'A'),
-          _mon(id: 'B', x: 1920),
-          _mon(id: 'C', x: 3840),
-        ],
-        profiles: [
-          // Active: matches the full set exactly.
-          Profile(
-            name: 'triple',
-            monitors: [
-              _mon(id: 'A'),
-              _mon(id: 'B', x: 1920),
-              _mon(id: 'C', x: 3840),
-            ],
-          ),
-          // Candidate: subset of two outputs.
-          Profile(
-            name: 'docked',
-            monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
-          ),
-        ],
-      );
-      final s = c.findBestProfileSuggestion();
-      expect(s, isNotNull);
-      expect(s!.profileName, 'docked');
-      expect(s.confidence, closeTo(2 / 3, 0.001));
-      expect(s.matchedOutputs, 2);
-      expect(s.totalOutputs, 3);
-    });
-
-    test('does not suggest the currently active profile', () async {
+    test('never returns the currently active profile as a candidate',
+        () async {
+      // Two profiles that BOTH score 1.0 against the connected set.
+      // The candidate that wins must not be the active one — and
+      // because the strict-better gate suppresses tied alternatives
+      // (see the dedicated test below), this scenario simply yields
+      // null. The contract is: `findBestProfileSuggestion` never
+      // points back at the active profile.
       final c = await buildController(
         connected: [_mon(id: 'A')],
         profiles: [
@@ -157,16 +187,20 @@ void main() {
           Profile(name: 'other', monitors: [_mon(id: 'A')]),
         ],
       );
-      // Both profiles match. Active is index 0; suggestion must be 1.
       final s = c.findBestProfileSuggestion();
-      expect(s, isNotNull);
-      expect(s!.profileIndex, equals(1));
+      expect(
+        s?.profileIndex,
+        isNot(equals(c.activeProfileIndex)),
+        reason: 'A suggestion (if any) must not point at the active profile.',
+      );
     });
 
-    test('confidence floor prunes weaker partial matches', () async {
-      // Partial-match: candidate has 2 outputs but the live system has 3,
-      // so confidence floors at 2/3 ≈ 0.667. With a 0.8 floor it should
-      // be pruned; with 0.5 it should pass.
+    test('confidence floor blocks too-weak candidates even when they '
+        'beat the active profile', () async {
+      // Active is a profile with no overlap at all (active conf = 0).
+      // The candidate has a tiny overlap (1 of 3 outputs claimed,
+      // conf ≈ 0.333) — strictly better than 0 but not what a user
+      // would call a "match". The floor exists exactly for this.
       final c = await buildController(
         connected: [
           _mon(id: 'A'),
@@ -174,24 +208,21 @@ void main() {
           _mon(id: 'C', x: 3840),
         ],
         profiles: [
-          Profile(
-            name: 'triple',
-            monitors: [
-              _mon(id: 'A'),
-              _mon(id: 'B', x: 1920),
-              _mon(id: 'C', x: 3840),
-            ],
-          ),
-          Profile(
-            name: 'docked',
-            monitors: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
-          ),
+          // Will not match anything in the connected set.
+          Profile(name: 'unrelated', monitors: [_mon(id: 'Z')]),
+          // Matches 1 of 3 outputs → conf ≈ 0.333.
+          Profile(name: 'mobile', monitors: [_mon(id: 'A')]),
         ],
       );
-      expect(c.findBestProfileSuggestion(confidenceFloor: 0.8), isNull,
-          reason: '2/3 confidence does not clear an 0.8 floor.');
+      // Init injects a "Current Setup" profile (active, conf 1.0)
+      // since neither stored profile is a full match. Pin the
+      // unrelated one so the candidate path has room to fire.
+      c.setActiveProfile(0);
       expect(c.findBestProfileSuggestion(confidenceFloor: 0.5), isNotNull,
-          reason: '2/3 confidence comfortably clears the default 0.5 floor.');
+          reason: "Current Setup beats both the floor and the active 0/3 "
+              "score, so a suggestion is in order.");
+      expect(c.findBestProfileSuggestion(confidenceFloor: 1.01), isNull,
+          reason: 'No candidate can clear an above-1.0 floor.');
     });
   });
 

@@ -1782,69 +1782,98 @@ class KanshiController extends ChangeNotifier {
     return idOrManufacturer;
   }
 
-  /// Score every non-active profile against the currently connected
-  /// outputs and return the best fit if it scores above
-  /// [confidenceFloor]. Confidence is `matchedScore / max(profileEnabled,
-  /// currentEnabled)`, where each match contributes 1.0 for an exact id
-  /// hit and 0.7 for a manufacturer-only fallback. Returns `null` when
-  /// no profile clears the floor or the active profile is already a
-  /// perfect fit.
+  /// Score every profile against the currently connected outputs and
+  /// return the best non-active fit, but only when it strictly beats
+  /// the active profile's own score and clears [confidenceFloor].
+  /// Confidence is `matchedScore / max(profileEnabled, currentEnabled)`,
+  /// where each match contributes 1.0 for an exact id hit and 0.7 for
+  /// a manufacturer-only fallback. Returns `null` when no profile
+  /// clears the floor, or when the active profile is already an
+  /// equal-or-better fit (the previously-shipped behaviour incorrectly
+  /// suggested a 2/3-output profile while the user was on a 3/3-output
+  /// active profile, because the active profile's confidence was never
+  /// computed at all).
   ProfileSuggestion? findBestProfileSuggestion({
     double confidenceFloor = 0.5,
   }) {
     final currentEnabled =
         _currentMonitors.where((m) => m.enabled).toList();
     if (currentEnabled.isEmpty || _profiles.isEmpty) return null;
+    final activeConfidence = _activeProfileIndex == null
+        ? 0.0
+        : _scoreProfileAgainstCurrent(
+            _profiles[_activeProfileIndex!], currentEnabled).confidence;
     ProfileSuggestion? best;
     for (var i = 0; i < _profiles.length; i++) {
       if (i == _activeProfileIndex) continue;
-      final profileEnabled =
-          _profiles[i].monitors.where((m) => m.enabled).toList();
-      if (profileEnabled.isEmpty) continue;
-      var score = 0.0;
-      var matched = 0;
-      final claimed = <int>{};
-      for (final pm in profileEnabled) {
-        var bestK = -1;
-        var bestS = 0.0;
-        for (var k = 0; k < currentEnabled.length; k++) {
-          if (claimed.contains(k)) continue;
-          final cm = currentEnabled[k];
-          double s;
-          if (_matchesOutput(pm.id, cm.id)) {
-            s = 1.0;
-          } else if (_matchesOutput(pm.manufacturer, cm.manufacturer)) {
-            s = 0.7;
-          } else {
-            continue;
-          }
-          if (s > bestS) {
-            bestS = s;
-            bestK = k;
-          }
-        }
-        if (bestK != -1) {
-          claimed.add(bestK);
-          score += bestS;
-          matched++;
-        }
-      }
-      final denom = profileEnabled.length > currentEnabled.length
-          ? profileEnabled.length
-          : currentEnabled.length;
-      final conf = score / denom;
-      if (best == null || conf > best.confidence) {
+      final scored = _scoreProfileAgainstCurrent(_profiles[i], currentEnabled);
+      if (scored.totalOutputs == 0) continue;
+      if (best == null || scored.confidence > best.confidence) {
         best = ProfileSuggestion(
           profileIndex: i,
           profileName: _profiles[i].name,
-          confidence: conf,
-          matchedOutputs: matched,
-          totalOutputs: denom,
+          confidence: scored.confidence,
+          matchedOutputs: scored.matched,
+          totalOutputs: scored.totalOutputs,
         );
       }
     }
-    if (best == null || best.confidence < confidenceFloor) return null;
+    if (best == null) return null;
+    if (best.confidence < confidenceFloor) return null;
+    // The active profile already fits at least as well — switching
+    // would either be a no-op or a regression. Don't pester the user.
+    if (best.confidence <= activeConfidence) return null;
     return best;
+  }
+
+  /// Internal helper shared by [findBestProfileSuggestion] and the
+  /// active-profile self-score path. Returns the matched-output count,
+  /// the normalisation denominator and the resulting confidence.
+  _ProfileScore _scoreProfileAgainstCurrent(
+    Profile profile,
+    List<MonitorTileData> currentEnabled,
+  ) {
+    final profileEnabled =
+        profile.monitors.where((m) => m.enabled).toList();
+    if (profileEnabled.isEmpty) {
+      return const _ProfileScore(matched: 0, totalOutputs: 0, confidence: 0);
+    }
+    var score = 0.0;
+    var matched = 0;
+    final claimed = <int>{};
+    for (final pm in profileEnabled) {
+      var bestK = -1;
+      var bestS = 0.0;
+      for (var k = 0; k < currentEnabled.length; k++) {
+        if (claimed.contains(k)) continue;
+        final cm = currentEnabled[k];
+        double s;
+        if (_matchesOutput(pm.id, cm.id)) {
+          s = 1.0;
+        } else if (_matchesOutput(pm.manufacturer, cm.manufacturer)) {
+          s = 0.7;
+        } else {
+          continue;
+        }
+        if (s > bestS) {
+          bestS = s;
+          bestK = k;
+        }
+      }
+      if (bestK != -1) {
+        claimed.add(bestK);
+        score += bestS;
+        matched++;
+      }
+    }
+    final denom = profileEnabled.length > currentEnabled.length
+        ? profileEnabled.length
+        : currentEnabled.length;
+    return _ProfileScore(
+      matched: matched,
+      totalOutputs: denom,
+      confidence: score / denom,
+    );
   }
 
   void _maybeFireProfileSuggestion() {
@@ -1986,6 +2015,20 @@ class KanshiController extends ChangeNotifier {
 
   bool wouldExceedBandwidth(List<MonitorTileData> mons) =>
       LayoutMath.totalPixelRate(mons) > 700000000;
+}
+
+/// Result of scoring one profile against the live output set. Internal
+/// to the controller — promoted to a [ProfileSuggestion] only when the
+/// confidence beats the active profile's own score.
+class _ProfileScore {
+  final int matched;
+  final int totalOutputs;
+  final double confidence;
+  const _ProfileScore({
+    required this.matched,
+    required this.totalOutputs,
+    required this.confidence,
+  });
 }
 
 /// One profile-match candidate surfaced to the UI when the connected
