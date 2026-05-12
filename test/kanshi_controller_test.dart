@@ -708,8 +708,8 @@ void main() {
       expect(fake.workspaceChainCalls, hasLength(1),
           reason: 'A mismatched workspace mapping must trigger a reapply.');
       final chain = fake.workspaceChainCalls.single;
-      expect(chain, contains("workspace number 1 output 'A'"));
-      expect(chain, contains("workspace number 2 output 'B'"));
+      expect(chain, contains("workspace 1 output 'A'"));
+      expect(chain, contains("workspace 2 output 'B'"));
       expect(chain.split('; ').last, equals('workspace number 1'));
     });
 
@@ -734,8 +734,8 @@ void main() {
     test('skips workspaces sway has not created yet', () async {
       // On a quiet boot sway may only have ws 1 created (the focused
       // initial workspace). Absence is not mismatch — the chain's
-      // `workspace number N output X` already declared the home for
-      // any future workspace. We only reapply when an *existing*
+      // `workspace N output X` already declared the home for any
+      // future workspace. We only reapply when an *existing*
       // workspace lives on the wrong output.
       final cfg = _tmpConfig(tmp);
       final liveA = _mon(id: 'A');
@@ -813,7 +813,7 @@ void main() {
       final chain = fake.workspaceChainCalls.single;
       // Every workspace target (1..9) must reference A only.
       for (var ws = 1; ws <= 9; ws++) {
-        expect(chain, contains("workspace number $ws output 'A'"));
+        expect(chain, contains("workspace $ws output 'A'"));
       }
       expect(chain, isNot(contains("output 'B'")));
     });
