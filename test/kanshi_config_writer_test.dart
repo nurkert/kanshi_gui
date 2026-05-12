@@ -96,14 +96,16 @@ void main() {
         options: KanshiWriteOptions.swayDefaults,
       );
       // Leftmost L owns 1/4/7, middle M owns 2/5/8, rightmost R owns 3/6/9.
+      // Binding form is "workspace N output X" without the `number`
+      // keyword — see buildSwayWorkspaceChain doc for why.
       for (final ws in [1, 4, 7]) {
-        expect(out, contains("workspace number $ws output 'L'"));
+        expect(out, contains("workspace $ws output 'L'"));
       }
       for (final ws in [2, 5, 8]) {
-        expect(out, contains("workspace number $ws output 'M'"));
+        expect(out, contains("workspace $ws output 'M'"));
       }
       for (final ws in [3, 6, 9]) {
-        expect(out, contains("workspace number $ws output 'R'"));
+        expect(out, contains("workspace $ws output 'R'"));
       }
     });
 
@@ -121,10 +123,10 @@ void main() {
       );
       // Left screen: 1/3/5/7/9, Right screen: 2/4/6/8.
       for (final ws in [1, 3, 5, 7, 9]) {
-        expect(out, contains("workspace number $ws output 'Left'"));
+        expect(out, contains("workspace $ws output 'Left'"));
       }
       for (final ws in [2, 4, 6, 8]) {
-        expect(out, contains("workspace number $ws output 'Right'"));
+        expect(out, contains("workspace $ws output 'Right'"));
       }
     });
 
@@ -151,7 +153,7 @@ void main() {
       // Every workspace declaration AND every move command must
       // target A only.
       for (var ws = 1; ws <= 9; ws++) {
-        expect(chain, contains("workspace number $ws output 'A'"));
+        expect(chain, contains("workspace $ws output 'A'"));
       }
       expect(chain, isNot(contains("output 'B'")),
           reason: 'No workspace-target reference to B in the chain.');
@@ -203,10 +205,10 @@ void main() {
         options: KanshiWriteOptions.swayDefaults,
       );
       expect(out, contains("# kanshi_gui:rank 'L'=1"));
-      expect(out, contains("workspace number 1 output 'R'"));
-      expect(out, contains("workspace number 2 output 'L'"));
-      expect(out, contains("workspace number 3 output 'R'"));
-      expect(out, contains("workspace number 4 output 'L'"));
+      expect(out, contains("workspace 1 output 'R'"));
+      expect(out, contains("workspace 2 output 'L'"));
+      expect(out, contains("workspace 3 output 'R'"));
+      expect(out, contains("workspace 4 output 'L'"));
     });
 
     test(
@@ -331,18 +333,46 @@ void main() {
       ]);
       final chain = buildSwayWorkspaceChain(ranked)!;
       // Pre-anchor declarations: every workspace rank lands on the
-      // expected output.
+      // expected output. Binding form is "workspace N output X"
+      // (without `number`) so sway stores a persistent assignment
+      // keyed by workspace name — see the chain docstring.
       for (final ws in [1, 4, 7]) {
-        expect(chain, contains("workspace number $ws output 'L'"));
+        expect(chain, contains("workspace $ws output 'L'"));
       }
       for (final ws in [2, 5, 8]) {
-        expect(chain, contains("workspace number $ws output 'M'"));
+        expect(chain, contains("workspace $ws output 'M'"));
       }
       for (final ws in [3, 6, 9]) {
-        expect(chain, contains("workspace number $ws output 'R'"));
+        expect(chain, contains("workspace $ws output 'R'"));
       }
+      // The number-less binding form must NOT also emit the `number`
+      // variant; the latter is what we found to be a no-op on sway 1.11.
+      expect(chain, isNot(contains("workspace number 1 output 'L'")));
       // Ends on workspace 1 to land focus on the leftmost output.
       expect(chain.split('; ').last, equals('workspace number 1'));
+    });
+
+    test(
+        'phase-1 declares persistent bindings via "workspace N" and phase-2 '
+        'force-moves via "workspace number N"', () {
+      final ranked = resolveWorkspaceRanks([
+        _mon(id: 'L', x: 0),
+        _mon(id: 'R', x: 1920),
+      ]);
+      final chain = buildSwayWorkspaceChain(ranked, maxWorkspaces: 2)!;
+      final stmts = chain.split('; ');
+      // Phase 1 (the maxWorkspaces bindings) comes first, NO `number`.
+      expect(stmts[0], equals("workspace 1 output 'L'"));
+      expect(stmts[1], equals("workspace 2 output 'R'"));
+      // Phase 2 then pairs `workspace number N` (focus by numeric
+      // slot, rename-safe) with a `move workspace to output 'X'` for
+      // force-moves on any pre-existing workspaces.
+      expect(stmts[2], equals('workspace number 1'));
+      expect(stmts[3], equals("move workspace to output 'L'"));
+      expect(stmts[4], equals('workspace number 2'));
+      expect(stmts[5], equals("move workspace to output 'R'"));
+      // Trailing focus lands the user on workspace 1.
+      expect(stmts.last, equals('workspace number 1'));
     });
 
     test('respects the provided maxWorkspaces ceiling', () {
