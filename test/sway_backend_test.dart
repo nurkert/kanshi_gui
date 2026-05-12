@@ -214,4 +214,138 @@ void main() {
       expect(fake.calls.any((c) => c.first == 'bash'), isFalse);
     });
   });
+
+  group('SwayBackend.evacuateOutputWorkspaces', () {
+    test('no-ops when targets list is empty', () async {
+      final fake = FakeProcessRunner(installed: {'swaymsg'});
+      final backend = SwayBackend(runner: fake);
+      await backend.evacuateOutputWorkspaces('DP-2', const []);
+      expect(fake.calls, isEmpty);
+    });
+
+    test('moves numeric workspaces on dst to the single target', () async {
+      const wsJson = '''
+[
+  {"num": 1, "name": "1", "output": "DP-1", "focused": false},
+  {"num": 2, "name": "2", "output": "DP-2", "focused": true},
+  {"num": 4, "name": "4", "output": "DP-2", "focused": false}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      await backend.evacuateOutputWorkspaces('DP-2', ['DP-1']);
+      // First call is the get_workspaces query, second is the compound chain.
+      expect(fake.calls, hasLength(2));
+      final chain = fake.calls[1][1];
+      expect(
+        chain,
+        equals(
+          "workspace number 2; move workspace to output 'DP-1'; "
+          "workspace number 4; move workspace to output 'DP-1'; "
+          "workspace number 2",
+        ),
+        reason: 'must move both ws-on-dst entries and refocus the '
+            'originally focused workspace (2) at the end',
+      );
+    });
+
+    test('round-robins across multiple targets', () async {
+      const wsJson = '''
+[
+  {"num": 1, "name": "1", "output": "DP-3", "focused": false},
+  {"num": 2, "name": "2", "output": "DP-3", "focused": false},
+  {"num": 3, "name": "3", "output": "DP-3", "focused": true},
+  {"num": 4, "name": "4", "output": "eDP-1", "focused": false}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      await backend.evacuateOutputWorkspaces('DP-3', ['DP-1', 'DP-2']);
+      final chain = fake.calls[1][1];
+      expect(chain, contains("workspace number 1; move workspace to output 'DP-1'"));
+      expect(chain, contains("workspace number 2; move workspace to output 'DP-2'"));
+      expect(chain, contains("workspace number 3; move workspace to output 'DP-1'"));
+      // ws 4 (on eDP-1) is not on dst — must not be moved.
+      expect(chain, isNot(contains('workspace number 4')));
+      expect(chain.endsWith('workspace number 3'), isTrue,
+          reason: 'must refocus the originally focused workspace at the end');
+    });
+
+    test('quotes named workspaces and handles >9 numeric slots', () async {
+      const wsJson = r'''
+[
+  {"num": 10, "name": "10", "output": "DP-2", "focused": false},
+  {"num": -1, "name": "code: main", "output": "DP-2", "focused": true}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      await backend.evacuateOutputWorkspaces('DP-2', ['DP-1']);
+      final chain = fake.calls[1][1];
+      // Numeric > 9 still goes via `workspace number N`.
+      expect(chain, contains("workspace number 10; move workspace to output 'DP-1'"));
+      // Non-numeric workspace gets quoted by name.
+      expect(chain, contains(r'workspace "code: main"; move workspace to output ' "'DP-1'"));
+      // Refocus uses the quoted name (the originally focused one).
+      expect(chain.endsWith(r'workspace "code: main"'), isTrue);
+    });
+
+    test('skips when no workspace lives on dst', () async {
+      const wsJson = '''
+[
+  {"num": 1, "name": "1", "output": "DP-1", "focused": true},
+  {"num": 2, "name": "2", "output": "DP-1", "focused": false}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      await backend.evacuateOutputWorkspaces('DP-2', ['DP-1']);
+      // Only the get_workspaces probe — no compound chain.
+      expect(fake.calls, hasLength(1));
+      expect(fake.calls.single, equals(['swaymsg', '-t', 'get_workspaces']));
+    });
+  });
+
+  group('SwayBackend.waitForOutputClear', () {
+    test('returns true immediately when no ws lives on dst', () async {
+      const wsJson = '''
+[
+  {"num": 1, "name": "1", "output": "DP-1", "focused": true}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      final ok = await backend.waitForOutputClear('DP-2',
+          timeout: const Duration(milliseconds: 200));
+      expect(ok, isTrue);
+    });
+
+    test('returns false on timeout when ws stays on dst', () async {
+      const wsJson = '''
+[
+  {"num": 1, "name": "1", "output": "DP-2", "focused": false}
+]
+''';
+      final fake = FakeProcessRunner(installed: {'swaymsg'}, responses: {
+        'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+      });
+      final backend = SwayBackend(runner: fake);
+      final ok = await backend.waitForOutputClear('DP-2',
+          timeout: const Duration(milliseconds: 120));
+      expect(ok, isFalse);
+      // Must have polled at least twice within the 120 ms window
+      // (50 ms sleep between probes).
+      expect(fake.calls.length, greaterThanOrEqualTo(2));
+    });
+  });
 }

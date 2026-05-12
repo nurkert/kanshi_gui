@@ -158,4 +158,22 @@ class FakeMonitorService implements MonitorService {
     workspaceChainCalls.add(chain);
     return ProcessResult(0, 0, '', '');
   }
+
+  /// Records (destId, targets) tuples each time [evacuateOutputWorkspaces]
+  /// is called so tests can assert mirror-setup paths drove the evacuation.
+  final List<({String dstId, List<String> targets})> evacuateCalls = [];
+
+  @override
+  Future<void> evacuateOutputWorkspaces(
+      String dstId, List<String> targets) async {
+    calls.add('evacuateOutputWorkspaces');
+    evacuateCalls.add((dstId: dstId, targets: List.unmodifiable(targets)));
+  }
+
+  @override
+  Future<bool> waitForOutputClear(String dstId,
+      {Duration timeout = const Duration(milliseconds: 400)}) async {
+    calls.add('waitForOutputClear');
+    return true;
+  }
 }

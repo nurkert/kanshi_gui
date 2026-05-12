@@ -1272,6 +1272,38 @@ class KanshiController extends ChangeNotifier {
     // kanshi reads it too.
     await _flushSaveAndReload();
 
+    // Evacuate the soon-to-be-mirrored output BEFORE wl-mirror grabs
+    // it. Without this, any window living on a workspace that was on
+    // the destination output (including kanshi_gui itself) gets
+    // visually buried under wl-mirror's fullscreen, with no way to
+    // reach it. The save+reload above re-runs the kanshi exec only
+    // when the matched profile actually changes — kanshictl reload
+    // is a no-op for "same profile, different config", so we cannot
+    // rely on it. Driving evacuation directly fixes both that case
+    // and named / >9 workspaces that the writer's 1..9 chain misses.
+    if (srcId != null) {
+      final connectedIds = _currentMonitors.map((m) => m.id).toSet();
+      final targets = mons
+          .where((m) =>
+              m.enabled && m.mirrorOf == null && m.id != destId)
+          .map((m) => _resolveOutputName(m.id))
+          .where(connectedIds.contains)
+          .toList(growable: false);
+      final liveDest = _resolveOutputName(destId);
+      if (targets.isNotEmpty) {
+        try {
+          await monitors.evacuateOutputWorkspaces(liveDest, targets);
+          await monitors.waitForOutputClear(liveDest);
+        } catch (e) {
+          debugPrint('setMirror: evacuate failed: $e');
+        }
+      }
+    }
+    // Re-run the standard ws→output distribution: covers the un-mirror
+    // case (destination is back in the ranking and needs workspaces
+    // back) and rounds out the just-evacuated case.
+    await _verifyAndFixWorkspacePlacement();
+
     // Drive the live process state. _reconcileMirrors handles both
     // the "spawn new" and "kill old" cases by diffing against the
     // current desired set, plus a sweep of orphaned externals.
