@@ -70,4 +70,13 @@ class NoopBackend implements MonitorService {
 
   @override
   Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
+
+  @override
+  Future<void> evacuateOutputWorkspaces(
+      String dstId, List<String> targets) async {}
+
+  @override
+  Future<bool> waitForOutputClear(String dstId,
+          {Duration timeout = const Duration(milliseconds: 400)}) async =>
+      true;
 }

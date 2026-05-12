@@ -317,6 +317,62 @@ void main() {
           equals('B'));
     });
 
+    test('setMirror evacuates the destination output before spawning wl-mirror',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+          _mon(id: 'C', x: 3840, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      fake.calls.clear();
+      // Mirror A onto B. The remaining non-mirror outputs are B and C —
+      // those are the legitimate evacuation targets. The destination A
+      // itself must NOT appear in the targets list (would move
+      // workspaces onto the very output we are about to mirror).
+      final r = await c.setMirror('A', 'B');
+      expect(r.success, isTrue);
+      expect(fake.evacuateCalls, hasLength(1));
+      expect(fake.evacuateCalls.single.dstId, equals('A'));
+      expect(fake.evacuateCalls.single.targets, containsAll(['B', 'C']));
+      expect(fake.evacuateCalls.single.targets, isNot(contains('A')));
+      // Evacuation + settle must happen before wl-mirror spawn.
+      final order = fake.calls;
+      final evacIdx = order.indexOf('evacuateOutputWorkspaces');
+      final waitIdx = order.indexOf('waitForOutputClear');
+      expect(evacIdx, greaterThanOrEqualTo(0));
+      expect(waitIdx, greaterThan(evacIdx),
+          reason: 'settle wait must follow the evacuation chain');
+    });
+
+    test('setMirror(null) does not evacuate (only when establishing a mirror)',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0),
+        ],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      await c.setMirror('A', 'B');
+      fake.evacuateCalls.clear();
+      await c.setMirror('A', null);
+      expect(fake.evacuateCalls, isEmpty,
+          reason: 'un-mirroring leaves the dst free; nothing to evacuate');
+    });
+
     test('setMirror(null) tears down the wl-mirror process', () async {
       final cfg = _tmpConfig(tmp);
       final fake = FakeMonitorService(

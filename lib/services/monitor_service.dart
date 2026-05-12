@@ -86,6 +86,29 @@ abstract class MonitorService {
   /// not-yet-settled output set.
   Future<ProcessResult?> applyWorkspaceChain(String chain) async => null;
 
+  /// Move every workspace currently living on [dstId] off to one of
+  /// [targets] (round-robin) so a freshly-spawned `wl-mirror` doesn't
+  /// cover user windows. Handles numeric AND named workspaces (the
+  /// 1..9 chain that the writer emits only covers numeric slots, which
+  /// leaves named or > 9 workspaces stranded on the mirror destination).
+  /// Default impl is a no-op for backends without a workspace concept.
+  Future<void> evacuateOutputWorkspaces(
+    String dstId,
+    List<String> targets,
+  ) async {}
+
+  /// Best-effort poll until no workspace reports [dstId] as its output,
+  /// or [timeout] elapses. Used as a settle barrier between an
+  /// evacuation chain and spawning `wl-mirror` on the destination.
+  /// Returns true iff the output is empty by the deadline. Default
+  /// impl returns true immediately (backends without workspaces have
+  /// nothing to wait for).
+  Future<bool> waitForOutputClear(
+    String dstId, {
+    Duration timeout = const Duration(milliseconds: 400),
+  }) async =>
+      true;
+
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway → wlr-randr → noop.
   ///

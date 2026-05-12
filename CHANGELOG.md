@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.5.6 — 2026-05-12
+
+### Fixed
+
+- **Mirror toggle no longer buries windows under `wl-mirror`.** Setting
+  a mirror via the GUI used to spawn `wl-mirror` on the destination
+  output without first relocating the workspaces that already lived
+  there. The `kanshictl reload` triggered by the save does NOT
+  guarantee that kanshi re-runs its `exec swaymsg "…workspace number
+  …"` chain (same matched profile name → kanshi can skip the
+  re-apply), so any workspace whose home was on the about-to-be-mirror
+  output stayed put and got visually covered by the new `wl-mirror`
+  fullscreen — including kanshi_gui's own window, leaving the GUI
+  unreachable until the user killed the process.
+
+  `setMirror` now actively evacuates the destination before
+  `wl-mirror` spawns:
+
+  - Reads the live `swaymsg -t get_workspaces` mapping and moves every
+    workspace currently on the mirror destination — numeric AND named,
+    including slots > 9 that the writer's 1..9 chain does not cover —
+    to one of the remaining non-mirror outputs (round-robin),
+    refocusing whatever workspace the user was on at the end.
+  - Waits up to 400 ms for the destination to actually report empty
+    before handing it to `wl-mirror`.
+  - Runs the standard verify-and-fix workspace placement pass
+    afterwards, so the normal interleaved distribution also kicks in
+    when releasing a mirror.
+
 ## 1.5.5 — 2026-05-10
 
 ### Fixed
