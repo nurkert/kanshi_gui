@@ -73,6 +73,11 @@ class KanshiConfigWriter {
         return a.id.compareTo(b.id);
       });
 
+    // Lookup so mirror destinations can borrow the source's position
+    // when computing their own `position` line — see the loop below
+    // for why.
+    final byId = {for (final m in mons) m.id: m};
+
     buffer.writeln("profile '${profile.name}' {");
 
     for (final m in mons) {
@@ -85,8 +90,20 @@ class KanshiConfigWriter {
       final baseH = (m.rotation % 180 == 0) ? m.height : m.width;
       final refresh = m.refresh > 0 ? m.refresh : 60.0;
 
-      final posX = m.x < 0 ? 0 : m.x.toInt();
-      final posY = m.y < 0 ? 0 : m.y.toInt();
+      // Mirror destinations overlay the source's Sway-coordinate
+      // rectangle. Without this, Sway treats the destination output
+      // as its own interactive area: the user can move the cursor
+      // onto it and lose focus on the dead output, even though
+      // wl-mirror only renders the source's content there. Stacking
+      // the rectangles eliminates that dead zone — input at the
+      // shared coords stays with the source, and wl-mirror keeps
+      // painting the destination's pixels because it targets by
+      // output name, not by position.
+      final src = m.mirrorOf != null ? byId[m.mirrorOf] : null;
+      final posSourceX = src != null ? src.x : m.x;
+      final posSourceY = src != null ? src.y : m.y;
+      final posX = posSourceX < 0 ? 0 : posSourceX.toInt();
+      final posY = posSourceY < 0 ? 0 : posSourceY.toInt();
       final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
       buffer.writeln(
