@@ -43,31 +43,31 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 1. **Install from the APT repository (recommended)**:
    ```bash
-   curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
+curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
    ```
 
 2. **Build it yourself**:
    ```bash
-   git clone https://github.com/nurkert/kanshi_gui
-   cd kanshi_gui
-   flutter build linux
+git clone https://github.com/nurkert/kanshi_gui
+cd kanshi_gui
+flutter build linux
    ```
    The resulting binary will be located at:
    ```bash
-   build/linux/x64/release/bundle/kanshi_gui
+build/linux/x64/release/bundle/kanshi_gui
    ```
    To make kanshi_gui globally accessible from your terminal (e.g., just by typing kanshi_gui), you can do one of the following:
    - **Option 1**: Create a symbolic link
       ```bash
-      sudo ln -s "$(pwd)/build/linux/x64/release/bundle/kanshi_gui" /usr/local/bin/kanshi_gui
+sudo ln -s "$(pwd)/build/linux/x64/release/bundle/kanshi_gui" /usr/local/bin/kanshi_gui
       ```
    - **Option 2**: Copy the binary into a directory in your $PATH
       ```bash
-      sudo cp build/linux/x64/release/bundle/kanshi_gui /usr/local/bin/
+sudo cp build/linux/x64/release/bundle/kanshi_gui /usr/local/bin/
       ```
    Now you can launch the application simply by typing:
-   ```
-   kanshi_gui
+   ```bash
+kanshi_gui
    ```
 
 3. **Create a Debian package**:
@@ -75,13 +75,13 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
    into a `.deb` file. Run it from the project root and then install the
    resulting package with `dpkg`:
    ```bash
-   ./scripts/build_deb.sh
-   sudo dpkg -i build/kanshi-gui_*_$(dpkg --print-architecture).deb
+./scripts/build_deb.sh
+sudo dpkg -i build/kanshi-gui_*_$(dpkg --print-architecture).deb
    ```
    After installation the `kanshi_gui` command is available globally. To
    remove the package again use:
    ```bash
-   sudo dpkg -r kanshi_gui
+sudo dpkg -r kanshi_gui
    ```
 
 # License
