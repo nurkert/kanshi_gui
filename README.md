@@ -43,18 +43,7 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 1. **Install from the APT repository (recommended)**:
    ```bash
-   # Add Nurkert APT key
-   sudo mkdir -p /usr/share/keyrings
-   curl -fsSL https://apt.nurkert.de/KEY.gpg \
-     | sudo gpg --dearmor -o /usr/share/keyrings/nurkert-archive-keyring.gpg
-
-   # Add repository
-   echo "deb [signed-by=/usr/share/keyrings/nurkert-archive-keyring.gpg] https://apt.nurkert.de stable main" \
-     | sudo tee /etc/apt/sources.list.d/nurkert.list
-
-   # Install kanshi-gui (pulls kanshi automatically)
-   sudo apt update
-   sudo apt install kanshi-gui
+curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
    ```
 
 2. **Build it yourself**:
