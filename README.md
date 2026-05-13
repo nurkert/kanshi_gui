@@ -42,47 +42,47 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 ### Installation
 
 1. **Install from the APT repository (recommended)**:
-   ```bash
+```bash
 curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
-   ```
+```
 
 2. **Build it yourself**:
-   ```bash
+```bash
 git clone https://github.com/nurkert/kanshi_gui
 cd kanshi_gui
 flutter build linux
-   ```
+```
    The resulting binary will be located at:
-   ```bash
+```bash
 build/linux/x64/release/bundle/kanshi_gui
-   ```
+```
    To make kanshi_gui globally accessible from your terminal (e.g., just by typing kanshi_gui), you can do one of the following:
    - **Option 1**: Create a symbolic link
-      ```bash
+```bash
 sudo ln -s "$(pwd)/build/linux/x64/release/bundle/kanshi_gui" /usr/local/bin/kanshi_gui
-      ```
+```
    - **Option 2**: Copy the binary into a directory in your $PATH
-      ```bash
+```bash
 sudo cp build/linux/x64/release/bundle/kanshi_gui /usr/local/bin/
-      ```
+```
    Now you can launch the application simply by typing:
-   ```bash
+```bash
 kanshi_gui
-   ```
+```
 
 3. **Create a Debian package**:
    The repository ships with a helper script that bundles the application
    into a `.deb` file. Run it from the project root and then install the
    resulting package with `dpkg`:
-   ```bash
+```bash
 ./scripts/build_deb.sh
 sudo dpkg -i build/kanshi-gui_*_$(dpkg --print-architecture).deb
-   ```
+```
    After installation the `kanshi_gui` command is available globally. To
    remove the package again use:
-   ```bash
+```bash
 sudo dpkg -r kanshi_gui
-   ```
+```
 
 # License
 
