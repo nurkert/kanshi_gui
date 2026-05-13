@@ -43,7 +43,7 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 
 1. **Install from the APT repository (recommended)**:
    ```bash
-curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
+   curl -fsSL https://apt.nurkert.de/install/kanshi-gui | sudo sh
    ```
 
 2. **Build it yourself**:
