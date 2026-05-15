@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.11 — 2026-05-15
+
+### Fixed
+
+- **Mirror no longer triggers an infinity-cascade when wl-mirror is
+  running.** The 1.5.7 fix had stacked the mirror destination onto
+  the source's rectangle in sway coordinates to keep the cursor from
+  wandering into a "dead zone" on the dest output. That's fine when
+  wl-mirror isn't running, but the moment it is: wl-mirror creates a
+  fullscreen layer-shell surface on the dest output, sway happily
+  paints that same surface onto every output whose geometry overlaps
+  the dest's rect (the source rect, in this case), wl-mirror then
+  re-captures the source — which now contains its own surface — and
+  projects that onto the dest. Two outputs at identical coords plus
+  one screen-capture process = an 1980s-VCR-style infinity mirror.
+  Writer no longer overrides the destination's position; mirrors now
+  occupy their own rectangle. The cursor-routing concern (the
+  original motivation for stacking) is left to the GUI's placement
+  layer.
+- **`pgrep`-guarded mirror exec no longer self-matches.** 1.5.10's
+  guard used `pgrep -f "wl-mirror --fullscreen-output X"` to skip a
+  duplicate spawn, but `pgrep -f` matches against the FULL argv of
+  every process — including the very shell running the guard, whose
+  argv contains the pattern verbatim. The guard always found itself,
+  always reported "already running", and so wl-mirror never started
+  at boot. The replacement filters by process *name* with
+  `pgrep -x wl-mirror -a` (the guard shell's process name is `sh`,
+  not `wl-mirror`) and then `grep -qF -- "--fullscreen-output <dst> "`
+  for the destination match — literal substring, trailing-space
+  pinned so e.g. `eDP-1` can't match a hypothetical `eDP-10`.
+- **wl-mirror now spawns with `--scaling fit` explicitly.** It's the
+  documented default, but a user-visible crop ("bottom edge of the
+  source missing on the destination") was reported anyway when
+  source and destination had different logical sizes. Setting the
+  flag pins the behaviour against any ambient default and is harmless
+  when fit was already in effect.
+
 ## 1.5.10 — 2026-05-15
 
 ### Fixed
