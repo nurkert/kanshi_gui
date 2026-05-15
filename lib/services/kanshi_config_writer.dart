@@ -183,7 +183,8 @@ class KanshiConfigWriter {
         buffer.writeln(
           "    exec sh -c 'pgrep -x wl-mirror -a | "
           "grep -qF -- \"--fullscreen-output ${m.id} \" || "
-          "wl-mirror --fullscreen-output \"${m.id}\" \"${m.mirrorOf}\" &'",
+          "wl-mirror --scaling fit --fullscreen-output "
+          "\"${m.id}\" \"${m.mirrorOf}\" &'",
         );
       }
     }
@@ -201,7 +202,26 @@ class KanshiConfigWriter {
       }
       final chain = buildSwayWorkspaceChain(ranked);
       if (chain != null) {
-        buffer.writeln("    exec swaymsg \"$chain\"");
+        // Mirror destinations are excluded from the rank-based
+        // distribution but Sway still needs a workspace on every
+        // active output. Without intervention it auto-creates a
+        // numeric one (next free → typically 10 on a 1..9 setup),
+        // which the user sees as an unreachable "10" in the bar
+        // (no $mod+0 keybind to switch to it). Claim a named
+        // workspace per mirror destination instead: declare the
+        // binding, then focus it so Sway *creates* it on that
+        // output, displacing the auto-numbered orphan. Trailing
+        // `workspace number 1` restores the user's focus.
+        final mirrorClaims = mons
+            .where((m) => m.enabled && m.mirrorOf != null)
+            .map((m) =>
+                "workspace 'mirror (${m.id})' output '${m.id}'; "
+                "workspace 'mirror (${m.id})'")
+            .join('; ');
+        final fullChain = mirrorClaims.isEmpty
+            ? chain
+            : '$chain; $mirrorClaims; workspace number 1';
+        buffer.writeln("    exec swaymsg \"$fullChain\"");
       }
     }
 

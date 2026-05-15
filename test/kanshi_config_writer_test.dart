@@ -131,11 +131,13 @@ void main() {
     });
 
     test(
-        'mirror destinations excluded from chained workspace-exec line',
-        () {
-      // Same coverage as the test above but scoped to JUST the chained
-      // `exec swaymsg "..."` line, sidestepping the per-output `output
-      // 'B' enable …` line that is supposed to mention B.
+        'mirror destinations get a NAMED workspace claim but no numeric '
+        'ws ownership in the chain', () {
+      // Mirror dests are still excluded from the rank-based ws 1..9
+      // distribution (those go to the source). But the chain DOES name
+      // a `mirror (B)` workspace on the dest output so sway has
+      // something cosmetic to display instead of an auto-numbered
+      // orphan ws 10 that has no keybind to it.
       final p = Profile(
         name: 'Mirror',
         monitors: [
@@ -155,10 +157,21 @@ void main() {
       for (var ws = 1; ws <= 9; ws++) {
         expect(chain, contains("workspace $ws output 'A'"));
       }
-      expect(chain, isNot(contains("output 'B'")),
-          reason: 'No workspace-target reference to B in the chain.');
       expect(chain, isNot(contains("move workspace to output 'B'")),
           reason: 'No active move targeting B in the chain.');
+      // Phase-1/2 bindings (numeric workspaces) never name B as a
+      // target — only the cosmetic named claim mentions it.
+      for (var ws = 1; ws <= 9; ws++) {
+        expect(chain, isNot(contains("workspace $ws output 'B'")));
+        expect(chain, isNot(contains("workspace number $ws output 'B'")));
+      }
+      // The cosmetic claim is the one place B legitimately appears.
+      expect(chain, contains("workspace 'mirror (B)' output 'B'"),
+          reason: 'Mirror dest gets a named workspace so sway has '
+              'something to display instead of an unreachable auto-num.');
+      expect(chain, contains("workspace 'mirror (B)'"),
+          reason: 'Claim is followed by focusing the named ws to '
+              'force sway to use it on the dest output.');
     });
 
     test('mirror destinations keep their own non-overlapping position', () {
@@ -458,8 +471,9 @@ void main() {
       expect(
           rendered,
           contains(
-              'wl-mirror --fullscreen-output "B" "A"'),
-          reason: 'Guarded fallback spawns the mirror when none is running.');
+              'wl-mirror --scaling fit --fullscreen-output "B" "A"'),
+          reason: 'Guarded fallback spawns the mirror with explicit '
+              '`--scaling fit` so cropping cannot regress to cover-mode.');
       expect(rendered, isNot(contains('pgrep -f "wl-mirror')),
           reason: 'The old self-matching `pgrep -f` form must not regress.');
 
