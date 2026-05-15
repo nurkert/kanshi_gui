@@ -130,14 +130,15 @@ void main() {
       }
     });
 
-    test(
-        'mirror destinations get a NAMED workspace claim but no numeric '
-        'ws ownership in the chain', () {
-      // Mirror dests are still excluded from the rank-based ws 1..9
-      // distribution (those go to the source). But the chain DOES name
-      // a `mirror (B)` workspace on the dest output so sway has
-      // something cosmetic to display instead of an auto-numbered
-      // orphan ws 10 that has no keybind to it.
+    test('mirror destinations excluded from chained workspace-exec line', () {
+      // Mirror dests don't own any of the numeric 1..9 workspaces —
+      // those go to the source and other non-mirror outputs. Earlier
+      // attempts to ALSO emit a named `mirror (<dst>)` claim leaked an
+      // unreachable "mirror (B)" label into the user's swaybar; we
+      // removed it because the orphan workspace is handled by the
+      // controller's chain re-run in `_verifyAndFixWorkspacePlacement`
+      // (the chain visits every numeric ws, which displaces any orphan
+      // visible on the dest and sway garbage-collects it once empty).
       final p = Profile(
         name: 'Mirror',
         monitors: [
@@ -157,21 +158,12 @@ void main() {
       for (var ws = 1; ws <= 9; ws++) {
         expect(chain, contains("workspace $ws output 'A'"));
       }
+      expect(chain, isNot(contains("output 'B'")),
+          reason: 'No workspace-target reference to B in the chain.');
       expect(chain, isNot(contains("move workspace to output 'B'")),
           reason: 'No active move targeting B in the chain.');
-      // Phase-1/2 bindings (numeric workspaces) never name B as a
-      // target — only the cosmetic named claim mentions it.
-      for (var ws = 1; ws <= 9; ws++) {
-        expect(chain, isNot(contains("workspace $ws output 'B'")));
-        expect(chain, isNot(contains("workspace number $ws output 'B'")));
-      }
-      // The cosmetic claim is the one place B legitimately appears.
-      expect(chain, contains("workspace 'mirror (B)' output 'B'"),
-          reason: 'Mirror dest gets a named workspace so sway has '
-              'something to display instead of an unreachable auto-num.');
-      expect(chain, contains("workspace 'mirror (B)'"),
-          reason: 'Claim is followed by focusing the named ws to '
-              'force sway to use it on the dest output.');
+      expect(chain, isNot(contains("mirror (B)")),
+          reason: 'No named-claim leakage into the user-visible bar.');
     });
 
     test('mirror destinations keep their own non-overlapping position', () {
