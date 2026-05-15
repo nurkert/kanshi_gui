@@ -898,5 +898,34 @@ void main() {
       }
       expect(chain, isNot(contains("output 'B'")));
     });
+
+    test('orphan ws above maxWorkspaces triggers a chain reapply', () async {
+      // Scenario the user actually hit: after a setMirror(null) that
+      // un-mirrored a destination, an old ws 10 was still sitting on
+      // the freshly-promoted output. The desired map only covers 1..9
+      // so the simple mismatch check missed it. Detect ws-out-of-range
+      // separately and re-fire the chain so its `workspace number 2..9`
+      // dance displaces the orphan visible workspace; sway then garbage-
+      // collects the now-empty ws 10.
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {
+          1: 'A',
+          2: 'B',
+          10: 'B',
+        };
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, hasLength(1),
+          reason: 'Orphan ws > 9 must trigger reapply even when the 1..9 '
+              'mapping is otherwise clean.');
+    });
   });
 }

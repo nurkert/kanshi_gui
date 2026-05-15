@@ -286,7 +286,15 @@ class KanshiController extends ChangeNotifier {
   /// returns non-zero) is logged and swallowed — this is a robustness
   /// nicety, not a correctness invariant. The next hotplug will re-run
   /// the chain via kanshi's own exec line in any case.
-  Future<void> _verifyAndFixWorkspacePlacement() async {
+  /// [force] = true bypasses the live-state mismatch check and runs the
+  /// chain unconditionally. Callers that just MUTATED the active profile
+  /// (e.g. `setMirror`, profile switches) want this, because
+  /// `kanshictl reload` does NOT re-fire the `exec swaymsg "…"` line on
+  /// a still-active profile — sway is left with the OLD bindings while
+  /// the GUI's in-memory model has the new ones. Force-apply makes the
+  /// declarations land. The chain is idempotent enough that re-running
+  /// is cheap (declarations no-op, focus dances end at ws 1).
+  Future<void> _verifyAndFixWorkspacePlacement({bool force = false}) async {
     if (_isDisposed) return;
     if (!monitors.isLive) return;
     // The chain only makes sense on backends that opt in to the Sway
@@ -351,7 +359,13 @@ class KanshiController extends ChangeNotifier {
         final want = desired[e.key];
         return want != null && want != e.value;
       });
-      if (!mismatched) return;
+      // Orphan check: any live workspace whose number is OUTSIDE the
+      // 1..maxWs range (typically a stuck ws 10 from an earlier session
+      // or transient state) is also a reason to re-run the chain. The
+      // chain visits every ws 1..N and ends focused on ws 1, which
+      // displaces the orphan; if it was empty, sway garbage-collects it.
+      final hasOrphan = actual.keys.any((k) => k < 1 || k > maxWs);
+      if (!force && !mismatched && !hasOrphan) return;
       final chain = buildSwayWorkspaceChain(ranked);
       if (chain == null) return;
       try {
@@ -1301,8 +1315,13 @@ class KanshiController extends ChangeNotifier {
     }
     // Re-run the standard ws→output distribution: covers the un-mirror
     // case (destination is back in the ranking and needs workspaces
-    // back) and rounds out the just-evacuated case.
-    await _verifyAndFixWorkspacePlacement();
+    // back) and rounds out the just-evacuated case. force-apply because
+    // setMirror just changed the active profile's monitor set — kanshi
+    // reloaded the new config but didn't re-fire its `exec swaymsg "..."`
+    // chain (kanshi treats "same profile re-applied" as a no-op for
+    // exec), so without forcing, sway's binding table keeps the OLD
+    // ranks. Force makes the new declarations and force-moves land.
+    await _verifyAndFixWorkspacePlacement(force: true);
 
     // Drive the live process state. _reconcileMirrors handles both
     // the "spawn new" and "kill old" cases by diffing against the

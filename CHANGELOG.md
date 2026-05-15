@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.13 — 2026-05-15
+
+### Fixed
+
+- **Reverted the 1.5.12 `mirror (<dst>)` named-workspace claim.** It
+  swapped one annoyance (an unreachable auto-numbered ws like "10")
+  for another (an unreachable named ws "mirror (eDP-1)" in the bar).
+  Orphan workspaces are now displaced through the regular numeric
+  chain re-run instead.
+- **`_verifyAndFixWorkspacePlacement` now also fires when a workspace
+  outside the 1..maxWorkspaces range is alive on any output.** The
+  earlier mismatch check only looked at workspaces in the desired
+  map, so a leftover ws 10 from an earlier session — visible on the
+  output but not part of the desired 1..9 set — slipped through. The
+  re-run cycles focus through every numeric workspace, displacing
+  the orphan; sway then garbage-collects the now-empty workspace.
+- **`setMirror` force-applies the workspace chain.** `kanshictl
+  reload` does NOT re-fire its `exec swaymsg "…"` line for a still-
+  active profile, which left sway's binding table out of sync with
+  the GUI's in-memory model after every `setMirror(null)` /
+  set-mirror toggle. The chain is idempotent enough that an
+  unconditional re-run is cheap, and the live state finally matches
+  what the rank ordering says it should.
+
 ## 1.5.12 — 2026-05-15
 
 ### Fixed

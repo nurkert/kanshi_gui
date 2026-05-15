@@ -202,26 +202,17 @@ class KanshiConfigWriter {
       }
       final chain = buildSwayWorkspaceChain(ranked);
       if (chain != null) {
-        // Mirror destinations are excluded from the rank-based
-        // distribution but Sway still needs a workspace on every
-        // active output. Without intervention it auto-creates a
-        // numeric one (next free → typically 10 on a 1..9 setup),
-        // which the user sees as an unreachable "10" in the bar
-        // (no $mod+0 keybind to switch to it). Claim a named
-        // workspace per mirror destination instead: declare the
-        // binding, then focus it so Sway *creates* it on that
-        // output, displacing the auto-numbered orphan. Trailing
-        // `workspace number 1` restores the user's focus.
-        final mirrorClaims = mons
-            .where((m) => m.enabled && m.mirrorOf != null)
-            .map((m) =>
-                "workspace 'mirror (${m.id})' output '${m.id}'; "
-                "workspace 'mirror (${m.id})'")
-            .join('; ');
-        final fullChain = mirrorClaims.isEmpty
-            ? chain
-            : '$chain; $mirrorClaims; workspace number 1';
-        buffer.writeln("    exec swaymsg \"$fullChain\"");
+        // Earlier (1.5.12) we tried to claim a named workspace per
+        // mirror destination so sway wouldn't auto-create an
+        // unreachable numbered one (typically 10 on a 1..9 setup).
+        // The name "mirror (X)" then showed up in the user's
+        // swaybar, which is just a different flavour of the same
+        // annoyance ("a workspace label I can't $mod-jump to").
+        // The orphan-displacement is now handled in the controller's
+        // verify step via the regular chain — the chain visits every
+        // workspace 1..N which displaces any visible orphan, and
+        // sway garbage-collects empty non-visible workspaces.
+        buffer.writeln("    exec swaymsg \"$chain\"");
       }
     }
 
