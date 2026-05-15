@@ -432,14 +432,21 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      // Mirror persistence is a `# kanshi_gui:mirror` comment, NOT an
-      // `exec wl-mirror` line: the latter caused kanshi to spawn a
-      // duplicate wl-mirror process on every reload, fighting the
-      // GUI's MirrorRunner for ownership.
+      // Mirror persistence has two parts that must agree:
+      //   1) the `# kanshi_gui:mirror` annotation (parser → `mirrorOf`)
+      //   2) a `pgrep`-guarded `exec wl-mirror` so kanshi spawns the
+      //      mirror at session start when the GUI isn't running yet.
+      // The guard is what makes this safe against `kanshictl reload`
+      // (a bare exec would stack duplicate wl-mirror processes).
       expect(rendered, contains("# kanshi_gui:mirror 'B'='A'"),
-          reason: 'Mirror state is persisted as an annotation now.');
-      expect(rendered, isNot(contains('exec wl-mirror')),
-          reason: 'No exec hook → no duplicate wl-mirror processes.');
+          reason: 'Mirror state is persisted as an annotation.');
+      expect(rendered, contains('pgrep -f "wl-mirror --fullscreen-output B"'),
+          reason: 'Boot-time exec must guard against duplicate spawns.');
+      expect(
+          rendered,
+          contains(
+              'wl-mirror --fullscreen-output "B" "A"'),
+          reason: 'Guarded fallback spawns the mirror when none is running.');
 
       final reparsed =
           KanshiConfigParser.parse(rendered).single.monitors;
@@ -449,6 +456,33 @@ void main() {
           reason: 'Source tile is unaffected by the annotation.');
       expect(b.mirrorOf, equals('A'),
           reason: 'Destination tile must recover its mirror target.');
+    });
+
+    test('guarded mirror exec is idempotent across kanshi reloads', () {
+      // Verify the structural guarantee: every mirror destination gets
+      // exactly one exec line, and the pgrep check pins on the
+      // destination's specific `--fullscreen-output` argv. Two mirrors
+      // in the same profile must produce two independent guards.
+      final p = Profile(
+        name: 'TwoMirrors',
+        monitors: [
+          _mon(id: 'A', x: 0, y: 0),
+          _mon(id: 'B', x: 1920, y: 0, mirrorOf: 'A'),
+          _mon(id: 'C', x: 3840, y: 0, mirrorOf: 'A'),
+        ],
+      );
+      final rendered = KanshiConfigWriter.render(
+        [p],
+        options: KanshiWriteOptions.swayDefaults,
+      );
+      final execLines = rendered
+          .split('\n')
+          .where((l) => l.contains('wl-mirror'))
+          .toList();
+      expect(execLines, hasLength(2),
+          reason: 'One exec per mirror destination, no more.');
+      expect(execLines[0], contains('--fullscreen-output B'));
+      expect(execLines[1], contains('--fullscreen-output C'));
     });
 
     test('neutral options do not emit wl-mirror exec lines', () {

@@ -146,22 +146,37 @@ class KanshiConfigWriter {
     }
 
     if (options.injectMirrorExec) {
-      // Persist mirror relationships as `# kanshi_gui:mirror …` comment
-      // annotations rather than as `exec wl-mirror …` hooks. The exec
-      // hook approach made kanshi the *second* lifecycle owner of every
-      // wl-mirror process: every `kanshictl reload` re-ran the line and
-      // spawned an additional wl-mirror, which produced duplicate
-      // fullscreen windows on the destination, a cycle into
-      // picture-in-picture recursion when two mirrors targeted each
-      // other, and orphaned processes that survived the GUI's
-      // `setMirror(null)` because the GUI's MirrorRunner only owned its
-      // own children. The annotation pattern keeps kanshi blissfully
-      // ignorant of mirroring; the GUI's MirrorRunner is the sole
-      // owner. The mirror is restored on the next GUI launch via the
-      // parser reading these annotations back into `mirrorOf`.
+      // Mirror persistence has two parts that must agree:
+      //   1) a `# kanshi_gui:mirror` annotation so the parser can
+      //      hydrate `mirrorOf` back into the model on GUI launch,
+      //   2) a `pgrep`-guarded `exec wl-mirror …` so the mirror is
+      //      actually live whether or not the GUI is running — the
+      //      destination output is otherwise just stacked on the source
+      //      with no content-mirroring, which is the broken-after-boot
+      //      state users hit when kanshi applies the profile alone.
+      //
+      // The guard is the load-bearing detail: a bare `exec wl-mirror`
+      // re-ran on every `kanshictl reload` and stacked duplicate
+      // processes; pgrep-checking the live `--fullscreen-output <dst>`
+      // argv makes the spawn idempotent across reloads. The GUI's
+      // MirrorRunner still takes ownership at runtime by killing the
+      // kanshi-spawned process via `_killExternalForDst` and replacing
+      // it with a managed one, so a single owner exists when the GUI
+      // is up (managed retries, crash handling) and a "best-effort"
+      // owner (kanshi's exec) covers the boot window.
       for (final m in mons.where((m) => m.enabled && m.mirrorOf != null)) {
         buffer.writeln(
           "    # kanshi_gui:mirror '${m.id}'='${m.mirrorOf}'",
+        );
+        // pgrep -f matches anywhere in the argv; the literal
+        // `--fullscreen-output <dst>` substring uniquely identifies a
+        // wl-mirror for this specific destination. Output names in
+        // practice are ASCII like `eDP-1` / `HDMI-A-2` (no regex
+        // metachars), so the substring works as a literal match.
+        buffer.writeln(
+          "    exec sh -c 'pgrep -f \"wl-mirror --fullscreen-output ${m.id}\" "
+          ">/dev/null || wl-mirror --fullscreen-output \"${m.id}\" "
+          "\"${m.mirrorOf}\" &'",
         );
       }
     }

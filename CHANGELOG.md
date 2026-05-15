@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.5.10 — 2026-05-15
+
+### Fixed
+
+- **Mirrors actually mirror at boot now.** The 1.5.7 fix had stacked
+  the mirror destination onto the source's position so Sway didn't
+  treat it as a separate interactive zone — but the wl-mirror process
+  itself was only spawned by the GUI's MirrorRunner. When kanshi
+  applied a mirror profile at session start (before any GUI was
+  running), both outputs ended up overlapping at the same coords with
+  no content-mirroring at all, just two independent outputs fighting
+  for the same rectangle. Workspaces leaked onto the destination, the
+  user saw the wrong content, and opening the GUI from that state
+  buried the leftover windows under wl-mirror's fullscreen layer.
+
+  Two changes together close the gap:
+
+  1. **Guarded `exec wl-mirror`.** The writer now emits a
+     `pgrep`-guarded shell exec for each mirror destination, e.g.
+     `exec sh -c 'pgrep -f "wl-mirror --fullscreen-output eDP-1"
+     >/dev/null || wl-mirror --fullscreen-output "eDP-1" "DP-1" &'`.
+     This spawns the mirror at session start when no GUI is running,
+     and the pgrep guard prevents `kanshictl reload` from stacking
+     duplicate wl-mirror processes — the exact failure mode that got
+     the old `exec wl-mirror` line removed in the first place. The
+     GUI's MirrorRunner still takes ownership at runtime by killing
+     the kanshi-spawned instance and replacing it with a managed one
+     (single owner while the GUI is up; best-effort owner via kanshi
+     for the boot window).
+
+  2. **Reconcile evacuates new mirrors.** `_doReconcileMirrors` now
+     runs the same evacuation pipeline `setMirror` uses — move
+     workspaces off the destination, wait for the output to clear —
+     before asking the MirrorRunner to spawn. This fires when init
+     finds a mirror profile already active (kanshi applied it before
+     the GUI launched) or when a hotplug brings a new mirror partner
+     online. Without it, workspaces sitting on the destination from
+     before the mirror started ended up buried under wl-mirror's
+     fullscreen layer, unreachable until the user manually moved
+     them. `setMirror` still does its own evacuation up front and
+     now tells reconcile to skip the second pass (`evacuateNewMirrors:
+     false`), so the IPC chain doesn't run twice on the same path.
+
+  Parser updated to ignore the new guarded-exec form (the `pgrep -f
+  "wl-mirror …"` substring would otherwise be misread as the actual
+  mirror invocation); the canonical `# kanshi_gui:mirror` annotation
+  stays in charge of mirror-state hydration.
+
 ## 1.5.9 — 2026-05-12
 
 ### Fixed

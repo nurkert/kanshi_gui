@@ -286,6 +286,13 @@ class KanshiConfigParser {
       if (!lower.startsWith('exec') || !lower.contains('wl-mirror')) {
         continue;
       }
+      // Skip the guarded exec form the writer emits today: it embeds
+      // the substring `wl-mirror` inside a `pgrep -f "wl-mirror …"`
+      // pattern, which this tokenising scraper would otherwise misread
+      // as the actual mirror invocation. The `# kanshi_gui:mirror`
+      // annotation is the canonical persistence form anyway, and
+      // `_applyMirrors` runs after this pass to apply it.
+      if (lower.contains('pgrep')) continue;
       final cmdIdx = lower.indexOf('wl-mirror');
       var rest = line.substring(cmdIdx + 'wl-mirror'.length).trim();
       if (rest.endsWith('&')) {
