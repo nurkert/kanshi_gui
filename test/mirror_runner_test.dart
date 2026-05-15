@@ -40,10 +40,15 @@ void main() {
           spawns.single,
           equals([
             'wl-mirror',
+            '--scaling',
+            'fit',
             '--fullscreen-output',
             'DP-2',
             'DP-1',
-          ]));
+          ]),
+          reason: '--scaling fit is wl-mirror\'s documented default but we '
+              'pass it explicitly so the rendering can\'t regress to a '
+              'cropped/cover mode if the default ever changes.');
       expect(mr.activeDestinations, equals({'DP-2'}));
       expect(mr.mirrorSourceFor('DP-2'), equals('DP-1'));
     });
@@ -76,7 +81,7 @@ void main() {
       await mr.stop('DP-2');
       expect(mr.activeDestinations, isEmpty);
       // Closing the (now-detached) controller must not trigger a respawn.
-      fake.openStream('wl-mirror --fullscreen-output DP-2 DP-1').close();
+      fake.openStream('wl-mirror --scaling fit --fullscreen-output DP-2 DP-1').close();
       await Future<void>.delayed(Duration.zero);
       expect(_wlMirrorOnly(fake.calls), hasLength(1),
           reason: 'After stop, an exit on the stream must NOT respawn.');
@@ -100,7 +105,7 @@ void main() {
       final mr = MirrorRunner(runner: fake);
       await mr.start('DP-1', 'DP-2');
       // Simulate wl-mirror dying (e.g. user closed the fullscreen window).
-      final key = 'wl-mirror --fullscreen-output DP-2 DP-1';
+      final key = 'wl-mirror --scaling fit --fullscreen-output DP-2 DP-1';
       await fake.openStream(key).close();
       await Future<void>.delayed(Duration.zero);
       expect(_wlMirrorOnly(fake.calls), hasLength(2),
@@ -114,7 +119,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
+      const key = 'wl-mirror --scaling fit --fullscreen-output DP-2 DP-1';
 
       // Three rapid back-to-back deaths within the 30 s window. The
       // budget is 3, so the fourth death marks DP-2 failed.
@@ -132,7 +137,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
+      const key = 'wl-mirror --scaling fit --fullscreen-output DP-2 DP-1';
 
       // First death and respawn.
       await fake.openStream(key).close();
@@ -153,7 +158,7 @@ void main() {
       final fake = FakeProcessRunner(installed: {'wl-mirror'});
       final mr = MirrorRunner(runner: fake, now: () => clock);
       await mr.start('DP-1', 'DP-2');
-      const key = 'wl-mirror --fullscreen-output DP-2 DP-1';
+      const key = 'wl-mirror --scaling fit --fullscreen-output DP-2 DP-1';
       for (var i = 0; i < 4; i++) {
         await fake.openStream(key).close();
         await Future<void>.delayed(Duration.zero);
