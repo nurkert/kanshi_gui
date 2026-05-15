@@ -239,7 +239,16 @@ class MirrorRunner extends ChangeNotifier {
     // and the process bails out before opening a Wayland connection.
     // `--fullscreen-output` already implies `--fullscreen`, so we drop
     // the redundant explicit flag and put the source last.
+    //
+    // `--scaling fit` is wl-mirror's documented default, but we set it
+    // explicitly anyway: users have reported the destination cropping
+    // the source's bottom edge when source/dest have different
+    // logical sizes (e.g. dest at scale 1.125 vs source at scale 1.0).
+    // Explicit `fit` pins the behaviour against any version drift or
+    // ambient config that might change the default.
     final ps = _runner.stream('wl-mirror', [
+      '--scaling',
+      'fit',
       '--fullscreen-output',
       entry.dstId,
       entry.srcId,

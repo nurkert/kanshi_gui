@@ -73,11 +73,6 @@ class KanshiConfigWriter {
         return a.id.compareTo(b.id);
       });
 
-    // Lookup so mirror destinations can borrow the source's position
-    // when computing their own `position` line — see the loop below
-    // for why.
-    final byId = {for (final m in mons) m.id: m};
-
     buffer.writeln("profile '${profile.name}' {");
 
     for (final m in mons) {
@@ -90,20 +85,22 @@ class KanshiConfigWriter {
       final baseH = (m.rotation % 180 == 0) ? m.height : m.width;
       final refresh = m.refresh > 0 ? m.refresh : 60.0;
 
-      // Mirror destinations overlay the source's Sway-coordinate
-      // rectangle. Without this, Sway treats the destination output
-      // as its own interactive area: the user can move the cursor
-      // onto it and lose focus on the dead output, even though
-      // wl-mirror only renders the source's content there. Stacking
-      // the rectangles eliminates that dead zone — input at the
-      // shared coords stays with the source, and wl-mirror keeps
-      // painting the destination's pixels because it targets by
-      // output name, not by position.
-      final src = m.mirrorOf != null ? byId[m.mirrorOf] : null;
-      final posSourceX = src != null ? src.x : m.x;
-      final posSourceY = src != null ? src.y : m.y;
-      final posX = posSourceX < 0 ? 0 : posSourceX.toInt();
-      final posY = posSourceY < 0 ? 0 : posSourceY.toInt();
+      // Mirror destinations keep their OWN position — earlier releases
+      // (1.5.7) tried to stack them onto the source's Sway-coordinate
+      // rectangle so the cursor wouldn't get "lost" on the dead output.
+      // Empirically that backfires the moment wl-mirror is actually
+      // running: wl-mirror's layer-shell surface lands on the dest
+      // output's geometry, but because dest and source share the
+      // exact rect, sway also paints that surface onto the source
+      // output. wl-mirror then captures the source (now containing
+      // its own surface), projects that onto the dest (which already
+      // has it), and you get a 1980s-VCR infinity-mirror cascade.
+      // Lesson: mirror destination MUST occupy a different rectangle
+      // from the source. The cursor-routing concern is solved at the
+      // GUI / placement layer (drop the dest next to the source by
+      // default), not by overlapping rects in the kanshi config.
+      final posX = m.x < 0 ? 0 : m.x.toInt();
+      final posY = m.y < 0 ? 0 : m.y.toInt();
       final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
       buffer.writeln(
@@ -168,15 +165,25 @@ class KanshiConfigWriter {
         buffer.writeln(
           "    # kanshi_gui:mirror '${m.id}'='${m.mirrorOf}'",
         );
-        // pgrep -f matches anywhere in the argv; the literal
-        // `--fullscreen-output <dst>` substring uniquely identifies a
-        // wl-mirror for this specific destination. Output names in
-        // practice are ASCII like `eDP-1` / `HDMI-A-2` (no regex
-        // metachars), so the substring works as a literal match.
+        // Pgrep guard. Two pitfalls avoided here:
+        //   * `pgrep -f` matches against the FULL argv of every
+        //     process — including the very shell running this guard,
+        //     whose argv literally contains our pattern. That shell
+        //     self-match meant the guard ALWAYS reported "running" and
+        //     wl-mirror was never spawned at boot.
+        //   * `pgrep -fF` doesn't exist; we want a literal substring
+        //     check, not a regex one (output names don't have regex
+        //     metachars today, but the `-` in `eDP-1` is a footgun if
+        //     anyone ever puts ranges in `[...]`).
+        // Solution: `pgrep -x wl-mirror -a` filters by *process name*
+        // (so the shell can't match), then `grep -qF` does a literal
+        // substring check against the cmdline. Trailing space pins the
+        // destination so e.g. `eDP-1` doesn't accidentally match a
+        // hypothetical `eDP-10`.
         buffer.writeln(
-          "    exec sh -c 'pgrep -f \"wl-mirror --fullscreen-output ${m.id}\" "
-          ">/dev/null || wl-mirror --fullscreen-output \"${m.id}\" "
-          "\"${m.mirrorOf}\" &'",
+          "    exec sh -c 'pgrep -x wl-mirror -a | "
+          "grep -qF -- \"--fullscreen-output ${m.id} \" || "
+          "wl-mirror --fullscreen-output \"${m.id}\" \"${m.mirrorOf}\" &'",
         );
       }
     }

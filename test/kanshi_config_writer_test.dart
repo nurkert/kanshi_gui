@@ -161,13 +161,14 @@ void main() {
           reason: 'No active move targeting B in the chain.');
     });
 
-    test('mirror destinations are positioned at the source\'s coordinates',
-        () {
-      // wl-mirror keeps painting the destination's pixels (it targets
-      // by output name, not by position), but Sway still treats the
-      // destination as its own interactive area with its own cursor
-      // routing. Stacking the rectangles in Sway's coord space
-      // eliminates the dead zone the user can otherwise wander into.
+    test('mirror destinations keep their own non-overlapping position', () {
+      // The 1.5.7 position-stack trick (dest borrows src's coords)
+      // backfires when wl-mirror is actually running: sway paints
+      // wl-mirror's fullscreen surface onto every output whose geometry
+      // overlaps the dest's rect — including the source — and wl-mirror
+      // then captures the source's now-self-containing image. Classic
+      // infinity mirror. Dest MUST occupy a different rectangle than
+      // src so the surface stays exclusively on the dest output.
       final p = Profile(
         name: 'Mirror',
         monitors: [
@@ -179,14 +180,21 @@ void main() {
         [p],
         options: KanshiWriteOptions.neutral,
       );
-      // Both A and B share position 0,0 — B's own x=1920 is overridden.
       expect(out, contains("output 'A' enable"));
       expect(out, contains("output 'B' enable"));
-      expect(out, contains("position 0,0"));
-      expect(out, isNot(contains("position 1920,0")),
-          reason: "Mirror destination must not retain its own x; it "
-              "borrows the source's position so Sway has no input "
-              "dead-zone.");
+      expect(out, contains("position 1920,0"),
+          reason: "Mirror destination MUST stay at its own x — sharing "
+              "the source's rect makes wl-mirror's surface bleed across "
+              "outputs and recurse.");
+      // A is at 0,0; B at 1920,0. Both distinct rects.
+      final positionLines = out
+          .split('\n')
+          .where((l) => l.contains('position '))
+          .toList();
+      expect(positionLines, hasLength(2),
+          reason: 'one position line per enabled output');
+      expect(positionLines[0], contains('position 0,0'));
+      expect(positionLines[1], contains('position 1920,0'));
     });
 
     test('explicit workspaceRank overrides X-derived rank', () {
@@ -440,13 +448,20 @@ void main() {
       // (a bare exec would stack duplicate wl-mirror processes).
       expect(rendered, contains("# kanshi_gui:mirror 'B'='A'"),
           reason: 'Mirror state is persisted as an annotation.');
-      expect(rendered, contains('pgrep -f "wl-mirror --fullscreen-output B"'),
-          reason: 'Boot-time exec must guard against duplicate spawns.');
+      expect(rendered, contains('pgrep -x wl-mirror -a'),
+          reason: 'Guard filters by process name so the shell running '
+              'the guard cannot self-match its own argv (the bug that '
+              'made the boot-time spawn a no-op in 1.5.10).');
+      expect(rendered, contains('grep -qF -- "--fullscreen-output B "'),
+          reason: 'Literal substring + trailing space pins the destination, '
+              'avoiding both regex metachars and prefix collisions.');
       expect(
           rendered,
           contains(
               'wl-mirror --fullscreen-output "B" "A"'),
           reason: 'Guarded fallback spawns the mirror when none is running.');
+      expect(rendered, isNot(contains('pgrep -f "wl-mirror')),
+          reason: 'The old self-matching `pgrep -f` form must not regress.');
 
       final reparsed =
           KanshiConfigParser.parse(rendered).single.monitors;
