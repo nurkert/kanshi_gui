@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.12 — 2026-05-15
+
+### Fixed
+
+- **Mirror destinations no longer leave an unreachable orphan
+  workspace in the bar.** Sway enforces "one workspace per active
+  output", so a mirror destination — which the rank-based ws 1..9
+  distribution deliberately skips — gets an auto-numbered workspace
+  on activation (typically 10 on a default 1..9 keybind setup). The
+  user sees that 10 in the bar but can't `$mod+0` it. Writer now
+  emits a `workspace 'mirror (<dst>)' output '<dst>'; workspace
+  'mirror (<dst>)'` claim at the tail of the Sway exec chain so the
+  output is filled by a named workspace instead. The auto-numbered
+  orphan is empty + not focused once the named workspace becomes
+  visible → Sway garbage-collects it on the next focus event.
+- Boot-time guarded `exec wl-mirror` line now also passes
+  `--scaling fit` (parity with the GUI's MirrorRunner — a 1.5.11
+  oversight where the flag was added on the Dart side only).
+
 ## 1.5.11 — 2026-05-15
 
 ### Fixed
