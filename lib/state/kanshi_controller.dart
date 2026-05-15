@@ -1307,7 +1307,9 @@ class KanshiController extends ChangeNotifier {
     // Drive the live process state. _reconcileMirrors handles both
     // the "spawn new" and "kill old" cases by diffing against the
     // current desired set, plus a sweep of orphaned externals.
-    await _reconcileMirrors();
+    // setMirror already evacuated above; tell reconcile to skip its
+    // own evacuation pass so we don't redundantly IPC.
+    await _reconcileMirrors(evacuateNewMirrors: false);
 
     notifyListeners();
     if (srcId == null) {
@@ -1323,8 +1325,9 @@ class KanshiController extends ChangeNotifier {
   /// the chain a hotplug-driven reconcile racing a profile-switch reconcile
   /// could read each other's half-installed `_entries[dst]` and kill a
   /// process the other had just spawned.
-  Future<void> _reconcileMirrors() {
-    final next = _reconcileChain.then((_) => _doReconcileMirrors());
+  Future<void> _reconcileMirrors({bool evacuateNewMirrors = true}) {
+    final next = _reconcileChain
+        .then((_) => _doReconcileMirrors(evacuate: evacuateNewMirrors));
     // The chain must NOT be poisoned by one reconcile's exception — a
     // `pgrep` IO error or a `kill` on a vanished pid would otherwise
     // block every later reconcile via the unhandled error. The inner
@@ -1335,7 +1338,7 @@ class KanshiController extends ChangeNotifier {
     return next;
   }
 
-  Future<void> _doReconcileMirrors() async {
+  Future<void> _doReconcileMirrors({bool evacuate = true}) async {
     try {
       if (!supportsMirror) {
         // Backend cannot mirror — make sure no leftovers are running.
@@ -1368,9 +1371,46 @@ class KanshiController extends ChangeNotifier {
           await mirrorRunner.stop(dst);
         }
       }
-      // Start / rebind desired mirrors.
+      // Start / rebind desired mirrors. Evacuate the destination output
+      // FIRST when we're about to bring a brand-new mirror up — without
+      // this, any workspace that lived on the destination before reconcile
+      // (typical at GUI launch when kanshi has already activated the
+      // profile, or after a stale session reaped wl-mirror but left the
+      // dest enabled) ends up buried under wl-mirror's fullscreen layer
+      // and the user can't reach those windows. Mirror `setMirror`'s
+      // pipeline: evacuate, settle, then spawn.
+      final connectedSet = connectedIds;
       for (final entry in desired.entries) {
-        await mirrorRunner.start(entry.value, entry.key);
+        final dst = entry.key;
+        final isNewMirror = !mirrorRunner.activeDestinations.contains(dst);
+        if (isNewMirror && evacuate) {
+          final liveDst = _resolveOutputName(dst);
+          // Targets: any other connected non-mirror output the workspaces
+          // can land on. Filter through the live id set so we don't ask
+          // the backend to move things to a port name sway has never
+          // heard of.
+          final targets = (_activeProfileIndex == null
+                  ? <MonitorTileData>[]
+                  : _profiles[_activeProfileIndex!].monitors)
+              .where((m) =>
+                  m.enabled && m.mirrorOf == null && m.id != dst)
+              .map((m) => _resolveOutputName(m.id))
+              .where(connectedSet.contains)
+              .toList(growable: false);
+          if (targets.isNotEmpty) {
+            try {
+              await monitors.evacuateOutputWorkspaces(liveDst, targets);
+              await monitors.waitForOutputClear(liveDst);
+            } catch (e) {
+              // Don't block the mirror startup — the worst case is a
+              // window stuck under wl-mirror, which the user can recover
+              // from manually. Far worse would be failing to spawn the
+              // mirror at all because the evacuate path threw.
+              debugPrint('reconcile: evacuate of $liveDst failed: $e');
+            }
+          }
+        }
+        await mirrorRunner.start(entry.value, dst);
       }
       // Final sweep: kill any wl-mirror process the OS is running that
       // doesn't belong to the desired set. Catches orphans left behind

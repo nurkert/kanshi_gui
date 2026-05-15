@@ -352,6 +352,87 @@ void main() {
           reason: 'settle wait must follow the evacuation chain');
     });
 
+    test(
+        'init evacuates the destination before spawning a mirror from a stored '
+        'profile', () async {
+      // Boot-time scenario: kanshi has already applied a mirror profile
+      // (eDP-1 mirrors DP-1) without spawning wl-mirror — the destination
+      // output sits at the source's coords with whatever workspaces sway
+      // routed there. When the GUI starts and reconcile spawns wl-mirror,
+      // those leftover workspaces would be buried under wl-mirror's
+      // fullscreen layer. The fix: reconcile must evacuate them, same as
+      // `setMirror` does.
+      // Need swayDefaults so the writer persists the mirror annotation
+      // across save/load — neutral options drop it.
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      final destMon = _mon(id: 'A', x: 0, y: 0, mirrorOf: 'B');
+      final srcMon = _mon(id: 'B', x: 0, y: 0);
+      final otherMon = _mon(id: 'C', x: 1920, y: 0);
+      await cfg.saveProfiles([
+        Profile(name: 'Mirror', monitors: [destMon, srcMon, otherMon]),
+      ]);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [destMon, srcMon, otherMon],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+
+      expect(fake.evacuateCalls, hasLength(1),
+          reason: 'init must evacuate the soon-to-be-mirrored output');
+      expect(fake.evacuateCalls.single.dstId, equals('A'));
+      expect(fake.evacuateCalls.single.targets, containsAll(['B', 'C']));
+      expect(fake.evacuateCalls.single.targets, isNot(contains('A')),
+          reason: 'cannot use the mirror destination as an evacuation target');
+      final order = fake.calls;
+      final evacIdx = order.indexOf('evacuateOutputWorkspaces');
+      final waitIdx = order.indexOf('waitForOutputClear');
+      expect(evacIdx, greaterThanOrEqualTo(0));
+      expect(waitIdx, greaterThan(evacIdx));
+      expect(mr.activeDestinations, equals({'A'}),
+          reason: 'wl-mirror spawn still happens after evacuation');
+    });
+
+    test(
+        'subsequent reconciles do not re-evacuate a still-running mirror',
+        () async {
+      // Evacuation is destructive for the user (workspaces move) — it must
+      // only fire when a NEW mirror is being established, not on every
+      // idempotent reconcile pass triggered by hotplug noise.
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      final destMon = _mon(id: 'A', x: 0, y: 0, mirrorOf: 'B');
+      final srcMon = _mon(id: 'B', x: 0, y: 0);
+      await cfg.saveProfiles([
+        Profile(name: 'Mirror', monitors: [destMon, srcMon]),
+      ]);
+      final fake = FakeMonitorService(
+        supportsMirror: true,
+        outputs: [destMon, srcMon],
+      );
+      final mr = FakeMirrorRunner();
+      final c =
+          KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      expect(fake.evacuateCalls, hasLength(1));
+      fake.evacuateCalls.clear();
+
+      // Simulate a benign hotplug that doesn't change the connected set.
+      fake.emitOutputs([destMon, srcMon]);
+      await pumpEventQueue();
+      expect(fake.evacuateCalls, isEmpty,
+          reason: 'reconcile is idempotent when the mirror is already running');
+    });
+
     test('setMirror(null) does not evacuate (only when establishing a mirror)',
         () async {
       final cfg = _tmpConfig(tmp);
