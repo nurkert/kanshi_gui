@@ -142,6 +142,42 @@ class _KanshiAppState extends State<KanshiApp> {
         color: scheme.outlineVariant.withValues(alpha: 0.4),
         space: 1,
       ),
+      // Unify every menu/dropdown surface: rounded, raised, on a clearly
+      // distinct container colour so they read as floating panels rather
+      // than flat default boxes. Covers MenuAnchor (tile three-dot menu,
+      // presets), PopupMenuButton, and DropdownMenu/DropdownButtonFormField.
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          backgroundColor:
+              WidgetStatePropertyAll(scheme.surfaceContainerHigh),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          elevation: const WidgetStatePropertyAll(8),
+          padding: const WidgetStatePropertyAll(
+              EdgeInsets.symmetric(vertical: 6)),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: scheme.surfaceContainerHigh,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+      dropdownMenuTheme: DropdownMenuThemeData(
+        menuStyle: MenuStyle(
+          backgroundColor:
+              WidgetStatePropertyAll(scheme.surfaceContainerHigh),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          elevation: const WidgetStatePropertyAll(8),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
     );
   }
 
