@@ -1,5 +1,77 @@
 # Changelog
 
+## 1.6.0 — 2026-05-22
+
+### Fixed
+
+- **Opening the app no longer touches your config — or your screens.**
+  Previously every launch silently re-rendered and rewrote your kanshi
+  config (even with zero edits); combined with kanshi auto-reload that could
+  re-apply a layout where outputs ended up *overlapping* — in the worst case
+  a screen landed on top of the GUI. Now a fresh launch captures your setup
+  in memory only and writes nothing until you make a deliberate edit.
+- **The tool can never emit an overlapping layout.** A new overlap guard
+  (`LayoutMath.resolveOverlaps`, idempotent) runs before every config write:
+  if any enabled outputs would overlap, they're repacked flush, left-to-
+  right. Sway happily stacks outputs that share coordinates, so this is the
+  load-bearing fix against the "screen on top of the GUI" disaster. Explicit
+  reload/apply additionally validates the layout up front and auto-arranges
+  before applying.
+- **Apply has an optional auto-revert safety net.** When enabled (Settings →
+  Behavior, *off by default* so routine applies don't nag), applying a layout
+  snapshots the previously-applied config and arms a countdown; if you can't
+  see the new layout to click "Keep", it rolls back to the last working
+  config automatically. Apply always refuses to leave you with no enabled
+  output (lockout guard).
+
+### Changed
+
+- **Reworked UI into a "dark editor" look.** The draggable monitor canvas
+  you know stays — everything around it grew up: a frosted top bar showing
+  the active profile, a persistent left profile rail (with active-glow,
+  hover actions and live match dots) replacing the slide-in sidebar, a
+  dot-grid canvas backdrop, and redesigned monitor tiles (rounded, soft
+  status glow, status dot + glyph, fact chips, a proper resize grip). The
+  whole app now derives its colours from a Material 3 scheme seeded from
+  your accent, so buttons, sliders and switches finally feel of-a-piece.
+- **Workspace management is now opt-in.** Previously, launching kanshi_gui
+  on Sway immediately redistributed workspaces 1–9 across your monitors —
+  great if you wanted it, jarring for a new user who didn't. It now
+  defaults to **off**: a fresh install never touches your workspaces until
+  you turn it on, either in a new first-run wizard step or via the settings
+  menu. Existing installs are migrated to keep their previous always-on
+  (interleaved) behaviour, so nothing changes for current users.
+
+### Added
+
+- **Two workspace distribution modes.** When management is enabled you can
+  choose *interleaved* (the historical layout — 1/3/5… on the left screen,
+  2/4/6… on the right) or *grouped* (contiguous bands — e.g. 1–5 left, 6–9
+  right). Selectable in the wizard and the settings page; switching applies
+  immediately.
+- **Dedicated settings page** replacing the cramped gear dropdown, with
+  grouped sections and a pile of new options:
+  - *Behavior* — toggle hotplug notifications and profile-match suggestions;
+    tune the safety-net countdown (0 disables it) and the custom-mode
+    auto-revert delay.
+  - *Layout & editing* — adjustable snap distance; toggle scale snapping.
+  - *Appearance* — Light / Dark / System theme, an accent-colour override
+    (or auto-from-Sway), and identify-banner duration.
+  - *Mirror (Sway)* — wl-mirror scaling mode (fit / cover / exact).
+  - *Advanced* — backup-retention count, a kanshi-config path override, and
+    a "reset all settings to defaults".
+- **Properties inspector.** Click a monitor to open a side panel with proper
+  controls for resolution/refresh, scale, rotation, mirror and enable —
+  replacing the cramped right-click submenus. The selected tile gets a
+  brighter ring + glow.
+- **Quick-layout presets.** A floating bar with one-click *Extend* (all
+  outputs side-by-side), *Mirror* (everything onto the leftmost), and
+  *Single* (use one output, disable the rest). Presets preview into the
+  layout; you still hit Apply to push them live.
+- **Explicit Apply button + "unapplied changes" indicator** in the header,
+  and a **startup health banner** that warns when kanshi isn't installed/
+  running or wl-mirror is missing.
+
 ## 1.5.13 — 2026-05-15
 
 ### Fixed
