@@ -14,12 +14,14 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 - **Smart snapping** — Figma-style cyan guide lines, corner alignment (top / bottom / center) when an edge snaps, and a learning alignment magnet that backs off after you escape it twice in one drag.
 - **Hotplug aware** — connect or disconnect a monitor and the app refreshes itself instantly.
 - **Identify displays** — a light-bulb button flashes pulsing numbers on each tile so you know which one is which.
+- **Workspace management (opt-in)** — optionally spread Sway workspaces 1–9 across your monitors on every profile apply. **Off by default** so a first launch never reshuffles your existing workspaces; enable it in the first-run wizard or the settings menu, and pick *interleaved* (1/3/5… left, 2/4/6… right) or *grouped* (1–5 left, 6–9 right).
 - **First-run wizard** — picks up your detected layout and proposes a sensible profile name.
+- **Settings page** — a dedicated, grouped settings screen (behind the gear icon): theme (light/dark/system) and accent override, snap distance, scale-snapping, safety-net and revert timings, hotplug/suggestion notifications, wl-mirror scaling mode, backup retention, config-path override, and reset-to-defaults.
 - **Profile management** — create, rename, delete; switch with one click.
 - **kanshictl-aware reload** — uses `kanshictl reload` when available so re-applying a profile no longer flickers the screen.
 - **Compositor-agnostic** — auto-selects between `swaymsg` (Sway, full feature set) and `wlr-randr` (Hyprland / Wayfire / niri / other wlroots-style compositors) at startup; falls back to an offline editor when neither is installed.
 
-> **Heads-up:** the rich features (mirror onto another output, identify-banners on each screen, automatic workspace placement across monitors, sway-accent theming) are **Sway-specific** because they rely on `swaymsg` IPC, `swaynag`, and `wl-mirror`. On non-Sway compositors (Hyprland, niri, river, …) the GUI gracefully degrades to position / mode / scale / rotate / enable-disable, which is what most users actually need.
+> **Heads-up:** the rich features (mirror onto another output, identify-banners on each screen, opt-in workspace placement across monitors, sway-accent theming) are **Sway-specific** because they rely on `swaymsg` IPC, `swaynag`, and `wl-mirror`. On non-Sway compositors (Hyprland, niri, river, …) the GUI gracefully degrades to position / mode / scale / rotate / enable-disable, which is what most users actually need.
 
 ## Getting Started
 
