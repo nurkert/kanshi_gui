@@ -1,12 +1,27 @@
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
+import 'package:kanshi_gui/services/layout_math.dart';
 
 /// Knobs that influence what the [KanshiConfigWriter] emits in addition to
 /// the bare per-output lines. These reflect the historically Sway-specific
 /// behaviours of the app — they default to *off* so the writer is
 /// compositor-neutral by default and only enables the Sway extras when the
 /// caller (typically the SwayBackend) explicitly asks for them.
+/// How the numeric workspaces 1..N are spread across the ranked outputs
+/// when [KanshiWriteOptions.injectSwayWorkspaceExec] is on. See
+/// [workspaceSlotRank] for the exact assignment each mode produces.
+enum WorkspaceDistribution {
+  /// Round-robin by left-to-right position: ws `w` → rank `(w-1) mod N`.
+  /// Two screens give the left one 1/3/5/7/9 and the right one 2/4/6/8.
+  interleaved,
+
+  /// Contiguous blocks: the workspace range is split into N near-equal
+  /// runs, so each monitor owns a consecutive band. Two screens give the
+  /// left one 1..5 and the right one 6..9.
+  grouped,
+}
+
 class KanshiWriteOptions {
   final bool injectSwayWorkspaceExec;
   final bool writeCurrentProfileMarker;
@@ -16,12 +31,40 @@ class KanshiWriteOptions {
   /// is gated on the Sway backend, so the writer follows suit. Off in
   /// neutral mode so wlr-randr-style profiles stay portable.
   final bool injectMirrorExec;
+  /// Which [WorkspaceDistribution] the injected workspace chain uses.
+  /// Ignored when [injectSwayWorkspaceExec] is false.
+  final WorkspaceDistribution workspaceDistribution;
+  /// `--scaling` mode for the boot-fallback `exec wl-mirror …` lines.
+  /// Ignored when [injectMirrorExec] is false. Mirrors the live
+  /// MirrorRunner setting so the config and the GUI agree.
+  final String mirrorScaling;
 
   const KanshiWriteOptions({
     this.injectSwayWorkspaceExec = false,
     this.writeCurrentProfileMarker = false,
     this.injectMirrorExec = false,
+    this.workspaceDistribution = WorkspaceDistribution.interleaved,
+    this.mirrorScaling = 'fit',
   });
+
+  KanshiWriteOptions copyWith({
+    bool? injectSwayWorkspaceExec,
+    bool? writeCurrentProfileMarker,
+    bool? injectMirrorExec,
+    WorkspaceDistribution? workspaceDistribution,
+    String? mirrorScaling,
+  }) {
+    return KanshiWriteOptions(
+      injectSwayWorkspaceExec:
+          injectSwayWorkspaceExec ?? this.injectSwayWorkspaceExec,
+      writeCurrentProfileMarker:
+          writeCurrentProfileMarker ?? this.writeCurrentProfileMarker,
+      injectMirrorExec: injectMirrorExec ?? this.injectMirrorExec,
+      workspaceDistribution:
+          workspaceDistribution ?? this.workspaceDistribution,
+      mirrorScaling: mirrorScaling ?? this.mirrorScaling,
+    );
+  }
 
   static const swayDefaults = KanshiWriteOptions(
     injectSwayWorkspaceExec: true,
@@ -64,7 +107,7 @@ class KanshiConfigWriter {
     final offsetX = (minX < 0) ? -minX : 0.0;
     final offsetY = (minY < 0) ? -minY : 0.0;
 
-    final mons = profile.monitors
+    final sanitized = profile.monitors
         .map((m) => _sanitizeMonitor(m, offsetX, offsetY))
         .toList()
       ..sort((a, b) {
@@ -72,6 +115,11 @@ class KanshiConfigWriter {
         if (byX != 0) return byX;
         return a.id.compareTo(b.id);
       });
+    // Hard guarantee: never emit an overlapping layout. Sway stacks outputs
+    // that share logical coordinates, which is the "a screen landed on top
+    // of the GUI" disaster. `resolveOverlaps` is idempotent, so a clean
+    // layout passes through untouched.
+    final mons = LayoutMath.resolveOverlaps(sanitized);
 
     buffer.writeln("profile '${profile.name}' {");
 
@@ -183,7 +231,7 @@ class KanshiConfigWriter {
         buffer.writeln(
           "    exec sh -c 'pgrep -x wl-mirror -a | "
           "grep -qF -- \"--fullscreen-output ${m.id} \" || "
-          "wl-mirror --scaling fit --fullscreen-output "
+          "wl-mirror --scaling ${options.mirrorScaling} --fullscreen-output "
           "\"${m.id}\" \"${m.mirrorOf}\" &'",
         );
       }
@@ -200,7 +248,10 @@ class KanshiConfigWriter {
           );
         }
       }
-      final chain = buildSwayWorkspaceChain(ranked);
+      final chain = buildSwayWorkspaceChain(
+        ranked,
+        distribution: options.workspaceDistribution,
+      );
       if (chain != null) {
         // Earlier (1.5.12) we tried to claim a named workspace per
         // mirror destination so sway wouldn't auto-create an
@@ -361,18 +412,21 @@ class KanshiConfigWriter {
 String? buildSwayWorkspaceChain(
   List<WorkspaceRankEntry> ranked, {
   int maxWorkspaces = 9,
+  WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
 }) {
   final n = ranked.length;
   if (n == 0) return null;
   final parts = <String>[];
   for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = (ws - 1) % n;
+    final rank = workspaceSlotRank(ws, n, distribution,
+        maxWorkspaces: maxWorkspaces);
     // Phase 1: persistent output binding. NO `number` keyword — see
     // the docstring above for why.
     parts.add("workspace $ws output '${ranked[rank].id}'");
   }
   for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = (ws - 1) % n;
+    final rank = workspaceSlotRank(ws, n, distribution,
+        maxWorkspaces: maxWorkspaces);
     // Phase 2: focus the numeric slot (renamed-workspace safe) and
     // force-move any pre-existing workspace to its new home output.
     parts.add("workspace number $ws");
@@ -380,6 +434,32 @@ String? buildSwayWorkspaceChain(
   }
   parts.add('workspace number 1');
   return parts.join('; ');
+}
+
+/// Maps a 1-indexed workspace number [ws] to the 0..N-1 output rank that
+/// owns it, for [n] ranked outputs under the chosen [distribution]. Shared
+/// by [buildSwayWorkspaceChain] (which builds the swaymsg command) and the
+/// controller's verify-and-fix path (which computes the *expected* live
+/// mapping to diff against), so the two never drift apart.
+///
+///  * [WorkspaceDistribution.interleaved] → `(ws-1) mod n` (round-robin).
+///  * [WorkspaceDistribution.grouped] → `((ws-1) * n) ~/ maxWorkspaces`,
+///    which carves 1..[maxWorkspaces] into N near-equal contiguous bands
+///    (e.g. N=2 → 1..5 / 6..9; N=3 → 1..3 / 4..6 / 7..9). Every monitor
+///    gets at least one slot as long as `n <= maxWorkspaces`.
+int workspaceSlotRank(
+  int ws,
+  int n,
+  WorkspaceDistribution distribution, {
+  int maxWorkspaces = 9,
+}) {
+  switch (distribution) {
+    case WorkspaceDistribution.interleaved:
+      return (ws - 1) % n;
+    case WorkspaceDistribution.grouped:
+      final rank = ((ws - 1) * n) ~/ maxWorkspaces;
+      return rank >= n ? n - 1 : rank;
+  }
 }
 
 class WorkspaceRankEntry {

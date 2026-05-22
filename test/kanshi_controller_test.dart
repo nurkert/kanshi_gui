@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -711,25 +712,44 @@ void main() {
     );
     final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
     final c = KanshiController(monitors: fake, config: cfg);
-    var blockedFires = 0;
-    c.onConfigSaveBlocked = () => blockedFires++;
     await c.init();
     expect(c.configHasIncludes, isTrue,
         reason: 'init must detect include directives upfront so the '
             'first mutation does not have to discover the issue '
-            'mid-flight.');
-    // `init` calls `ensureCurrentSetupMatches` which schedules a
-    // save — that schedule is what should fire the blocked callback.
-    expect(blockedFires, greaterThanOrEqualTo(1),
-        reason: 'At least the init-time save attempt must fire the '
-            'block callback so the UI surfaces the banner without '
-            'waiting for the user\'s first edit.');
-    // The original include-using file content survives untouched.
+            'mid-flight. (The HomePage surfaces the banner from this '
+            'flag on first frame.)');
+    // Safe-start: opening the app must not write the config at all — not
+    // even an attempt — so a hand-written include-using config survives
+    // byte-for-byte untouched until the user makes a deliberate edit.
     expect(
       await File(cfgPath).readAsString(),
       equals('include /etc/kanshi.d/work\nprofile foo {\n}\n'),
-      reason: 'A blocked save must not write to disk.',
+      reason: 'Opening the app must not write to disk.',
     );
+  });
+
+  test('opening the app does not write the kanshi config (safe-start)',
+      () async {
+    // The disaster we are guarding against: a first launch silently
+    // rewriting (and, with kanshi auto-reload, re-applying) the user's
+    // working config — which is how a friend's screens ended up overlapping
+    // the moment he opened the tool. init() must capture the live setup in
+    // memory only, never touch disk until the user makes a real edit.
+    final cfgPath = '${tmp.path}/config';
+    final cfg = ConfigService(
+      configPath: cfgPath,
+      backupPrefix: '${tmp.path}/config.bak',
+      writeOptions: KanshiWriteOptions.neutral,
+    );
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A'), _mon(id: 'B')]);
+    final c = KanshiController(monitors: fake, config: cfg);
+    await c.init();
+    // Let any (erroneously) scheduled debounced save fire before asserting.
+    await Future.delayed(const Duration(milliseconds: 700));
+    expect(File(cfgPath).existsSync(), isFalse,
+        reason: 'A fresh launch must not write or overwrite the config.');
+    expect(fake.calls.where((s) => s == 'restart'), isEmpty,
+        reason: 'A fresh launch must not reload/apply the compositor.');
   });
 
   test('hotplug events delivered after dispose are dropped without crash',
@@ -767,6 +787,72 @@ void main() {
             'hotplug body.');
   });
 
+  group('settings application', () {
+    test('applyStartupSettings pushes preferences into the live objects',
+        () {
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A')],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      final mr = FakeMirrorRunner();
+      final cfg = _tmpConfig(tmp);
+      final c = KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      final s = AppSettings(filePath: '${tmp.path}/s.json')
+        ..snapDistance = 99
+        ..scaleSnapping = false
+        ..safetyNetSeconds = 5
+        ..customModeRevertSeconds = 7
+        ..identifyBannerSeconds = 4
+        ..maxBackups = 3
+        ..mirrorScaling = MirrorScaling.cover
+        ..workspaceManagement = WorkspaceManagementMode.grouped;
+      c.applyStartupSettings(s);
+      expect(c.snapThreshold, 99);
+      expect(c.scaleSnapping, isFalse);
+      expect(c.safetyNet.window, const Duration(seconds: 5));
+      expect(c.identifyBannerDuration, const Duration(seconds: 4));
+      expect(cfg.maxBackups, 3);
+      expect(mr.scaling, 'cover');
+      // Folds into the effective write options (boot-fallback exec line).
+      expect(cfg.writeOptions.mirrorScaling, 'cover');
+      expect(cfg.writeOptions.workspaceDistribution,
+          WorkspaceDistribution.grouped);
+      expect(cfg.writeOptions.injectSwayWorkspaceExec, isTrue);
+    });
+
+    test('setMirrorScaling rewrites config and restarts mirrors', () async {
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      final cfg = ConfigService(
+        configPath: '${tmp.path}/config',
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      await cfg.saveProfiles([
+        // B mirrors A so the writer emits a `exec wl-mirror --scaling …` line.
+        Profile(name: 'M', monitors: [
+          _mon(id: 'A'),
+          _mon(id: 'B', x: 1920, mirrorOf: 'A'),
+        ]),
+      ]);
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        supportsMirror: true,
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      );
+      final mr = FakeMirrorRunner();
+      final c = KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      await c.init();
+      await c.setMirrorScaling('exact');
+      expect(mr.scaling, 'exact');
+      expect(cfg.writeOptions.mirrorScaling, 'exact');
+      // The rewritten kanshi config carries the new scaling in its
+      // boot-fallback exec line.
+      final written = await File('${tmp.path}/config').readAsString();
+      expect(written, contains('--scaling exact'));
+    });
+  });
+
   group('verify-and-fix workspace placement on init', () {
     test('reapplies the chain when live workspace_outputs disagree with ranks',
         () async {
@@ -784,7 +870,11 @@ void main() {
         outputs: [liveA, liveB],
         writeOptions: KanshiWriteOptions.swayDefaults,
       )..workspaceOutputs = {1: 'B', 2: 'A'};
-      final c = KanshiController(monitors: fake, config: cfg);
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, hasLength(1),
           reason: 'A mismatched workspace mapping must trigger a reapply.');
@@ -806,7 +896,11 @@ void main() {
         outputs: [liveA, liveB],
         writeOptions: KanshiWriteOptions.swayDefaults,
       )..workspaceOutputs = {1: 'A', 2: 'B'};
-      final c = KanshiController(monitors: fake, config: cfg);
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, isEmpty,
           reason: 'A correct mapping must NOT trigger a redundant reapply.');
@@ -828,7 +922,11 @@ void main() {
         outputs: [liveA, liveB],
         writeOptions: KanshiWriteOptions.swayDefaults,
       )..workspaceOutputs = {1: 'A'};
-      final c = KanshiController(monitors: fake, config: cfg);
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, isEmpty,
           reason:
@@ -855,7 +953,14 @@ void main() {
         // Default for non-Sway backends.
         writeOptions: KanshiWriteOptions.neutral,
       )..workspaceOutputs = {1: 'B', 2: 'A'};
-      final c = KanshiController(monitors: fake, config: cfg);
+      // Opt in deliberately: this proves the *backend* gate holds even when
+      // the user has workspace management turned on — a neutral backend
+      // still never touches workspaces.
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, isEmpty,
           reason: 'Non-Sway backend must not invoke the chain.');
@@ -888,7 +993,11 @@ void main() {
         outputs: [liveA, liveB],
         writeOptions: KanshiWriteOptions.swayDefaults,
       )..workspaceOutputs = {1: 'B'};
-      final c = KanshiController(monitors: fake, config: cfg);
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, hasLength(1));
       final chain = fake.workspaceChainCalls.single;
@@ -921,11 +1030,193 @@ void main() {
           2: 'B',
           10: 'B',
         };
-      final c = KanshiController(monitors: fake, config: cfg);
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.interleaved,
+      );
       await c.init();
       expect(fake.workspaceChainCalls, hasLength(1),
           reason: 'Orphan ws > 9 must trigger reapply even when the 1..9 '
               'mapping is otherwise clean.');
+    });
+
+    test('default (no opt-in) leaves workspaces untouched on Sway', () async {
+      // The opt-in guarantee that protects new users: even on a Sway
+      // backend with a clear live mismatch, a controller constructed with
+      // no workspace distribution (the default) must NOT run the chain or
+      // even read live workspace state.
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+      )..workspaceOutputs = {1: 'B', 2: 'A'};
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(fake.workspaceChainCalls, isEmpty,
+          reason: 'Workspace management is opt-in; the default must not '
+              'reshuffle a new user\'s workspaces.');
+      expect(fake.calls.where((c) => c == 'getWorkspaceOutputs'), isEmpty,
+          reason: 'Opted-out controller must not even read workspace state.');
+    });
+
+    test('grouped mode lands contiguous bands per output', () async {
+      final cfg = _tmpConfig(tmp);
+      final liveA = _mon(id: 'A');
+      final liveB = _mon(id: 'B', x: 1920);
+      await cfg.saveProfiles([
+        Profile(name: 'Desk', monitors: [liveA, liveB]),
+      ]);
+      final fake = FakeMonitorService(
+        outputs: [liveA, liveB],
+        writeOptions: KanshiWriteOptions.swayDefaults,
+        // Force a mismatch so the chain reapplies and we can inspect it.
+      )..workspaceOutputs = {1: 'B'};
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        workspaceDistribution: WorkspaceDistribution.grouped,
+      );
+      await c.init();
+      expect(fake.workspaceChainCalls, hasLength(1));
+      final chain = fake.workspaceChainCalls.single;
+      // Grouped over 2 outputs: ws 1..5 → A, ws 6..9 → B.
+      for (var ws = 1; ws <= 5; ws++) {
+        expect(chain, contains("workspace $ws output 'A'"));
+      }
+      for (var ws = 6; ws <= 9; ws++) {
+        expect(chain, contains("workspace $ws output 'B'"));
+      }
+    });
+  });
+
+  group('quick-layout presets', () {
+    test('extendOutputs lays enabled outputs flush in a row, clears mirror',
+        () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 500, mirrorOf: 'A')],
+        supportsMirror: true,
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      final r = c.extendOutputs();
+      expect(r.success, isTrue);
+      final a = c.activeMonitors.firstWhere((m) => m.id == 'A');
+      final b = c.activeMonitors.firstWhere((m) => m.id == 'B');
+      expect(a.x, 0);
+      expect(b.x, 1920, reason: 'B sits flush to the right of A');
+      expect([a.y, b.y], everyElement(0));
+      expect(a.mirrorOf, isNull);
+      expect(b.mirrorOf, isNull);
+    });
+
+    test('mirrorAll points every other output at the leftmost', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+        supportsMirror: true,
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      final r = c.mirrorAll();
+      expect(r.success, isTrue);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf, isNull);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'B').mirrorOf, 'A');
+    });
+
+    test('mirrorAll is rejected without mirror support', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A'), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(c.mirrorAll().success, isFalse);
+    });
+
+    test('useOnlyOutput enables the target and disables the rest', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      final r = c.useOnlyOutput('A');
+      expect(r.success, isTrue);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isTrue);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'B').enabled, isFalse);
+    });
+  });
+
+  group('apply safety net & dirty state', () {
+    test('a preset marks the layout dirty; applying clears it', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(c.hasUnappliedEdits, isFalse);
+      c.extendOutputs();
+      expect(c.hasUnappliedEdits, isTrue);
+      await c.reloadAndApply();
+      expect(c.hasUnappliedEdits, isFalse);
+    });
+
+    test('reloadAndApply arms the auto-revert safety net', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      c.autoRevertOnApply = true; // opt in — off by default
+      await c.reloadAndApply();
+      expect(c.safetyNet.activePrompt?.key, equals('layout-apply'));
+    });
+
+    test('reloadAndApply does NOT arm the safety net by default', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      await c.reloadAndApply();
+      expect(c.safetyNet.activePrompt, isNull,
+          reason: 'Routine applies must not pop a countdown banner.');
+    });
+
+    test('auto-revert restores the previously-applied config', () async {
+      final cfgPath = '${tmp.path}/config';
+      final cfg = ConfigService(
+        configPath: cfgPath,
+        backupPrefix: '${tmp.path}/config.bak',
+        writeOptions: KanshiWriteOptions.neutral,
+      );
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      c.autoRevertOnApply = true; // opt in — off by default
+      // Establish a baseline on disk and keep it.
+      await c.reloadAndApply();
+      c.safetyNet.confirm('layout-apply');
+      final baseline = await File(cfgPath).readAsString();
+      // Make a change and apply it.
+      c.useOnlyOutput('A');
+      await c.reloadAndApply();
+      expect(await File(cfgPath).readAsString(), isNot(equals(baseline)));
+      // The safety net must roll back to the baseline, not the new layout.
+      await c.safetyNet.revertNow('layout-apply');
+      expect(await File(cfgPath).readAsString(), equals(baseline));
     });
   });
 }

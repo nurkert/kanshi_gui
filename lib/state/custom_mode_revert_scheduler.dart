@@ -4,7 +4,9 @@ import 'dart:async';
 /// Each timer fires after [defaultDelay] unless the caller cancels it
 /// (typically via the snackbar's "Keep" action) or schedules a new one.
 class CustomModeRevertScheduler {
-  final Duration defaultDelay;
+  /// Mutable so the settings UI can retune it live; applies to timers
+  /// scheduled after the change.
+  Duration defaultDelay;
   final Map<String, Timer> _timers = {};
 
   CustomModeRevertScheduler(

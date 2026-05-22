@@ -3,6 +3,7 @@ import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
+import 'package:kanshi_gui/services/layout_math.dart';
 
 MonitorTileData _mon({
   String id = 'M',
@@ -396,6 +397,75 @@ void main() {
       expect(chain.split('; ').length, equals(3 + 2 * 3 + 1));
       expect(chain, isNot(contains('workspace number 4')));
     });
+
+    test('grouped distribution carves contiguous bands (2 outputs)', () {
+      final ranked = resolveWorkspaceRanks([
+        _mon(id: 'L', x: 0),
+        _mon(id: 'R', x: 1920),
+      ]);
+      final chain = buildSwayWorkspaceChain(
+        ranked,
+        distribution: WorkspaceDistribution.grouped,
+      )!;
+      // ws 1..5 → L, ws 6..9 → R.
+      for (var ws = 1; ws <= 5; ws++) {
+        expect(chain, contains("workspace $ws output 'L'"));
+      }
+      for (var ws = 6; ws <= 9; ws++) {
+        expect(chain, contains("workspace $ws output 'R'"));
+      }
+    });
+
+    test('grouped distribution gives every output a band (3 outputs)', () {
+      final ranked = resolveWorkspaceRanks([
+        _mon(id: 'L', x: 0),
+        _mon(id: 'M', x: 1920),
+        _mon(id: 'R', x: 3840),
+      ]);
+      final chain = buildSwayWorkspaceChain(
+        ranked,
+        distribution: WorkspaceDistribution.grouped,
+      )!;
+      // ws 1..3 → L, 4..6 → M, 7..9 → R.
+      for (final ws in [1, 2, 3]) {
+        expect(chain, contains("workspace $ws output 'L'"));
+      }
+      for (final ws in [4, 5, 6]) {
+        expect(chain, contains("workspace $ws output 'M'"));
+      }
+      for (final ws in [7, 8, 9]) {
+        expect(chain, contains("workspace $ws output 'R'"));
+      }
+    });
+  });
+
+  group('workspaceSlotRank', () {
+    test('interleaved is round-robin', () {
+      const d = WorkspaceDistribution.interleaved;
+      expect([for (var w = 1; w <= 6; w++) workspaceSlotRank(w, 2, d)],
+          equals([0, 1, 0, 1, 0, 1]));
+    });
+
+    test('grouped is contiguous and never exceeds n-1', () {
+      const d = WorkspaceDistribution.grouped;
+      final ranks = [for (var w = 1; w <= 9; w++) workspaceSlotRank(w, 2, d)];
+      expect(ranks, equals([0, 0, 0, 0, 0, 1, 1, 1, 1]));
+      expect(ranks.every((r) => r <= 1), isTrue);
+    });
+  });
+
+  group('KanshiWriteOptions.copyWith', () {
+    test('overrides only the named fields', () {
+      const base = KanshiWriteOptions.swayDefaults;
+      final off = base.copyWith(injectSwayWorkspaceExec: false);
+      expect(off.injectSwayWorkspaceExec, isFalse);
+      expect(off.injectMirrorExec, base.injectMirrorExec);
+      expect(off.writeCurrentProfileMarker, base.writeCurrentProfileMarker);
+      final grouped =
+          base.copyWith(workspaceDistribution: WorkspaceDistribution.grouped);
+      expect(grouped.workspaceDistribution, WorkspaceDistribution.grouped);
+      expect(grouped.injectSwayWorkspaceExec, isTrue);
+    });
   });
 
   group('Round-trip: writer → parser', () {
@@ -641,6 +711,49 @@ profile 'Hand' {
       final mons = KanshiConfigParser.parse(raw).single.monitors;
       final b = mons.firstWhere((m) => m.id == 'B');
       expect(b.mirrorOf, equals('A'));
+    });
+  });
+
+  group('overlap guard & round-trip', () {
+    test('an overlapping profile is repacked to non-overlapping positions',
+        () {
+      final profiles = [
+        Profile(name: 'Bad', monitors: [
+          _mon(id: 'A', x: 0),
+          _mon(id: 'B', x: 0), // stacked exactly on top of A
+        ]),
+      ];
+      final out = KanshiConfigWriter.render(profiles);
+      expect(
+        out,
+        contains("output 'A' enable scale 1.00 mode 1920x1080@60Hz "
+            "transform normal position 0,0"),
+      );
+      expect(
+        out,
+        contains("output 'B' enable scale 1.00 mode 1920x1080@60Hz "
+            "transform normal position 1920,0"),
+        reason: 'B must be repacked flush to the right of A, never stacked.',
+      );
+      // And the written config genuinely round-trips to a clean layout.
+      final parsed = KanshiConfigParser.parse(out).single.monitors;
+      expect(LayoutMath.findOverlaps(parsed), isEmpty);
+    });
+
+    test('render → parse → render is stable (no layout drift)', () {
+      final profiles = [
+        Profile(name: 'Desk', monitors: [
+          _mon(id: 'A', x: 0),
+          _mon(id: 'B', x: 1920),
+          _mon(id: 'C', x: 3840, w: 2560),
+        ]),
+      ];
+      final out1 = KanshiConfigWriter.render(profiles);
+      final out2 = KanshiConfigWriter.render(KanshiConfigParser.parse(out1));
+      expect(out2, equals(out1),
+          reason: 'A clean layout must survive a parse/render cycle '
+              'byte-for-byte — drift here is exactly what made screens '
+              'jump and overlap on reload.');
     });
   });
 }
