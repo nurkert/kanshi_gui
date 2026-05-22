@@ -26,6 +26,13 @@ class FirstRunWizard extends StatefulWidget {
 class _FirstRunWizardState extends State<FirstRunWizard> {
   int _step = 0;
   late final TextEditingController _nameCtl;
+  /// Opt-in choice for workspace management. Defaults to off so a user who
+  /// clicks straight through the wizard never gets their workspaces moved.
+  WorkspaceManagementMode _wsMode = WorkspaceManagementMode.off;
+  /// The ordered step builders. The workspace step is only present on
+  /// backends that can actually distribute workspaces (Sway); everywhere
+  /// else the wizard is welcome → detected → confirm.
+  late final List<Widget Function()> _steps;
 
   @override
   void initState() {
@@ -33,6 +40,12 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
     _nameCtl = TextEditingController(
       text: ProfileNamer.suggest(widget.controller.currentMonitors),
     );
+    _steps = [
+      _stepWelcome,
+      _stepDetected,
+      if (widget.controller.supportsWorkspaceManagement) _stepWorkspaces,
+      _stepConfirm,
+    ];
   }
 
   @override
@@ -47,11 +60,7 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
       appBar: AppBar(title: const Text('Welcome to kanshi_gui')),
       body: Padding(
         padding: const EdgeInsets.all(24),
-        child: switch (_step) {
-          0 => _stepWelcome(),
-          1 => _stepDetected(),
-          _ => _stepConfirm(),
-        },
+        child: _steps[_step](),
       ),
     );
   }
@@ -77,7 +86,7 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
         Align(
           alignment: Alignment.centerRight,
           child: FilledButton(
-            onPressed: () => setState(() => _step = 1),
+            onPressed: () => setState(() => _step++),
             child: const Text('Continue'),
           ),
         ),
@@ -119,11 +128,73 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             TextButton(
-              onPressed: () => setState(() => _step = 0),
+              onPressed: () => setState(() => _step--),
               child: const Text('Back'),
             ),
             FilledButton(
-              onPressed: () => setState(() => _step = 2),
+              onPressed: () => setState(() => _step++),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _stepWorkspaces() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Workspace management',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 12),
+        const Text(
+          'kanshi_gui can spread your Sway workspaces (1–9) across your '
+          'monitors whenever a profile is applied. This is optional — if '
+          'you leave it off, kanshi_gui never touches your workspaces.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: RadioGroup<WorkspaceManagementMode>(
+            groupValue: _wsMode,
+            onChanged: (m) => setState(() => _wsMode = m ?? _wsMode),
+            child: ListView(
+              children: const [
+                RadioListTile<WorkspaceManagementMode>(
+                  title: Text("Don't manage workspaces"),
+                  subtitle: Text(
+                      'Recommended — leaves your current setup untouched.'),
+                  value: WorkspaceManagementMode.off,
+                ),
+                RadioListTile<WorkspaceManagementMode>(
+                  title: Text('Interleaved'),
+                  subtitle: Text(
+                      'Workspaces 1/3/5… on the left screen, 2/4/6… on the '
+                      'right.'),
+                  value: WorkspaceManagementMode.interleaved,
+                ),
+                RadioListTile<WorkspaceManagementMode>(
+                  title: Text('Grouped'),
+                  subtitle: Text(
+                      'Contiguous bands — e.g. 1–5 on the left, 6–9 on the '
+                      'right.'),
+                  value: WorkspaceManagementMode.grouped,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton(
+              onPressed: () => setState(() => _step--),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: () => setState(() => _step++),
               child: const Text('Continue'),
             ),
           ],
@@ -156,7 +227,7 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             TextButton(
-              onPressed: () => setState(() => _step = 1),
+              onPressed: () => setState(() => _step--),
               child: const Text('Back'),
             ),
             FilledButton(
@@ -184,7 +255,12 @@ class _FirstRunWizardState extends State<FirstRunWizard> {
       widget.controller.renameProfile(newIdx, name);
     }
     widget.settings.firstRunDone = true;
+    widget.settings.workspaceManagement = _wsMode;
     await widget.settings.save();
+    // Apply the workspace choice now so an opted-in user sees the
+    // distribution take effect immediately (and the kanshi config gets the
+    // exec line written). No-op when _wsMode is off.
+    await widget.controller.setWorkspaceDistribution(_wsMode.distribution);
     widget.onDone();
   }
 }

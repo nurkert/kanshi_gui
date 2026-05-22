@@ -49,8 +49,8 @@ class ConfigService {
   /// config dir stays tidy.
   final String backupPrefix;
   /// How many timestamped backups to retain. Older ones are pruned after
-  /// each successful save.
-  final int maxBackups;
+  /// each successful save. Mutable so the settings UI can retune it.
+  int maxBackups;
 
   /// Write options used when serialising profiles. Defaults to a
   /// compositor-neutral profile (no Sway-specific exec lines). The Sway

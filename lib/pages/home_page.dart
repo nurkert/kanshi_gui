@@ -3,13 +3,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
+import 'package:kanshi_gui/pages/settings_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
+import 'package:kanshi_gui/widgets/dot_grid_background.dart';
+import 'package:kanshi_gui/widgets/editor_header.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
-import 'package:kanshi_gui/widgets/profile_sidebar.dart';
+import 'package:kanshi_gui/widgets/presets_bar.dart';
+import 'package:kanshi_gui/widgets/profile_rail.dart';
+import 'package:kanshi_gui/widgets/properties_inspector.dart';
 import 'package:kanshi_gui/widgets/safety_net_banner.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
@@ -23,23 +28,30 @@ class HomePage extends StatefulWidget {
   /// `~/.config/sway/config`'s `client.focused` directive, null means
   /// "no usable accent in sway config, fall back to teal".
   final Color? activeAccent;
+  /// Invoked when the settings page changes a theme/accent setting so the
+  /// app shell (MaterialApp) can rebuild. Optional so tests can omit it.
+  final VoidCallback? onAppearanceChanged;
   const HomePage({
     super.key,
     required this.controller,
     required this.settings,
     this.activeAccent,
+    this.onAppearanceChanged,
   });
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _iconController;
-  bool _isSidebarOpen = false;
+class _HomePageState extends State<HomePage> {
   final Map<String, MonitorTileData> _dragRollback = {};
   bool? _wlMirrorAvailable;
+  /// Environment warnings from [KanshiController.checkHealth], surfaced as a
+  /// dismissible banner. Empty until the post-frame probe completes.
+  List<String> _healthWarnings = const [];
+  bool _healthDismissed = false;
+  /// Output id shown in the properties inspector, or null when none selected.
+  String? _selectedId;
   /// Last seen drag-cancel epoch — used to detect when the controller
   /// rolled back an in-flight drag (hotplug, profile switch) so the
   /// per-page `_dragRollback` map can be cleared. Otherwise abandoned
@@ -51,16 +63,13 @@ class _HomePageState extends State<HomePage>
   @override
   void initState() {
     super.initState();
-    _iconController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _isSidebarOpen = c.activeProfileIndex == null;
-    _iconController.value = _isSidebarOpen ? 1.0 : 0.0;
     _lastSeenDragCancelEpoch = c.dragCancelEpoch;
     c.addListener(_onControllerChanged);
     c.onHotplugToast = (msg) {
       if (!mounted) return;
+      // Read the toggle at fire-time so the settings page takes effect
+      // without re-wiring the callback.
+      if (!widget.settings.hotplugToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
@@ -76,6 +85,7 @@ class _HomePageState extends State<HomePage>
     };
     c.onProfileSuggestion = (s) {
       if (!mounted) return;
+      if (!widget.settings.profileSuggestionToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
@@ -151,6 +161,13 @@ class _HomePageState extends State<HomePage>
         c.onConfigSaveBlocked?.call();
       });
     }
+    // Environment health probe (kanshi present/running, wl-mirror) — surface
+    // any warnings as a dismissible banner once the first frame is up.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final warnings = await c.checkHealth();
+      if (!mounted || warnings.isEmpty) return;
+      setState(() => _healthWarnings = warnings);
+    });
   }
 
   @override
@@ -169,7 +186,6 @@ class _HomePageState extends State<HomePage>
     c.onAutoSwitchedProfile = null;
     c.onConfigSaveBlocked = null;
     c.autoSwitchProfileEnabled = null;
-    _iconController.dispose();
     super.dispose();
   }
 
@@ -183,13 +199,6 @@ class _HomePageState extends State<HomePage>
       // rollback from a long-cancelled session.
       _dragRollback.clear();
     }
-  }
-
-  void _toggleSidebar() {
-    setState(() {
-      _isSidebarOpen = !_isSidebarOpen;
-      _isSidebarOpen ? _iconController.forward() : _iconController.reverse();
-    });
   }
 
   void _toast(OpResult r) {
@@ -368,43 +377,24 @@ class _HomePageState extends State<HomePage>
               onShowLogs: _showLogs,
               onShowHelp: _showHelp,
               child: Scaffold(
-            appBar: AppBar(
-              leading: IconButton(
-                icon: AnimatedIcon(
-                  icon: AnimatedIcons.menu_close,
-                  progress: _iconController,
-                ),
-                tooltip: 'Toggle Sidebar',
-                onPressed: _toggleSidebar,
-              ),
-              title: const Text('Kanshi GUI'),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.lightbulb_outline),
-                  tooltip: 'Identify displays',
-                  onPressed: c.identifyDisplays,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  tooltip: 'Reload & restart kanshi',
-                  onPressed: () async => _toast(await c.reloadAndApply()),
-                ),
-                _SettingsMenu(settings: widget.settings),
-              ],
-            ),
             bottomNavigationBar: SafetyNetBanner(controller: c),
-            body: Stack(
+            body: Row(
               children: [
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  left: _isSidebarOpen ? 320 : 0,
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    color: Colors.black,
-                    child: LayoutBuilder(
+                ProfileRail(
+                  controller: c,
+                  activeAccent: widget.activeAccent,
+                  onCreateCurrentSetup: c.createProfileFromCurrentSetup,
+                ),
+                Expanded(
+                  child: DotGridBackground(
+                    accent: widget.activeAccent ??
+                        Theme.of(context).colorScheme.primary,
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding:
+                              const EdgeInsets.only(top: EditorHeader.height),
+                          child: LayoutBuilder(
                       builder: (context, constraints) {
                         final layout = LayoutMath.computeDisplay(
                           c.activeMonitors,
@@ -539,27 +529,87 @@ class _HomePageState extends State<HomePage>
                                     if (c.identifyNumbers[dst] != null)
                                       c.identifyNumbers[dst]!,
                                 ],
+                                isSelected: tile.id == _selectedId,
+                                onSelect: () =>
+                                    setState(() => _selectedId = tile.id),
                               );
                             }),
                           ],
                         );
                       },
                     ),
+                        ),
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: EditorHeader(
+                            profileName: c.activeProfile?.name,
+                            accent: widget.activeAccent ??
+                                Theme.of(context).colorScheme.primary,
+                            hasUnappliedEdits: c.hasUnappliedEdits,
+                            canApply: c.supportsLiveApply,
+                            onApply: () async =>
+                                _toast(await c.reloadAndApply()),
+                            onIdentify: c.identifyDisplays,
+                            onSettings: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => SettingsPage(
+                                  controller: c,
+                                  settings: widget.settings,
+                                  onAppearanceChanged:
+                                      widget.onAppearanceChanged,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // One-click layout presets, floating at the bottom.
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 18,
+                          child: Center(
+                            child: PresetsBar(
+                              onExtend: () => _toast(c.extendOutputs()),
+                              onMirror: c.supportsMirror
+                                  ? () => _toast(c.mirrorAll())
+                                  : null,
+                              outputIds: c.activeMonitors
+                                  .map((m) => m.id)
+                                  .toList(),
+                              onUseOnly: (id) =>
+                                  _toast(c.useOnlyOutput(id)),
+                            ),
+                          ),
+                        ),
+                        // Environment health warnings (dismissible).
+                        if (_healthWarnings.isNotEmpty && !_healthDismissed)
+                          Positioned(
+                            top: EditorHeader.height + 10,
+                            left: 16,
+                            right: 16,
+                            child: _HealthBanner(
+                              warnings: _healthWarnings,
+                              onDismiss: () =>
+                                  setState(() => _healthDismissed = true),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  left: _isSidebarOpen ? 0 : -320,
-                  top: 0,
-                  bottom: 0,
-                  width: 320,
-                  child: ProfileSidebar(
+                // Right-hand properties inspector for the selected output.
+                if (_selectedId != null &&
+                    c.activeMonitors.any((m) => m.id == _selectedId))
+                  PropertiesInspector(
                     controller: c,
-                    activeAccent: widget.activeAccent,
-                    onCreateCurrentSetup: c.createProfileFromCurrentSetup,
+                    monitorId: _selectedId!,
+                    mirrorEnabled:
+                        c.supportsMirror && (_wlMirrorAvailable ?? false),
+                    onClose: () => setState(() => _selectedId = null),
+                    onResult: _toast,
                   ),
-                ),
               ],
             ),
           ),
@@ -689,55 +739,55 @@ class _HomePageState extends State<HomePage>
 
 }
 
-/// Gear-icon menu in the AppBar holding GUI-private toggles. The
-/// kanshi config itself is unaffected — these settings live in
-/// `~/.config/kanshi-gui/settings.json` and are read on startup plus
-/// re-read on each hotplug event (via the controller's
-/// `autoSwitchProfileEnabled` callback) so flipping the toggle takes
-/// effect on the next event without an app restart.
-class _SettingsMenu extends StatefulWidget {
-  final AppSettings settings;
-  const _SettingsMenu({required this.settings});
+/// Dismissible card surfacing [KanshiController.checkHealth] warnings at the
+/// top of the canvas (e.g. "kanshi isn't running").
+class _HealthBanner extends StatelessWidget {
+  final List<String> warnings;
+  final VoidCallback onDismiss;
+  const _HealthBanner({required this.warnings, required this.onDismiss});
 
-  @override
-  State<_SettingsMenu> createState() => _SettingsMenuState();
-}
-
-class _SettingsMenuState extends State<_SettingsMenu> {
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<void>(
-      icon: const Icon(Icons.settings),
-      tooltip: 'Settings',
-      itemBuilder: (context) => [
-        PopupMenuItem<void>(
-          // Tap target is the whole row, but the switch handles the
-          // toggle itself so we don't need an onTap on the menu item.
-          enabled: false,
-          padding: EdgeInsets.zero,
-          child: StatefulBuilder(
-            builder: (context, setLocalState) {
-              return SwitchListTile(
-                dense: true,
-                title: const Text('Auto-switch profile on hotplug'),
-                subtitle: const Text(
-                  'Switch to the matching profile when a known monitor '
-                  'set is plugged in.',
-                ),
-                value: widget.settings.autoSwitchProfile,
-                onChanged: (v) {
-                  setLocalState(() {
-                    widget.settings.autoSwitchProfile = v;
-                  });
-                  // Persist asynchronously; UI doesn't need to wait.
-                  // ignore: discarded_futures
-                  widget.settings.save();
-                },
-              );
-            },
-          ),
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      color: Color.alphaBlend(
+        Colors.amber.withValues(alpha: 0.12),
+        scheme.surfaceContainerHighest,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Icon(Icons.warning_amber_rounded,
+                  color: Colors.amber, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final w in warnings)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Text(w,
+                          style: Theme.of(context).textTheme.bodyMedium),
+                    ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Dismiss',
+              onPressed: onDismiss,
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

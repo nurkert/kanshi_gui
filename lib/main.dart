@@ -34,13 +34,26 @@ Future<void> main() async {
   HardwareKeyboard.instance.clearState();
 
   final monitors = await MonitorService.detect();
+  // Load settings BEFORE constructing the controller: the workspace-
+  // management opt-in feeds into the controller's effective write options,
+  // and init() runs the workspace-placement apply pass. Building the
+  // controller first would let a fresh-install first launch reshuffle
+  // workspaces before we even know the user opted out.
+  final settings = await AppSettings.load();
   final controller = KanshiController(
     monitors: monitors,
-    config: ConfigService(writeOptions: monitors.writeOptions),
+    config: ConfigService(
+      // Null = the standard ~/.config/kanshi/config (advanced override).
+      configPath: settings.kanshiConfigPath,
+      writeOptions: monitors.writeOptions,
+      maxBackups: settings.maxBackups,
+    ),
   );
+  // Push the user's preferences in BEFORE init() so the first config save
+  // already reflects them (and a fresh-install opt-out never reshuffles).
+  controller.applyStartupSettings(settings);
   await controller.init();
 
-  final settings = await AppSettings.load();
   // Best-effort sway accent lookup; null means the sidebar falls back
   // to its built-in teal. We do this once at startup rather than on
   // every rebuild because the sway config rarely changes and an FS
@@ -78,11 +91,67 @@ class _KanshiAppState extends State<KanshiApp> {
     _showWizard = !widget.settings.firstRunDone;
   }
 
+  ThemeMode get _themeMode {
+    switch (widget.settings.themeChoice) {
+      case AppThemeChoice.system:
+        return ThemeMode.system;
+      case AppThemeChoice.light:
+        return ThemeMode.light;
+      case AppThemeChoice.dark:
+        return ThemeMode.dark;
+    }
+  }
+
+  /// Effective accent: an explicit settings override wins, otherwise the
+  /// Sway-config-derived colour detected at startup.
+  Color? get _accent => widget.settings.accentArgb != null
+      ? Color(widget.settings.accentArgb!)
+      : widget.accent;
+
+  /// Seed for the Material 3 colour scheme. Falls back to the historical
+  /// teal when there's neither an override nor a Sway-derived accent.
+  Color get _seed => _accent ?? const Color(0xFF26A69A);
+
+  /// Called by the settings page after an appearance change so the
+  /// MaterialApp (theme mode, accent) rebuilds without an app restart.
+  void _onAppearanceChanged() => setState(() {});
+
+  ThemeData _theme(Brightness brightness) {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: _seed,
+      brightness: brightness,
+    );
+    final base = ThemeData(
+      colorScheme: scheme,
+      useMaterial3: true,
+      // The canvas/editor chrome reads better tight; nudge the global
+      // visual density a touch denser than Material's airy default.
+      visualDensity: VisualDensity.comfortable,
+    );
+    return base.copyWith(
+      // Frosted surfaces float over the dark canvas; kill the default
+      // tonal elevation tint so cards/sheets stay crisp instead of muddy.
+      cardTheme: base.cardTheme.copyWith(
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+      dividerTheme: base.dividerTheme.copyWith(
+        color: scheme.outlineVariant.withValues(alpha: 0.4),
+        space: 1,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Kanshi GUI',
-      theme: ThemeData.dark(),
+      theme: _theme(Brightness.light),
+      darkTheme: _theme(Brightness.dark),
+      themeMode: _themeMode,
       home: _showWizard
           ? FirstRunWizard(
               controller: widget.controller,
@@ -92,7 +161,8 @@ class _KanshiAppState extends State<KanshiApp> {
           : HomePage(
               controller: widget.controller,
               settings: widget.settings,
-              activeAccent: widget.accent,
+              activeAccent: _accent,
+              onAppearanceChanged: _onAppearanceChanged,
             ),
     );
   }

@@ -6,6 +6,8 @@ import 'package:kanshi_gui/services/mirror_runner.dart';
 /// reconcile-diff behaviour without forking real processes.
 class FakeMirrorRunner extends ChangeNotifier implements MirrorRunner {
   bool available = true;
+  @override
+  String scaling = 'fit';
   final List<String> calls = [];
   final Map<String, String> _active = {}; // dst -> src
   final Set<String> _failed = {};

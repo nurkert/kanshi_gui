@@ -29,6 +29,8 @@ import 'fakes/fake_monitor_service.dart';
 /// immediately so [KanshiController.init] can settle without test
 /// intervention.
 class GatedMirrorRunner extends ChangeNotifier implements MirrorRunner {
+  @override
+  String scaling = 'fit';
   final List<String> events = [];
   final List<Completer<void>> startGates = [];
   final List<Completer<void>> purgeGates = [];

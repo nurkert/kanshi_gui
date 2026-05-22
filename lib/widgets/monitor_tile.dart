@@ -82,6 +82,11 @@ class MonitorTile extends StatefulWidget {
   /// the user can see at a glance which physical screens carry the
   /// same content.
   final List<int> mirroredByNumbers;
+  /// True when this tile is the one shown in the properties inspector.
+  /// Renders a brighter ring + stronger glow.
+  final bool isSelected;
+  /// Tapping the tile (as opposed to dragging) selects it.
+  final VoidCallback? onSelect;
 
   const MonitorTile({
     super.key,
@@ -116,6 +121,8 @@ class MonitorTile extends StatefulWidget {
     this.onSetWorkspaceRank,
     this.readDragCancelEpoch,
     this.mirroredByNumbers = const [],
+    this.isSelected = false,
+    this.onSelect,
   });
 
   @override
@@ -167,18 +174,18 @@ class _MonitorTileState extends State<MonitorTile> {
     final isMirrorSource = widget.mirroredBy.isNotEmpty;
     final isMirrorDestination = widget.data.mirrorOf != null;
     final hasMirrorAccent = isMirrorSource || isMirrorDestination;
-    final backgroundColor = !isEnabled
-        ? Colors.grey.withValues(alpha: 0.4)
+    // Status colour drives the border, glow and status dot. Kept meaningful
+    // (green = connected, red = missing, grey = disabled, cyan = mirror) but
+    // the fill is now a translucent dark glass merely *tinted* with it, so
+    // the canvas reads calm instead of a wall of saturated blocks.
+    const mirrorColor = Color(0xFF4FC3F7);
+    final statusColor = !isEnabled
+        ? const Color(0xFF8A8F98)
         : hasMirrorAccent
-            ? const Color(0xFF4FC3F7).withValues(alpha: 0.18)
+            ? mirrorColor
             : (widget.exists
-                ? Colors.green.withValues(alpha: 0.3)
-                : Colors.red.withValues(alpha: 0.3));
-    final borderColor = !isEnabled
-        ? Colors.grey
-        : hasMirrorAccent
-            ? const Color(0xFF4FC3F7)
-            : (widget.exists ? Colors.greenAccent : Colors.redAccent);
+                ? const Color(0xFF34D399)
+                : const Color(0xFFF87171));
     final textColor = isEnabled ? Colors.white : Colors.white70;
     final canDrag = isEnabled && !isMirrorDestination;
     final canResize = canDrag;
@@ -192,6 +199,7 @@ class _MonitorTileState extends State<MonitorTile> {
       child: Stack(
         children: [
           GestureDetector(
+            onTap: widget.onSelect,
             onPanStart: canDrag
                 ? (_) {
                     _sessionEpoch = widget.readDragCancelEpoch?.call();
@@ -235,54 +243,86 @@ class _MonitorTileState extends State<MonitorTile> {
                   }
                 : null,
             child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: backgroundColor,
-                    border: Border.all(
-                      color: borderColor,
-                      width: 2,
+                    borderRadius: BorderRadius.circular(14),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        statusColor.withValues(alpha: isEnabled ? 0.22 : 0.14),
+                        statusColor.withValues(alpha: 0.06),
+                      ],
                     ),
+                    border: Border.all(
+                      color: statusColor.withValues(
+                          alpha: widget.isSelected ? 1.0 : 0.9),
+                      width: widget.isSelected ? 2.5 : 1.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: statusColor.withValues(
+                            alpha: widget.isSelected ? 0.5 : 0.28),
+                        blurRadius: widget.isSelected ? 26 : 18,
+                        spreadRadius: widget.isSelected ? 0 : -4,
+                      ),
+                    ],
                   ),
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
                   child: Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (isMirrorSource)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(
-                              '⇄ Mirrors to ${widget.mirroredBy.join(", ")}',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF4FC3F7),
+                        // Header: monitor glyph + status dot.
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(_glyphFor(), size: 18, color: statusColor),
+                            const SizedBox(width: 8),
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: statusColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: statusColor.withValues(alpha: 0.6),
+                                    blurRadius: 6,
+                                  ),
+                                ],
                               ),
                             ),
-                          )
-                        else if (isMirrorDestination)
+                          ],
+                        ),
+                        if (isMirrorSource || isMirrorDestination)
                           Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
+                            padding: const EdgeInsets.only(top: 6),
                             child: Text(
-                              '⇄ Mirror of ${widget.data.mirrorOf}',
+                              isMirrorSource
+                                  ? '⇄ Mirrors to ${widget.mirroredBy.join(", ")}'
+                                  : '⇄ Mirror of ${widget.data.mirrorOf}',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF4FC3F7),
+                                color: mirrorColor,
                               ),
                             ),
                           ),
+                        const SizedBox(height: 8),
                         Flexible(
                           child: Text(
                             displayName,
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              height: 1.15,
                               color: textColor,
                             ),
                             softWrap: true,
@@ -292,14 +332,28 @@ class _MonitorTileState extends State<MonitorTile> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          widget.data.resolution,
+                          widget.data.resolution.replaceAll('x', ' × '),
                           textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, color: textColor),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                            color: textColor.withValues(alpha: 0.75),
+                          ),
                         ),
-                        Text(
-                          "${widget.data.orientation} (${widget.data.rotation}°)",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, color: textColor),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          alignment: WrapAlignment.center,
+                          children: [
+                            _chip(widget.data.orientation, statusColor,
+                                textColor),
+                            _chip('${widget.data.rotation}°', statusColor,
+                                textColor),
+                            if (widget.data.refresh > 0)
+                              _chip('${widget.data.refresh.round()} Hz',
+                                  statusColor, textColor),
+                          ],
                         ),
                       ],
                     ),
@@ -338,11 +392,20 @@ class _MonitorTileState extends State<MonitorTile> {
                     widget.onScaleCommit?.call(finalScale);
                   },
                   child: Container(
-                    width: 16,
-                    height: 16,
+                    width: 20,
+                    height: 20,
+                    margin: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      border: Border.all(color: Colors.black),
+                      color: statusColor.withValues(alpha: 0.85),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        bottomRight: Radius.circular(12),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.open_in_full,
+                      size: 11,
+                      color: Colors.black87,
                     ),
                   ),
                 ),
@@ -519,6 +582,38 @@ class _MonitorTileState extends State<MonitorTile> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// Picks a glyph that hints at the output's kind/orientation: a mirror
+  /// icon for mirror tiles, a portrait-phone-ish icon for rotated panels,
+  /// a monitor otherwise.
+  IconData _glyphFor() {
+    if (widget.mirroredBy.isNotEmpty || widget.data.mirrorOf != null) {
+      return Icons.cast_connected;
+    }
+    return widget.data.rotation % 180 != 0
+        ? Icons.crop_portrait
+        : Icons.desktop_windows;
+  }
+
+  /// A small pill used for the orientation / rotation / refresh facts.
+  Widget _chip(String label, Color accent, Color textColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: textColor.withValues(alpha: 0.9),
+        ),
       ),
     );
   }

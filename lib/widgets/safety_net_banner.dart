@@ -40,10 +40,16 @@ class _SafetyNetBannerState extends State<SafetyNetBanner> {
     final progress =
         (remaining.inMilliseconds / window.inMilliseconds).clamp(0.0, 1.0);
 
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: const Color(0xFF1F1F1F),
+      color: scheme.surfaceContainerHighest,
       elevation: 8,
-      child: Padding(
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: Colors.amber.withValues(alpha: 0.5)),
+          ),
+        ),
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         child: Row(
           children: [
@@ -55,8 +61,9 @@ class _SafetyNetBannerState extends State<SafetyNetBanner> {
                 children: [
                   Text(
                     '${prompt.label} — reverting in ${remaining.inSeconds}s',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w500),
+                    style: TextStyle(
+                        color: scheme.onSurface,
+                        fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 6),
                   ClipRRect(
@@ -64,7 +71,8 @@ class _SafetyNetBannerState extends State<SafetyNetBanner> {
                     child: LinearProgressIndicator(
                       value: progress,
                       minHeight: 4,
-                      backgroundColor: Colors.white.withValues(alpha: 0.15),
+                      backgroundColor:
+                          scheme.onSurface.withValues(alpha: 0.15),
                       color: Colors.amber,
                     ),
                   ),

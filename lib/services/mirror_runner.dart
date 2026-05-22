@@ -25,8 +25,14 @@ class MirrorRunner extends ChangeNotifier {
   MirrorRunner({
     ProcessRunner? runner,
     DateTime Function()? now,
+    this.scaling = 'fit',
   })  : _runner = runner ?? const DefaultProcessRunner(),
         _now = now ?? DateTime.now;
+
+  /// wl-mirror `--scaling` mode applied to every spawned mirror. Mutable so
+  /// the settings UI can change it; existing processes keep their mode until
+  /// they're respawned (a profile reapply / reconcile restarts them).
+  String scaling;
 
   /// Burst budget: at most [_maxRetries] restarts within [_retryWindow].
   /// Tuned conservatively — wl-mirror tends to die for one of two reasons:
@@ -248,7 +254,7 @@ class MirrorRunner extends ChangeNotifier {
     // ambient config that might change the default.
     final ps = _runner.stream('wl-mirror', [
       '--scaling',
-      'fit',
+      scaling,
       '--fullscreen-output',
       entry.dstId,
       entry.srcId,

@@ -12,7 +12,9 @@ import 'dart:async';
 /// reset and the *original* inverse stays — so the user can chain several
 /// experimental mode switches and a single "Keep" cements the final one.
 class SafetyNet {
-  final Duration window;
+  /// Mutable so the settings UI can retune it live; only affects guards
+  /// armed *after* the change (an in-flight countdown keeps its window).
+  Duration window;
 
   SafetyNet({this.window = const Duration(seconds: 15)});
 

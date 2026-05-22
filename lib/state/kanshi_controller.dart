@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
+import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
@@ -48,12 +49,22 @@ class KanshiController extends ChangeNotifier {
   /// flush against the neighbour" reliably engages. The historical
   /// default was 500, which was effectively "always snap" because for
   /// a 1920-wide monitor 500 px is more than a quarter of the screen.
-  final double snapThreshold;
+  ///
+  /// Mutable at runtime via [setSnapDistance] (settings UI). Stored
+  /// privately; widgets read it through the [snapThreshold] getter and
+  /// rebuild on the change's `notifyListeners`.
+  double _snapThreshold;
+  double get snapThreshold => _snapThreshold;
 
   List<Profile> _profiles = [];
   List<MonitorTileData> _currentMonitors = [];
   int? _activeProfileIndex;
   bool _isApplyingBatch = false;
+  /// True when the active layout has edits that haven't been pushed to the
+  /// compositor via an explicit Apply yet. Set whenever a mutation schedules
+  /// a save, cleared on a successful [reloadAndApply]. Drives the header's
+  /// "unapplied changes" dot + Apply button.
+  bool _hasUnappliedEdits = false;
   Timer? _saveTimer;
   /// Serialises [_reconcileMirrors] so concurrent calls (hotplug listener,
   /// `setActiveProfile`, undo/redo, `setMirror`) cannot interleave inside
@@ -139,13 +150,42 @@ class KanshiController extends ChangeNotifier {
   ];
   static const _scaleSnapTolerance = 0.03;
 
+  /// User opt-in for the Sway workspace distribution. `null` means the
+  /// feature is off; a non-null value also picks how workspaces are spread
+  /// (see [WorkspaceDistribution]). Held here so [_effectiveWriteOptions]
+  /// can gate the backend's capability default on the user's choice, and so
+  /// [setWorkspaceDistribution] can flip it at runtime.
+  WorkspaceDistribution? _workspaceDistribution;
+
+  /// Whether scale-slider release rasters onto the common HiDPI snap
+  /// values. Mutable via [setScaleSnapping] (settings UI).
+  bool scaleSnapping = true;
+
+  /// Whether an explicit Apply arms the auto-revert countdown. Off by
+  /// default — routine applies shouldn't nag; opt in for the safety net.
+  bool autoRevertOnApply = false;
+
+  /// How long the identify-display number banners stay on screen.
+  Duration identifyBannerDuration = const Duration(seconds: 3);
+
+  /// wl-mirror `--scaling` mode, folded into the effective write options
+  /// (boot-fallback exec line) and pushed to the live [mirrorRunner].
+  String _mirrorScaling = 'fit';
+
+  final ProcessRunner _processRunner;
+
   KanshiController({
     required this.monitors,
     required this.config,
     MirrorRunner? mirrorRunner,
-    this.snapThreshold = 60.0,
-  }) : mirrorRunner = mirrorRunner ?? MirrorRunner() {
-    config.writeOptions = monitors.writeOptions;
+    double snapThreshold = 60.0,
+    WorkspaceDistribution? workspaceDistribution,
+    ProcessRunner? processRunner,
+  })  : mirrorRunner = mirrorRunner ?? MirrorRunner(),
+        _snapThreshold = snapThreshold,
+        _workspaceDistribution = workspaceDistribution,
+        _processRunner = processRunner ?? const DefaultProcessRunner() {
+    config.writeOptions = _effectiveWriteOptions();
     safetyNet.onChange((_) => notifyListeners());
     // The runner mutates failedDestinations / activeDestinations on
     // wl-mirror exits. UI surfaces that via this controller's
@@ -169,6 +209,8 @@ class KanshiController extends ChangeNotifier {
   List<MonitorTileData> get activeMonitors =>
       activeProfile?.monitors ?? const [];
   bool get isApplyingBatch => _isApplyingBatch;
+  /// See [_hasUnappliedEdits].
+  bool get hasUnappliedEdits => _hasUnappliedEdits;
   bool get supportsLiveApply => monitors.isLive;
   /// True when there's a snapshot to roll back to via [undo].
   bool get canUndo => _undoStack.isNotEmpty;
@@ -183,6 +225,34 @@ class KanshiController extends ChangeNotifier {
       _redoStack.isEmpty ? null : _redoStack.last.label;
   bool get supportsMirror => monitors.supportsMirror;
   List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
+
+  /// Backend capability: can this compositor distribute workspaces via the
+  /// Sway exec chain at all? True only for the Sway backend (wlr-randr /
+  /// niri / noop emit a neutral config with no workspace exec). Independent
+  /// of the user's opt-in — the UI uses this to decide whether to even
+  /// surface the workspace-management control.
+  bool get supportsWorkspaceManagement =>
+      monitors.writeOptions.injectSwayWorkspaceExec;
+
+  /// The active workspace distribution, or null when management is off.
+  WorkspaceDistribution? get workspaceDistribution => _workspaceDistribution;
+
+  /// Effective write options: the backend's capability defaults, with the
+  /// Sway workspace exec gated on the user's opt-in (and forced off entirely
+  /// on backends that can't do it). Keeping this in one place means the
+  /// rendered kanshi config and the controller's runtime apply path always
+  /// agree on whether — and how — to distribute workspaces.
+  KanshiWriteOptions _effectiveWriteOptions() {
+    final base = monitors.writeOptions.copyWith(mirrorScaling: _mirrorScaling);
+    final dist = _workspaceDistribution;
+    if (!supportsWorkspaceManagement || dist == null) {
+      return base.copyWith(injectSwayWorkspaceExec: false);
+    }
+    return base.copyWith(
+      injectSwayWorkspaceExec: true,
+      workspaceDistribution: dist,
+    );
+  }
 
   /// Bounding box (in absolute monitor space) the canvas should pin its
   /// projection to. Non-null only while a drag session is active. Without
@@ -231,7 +301,7 @@ class KanshiController extends ChangeNotifier {
       }
     }
 
-    _identifyTimer = Timer(const Duration(seconds: 3), () {
+    _identifyTimer = Timer(identifyBannerDuration, () {
       _identifyNumbers = const {};
       _killIdentifyBanners();
       notifyListeners();
@@ -260,7 +330,9 @@ class KanshiController extends ChangeNotifier {
     } catch (_) {
       _configHasIncludes = false;
     }
-    await ensureCurrentSetupMatches();
+    // persist: false — opening the app must never rewrite (and risk
+    // re-applying) the user's working config. See [ensureCurrentSetupMatches].
+    await ensureCurrentSetupMatches(persist: false);
     _subscribeHotplug();
     await _reconcileMirrors();
     // Self-healing pass: kanshi's `exec swaymsg "…"` chain ran once
@@ -303,7 +375,10 @@ class KanshiController extends ChangeNotifier {
     // doesn't exist. Short-circuit explicitly so we don't burn an
     // IPC round-trip just to read an empty map back from the default
     // no-op impl.
-    if (!monitors.writeOptions.injectSwayWorkspaceExec) return;
+    // Gate on the *effective* options (backend capability AND the user's
+    // opt-in), not the backend's raw capability — when management is off
+    // we must not touch the live workspace layout at all.
+    if (!config.writeOptions.injectSwayWorkspaceExec) return;
     final activeIdx = _activeProfileIndex;
     if (activeIdx == null) return;
     try {
@@ -335,9 +410,10 @@ class KanshiController extends ChangeNotifier {
       // ws (1..maxWorkspaces) → ranked[(ws-1) mod n].id.
       const maxWs = 9;
       final n = ranked.length;
+      final dist = config.writeOptions.workspaceDistribution;
       final desired = <int, String>{
         for (var ws = 1; ws <= maxWs; ws++)
-          ws: ranked[(ws - 1) % n].id,
+          ws: ranked[workspaceSlotRank(ws, n, dist, maxWorkspaces: maxWs)].id,
       };
 
       Map<int, String> actual;
@@ -366,7 +442,7 @@ class KanshiController extends ChangeNotifier {
       // displaces the orphan; if it was empty, sway garbage-collects it.
       final hasOrphan = actual.keys.any((k) => k < 1 || k > maxWs);
       if (!force && !mismatched && !hasOrphan) return;
-      final chain = buildSwayWorkspaceChain(ranked);
+      final chain = buildSwayWorkspaceChain(ranked, distribution: dist);
       if (chain == null) return;
       try {
         await monitors.applyWorkspaceChain(chain);
@@ -552,7 +628,14 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
-  Future<void> ensureCurrentSetupMatches() async {
+  /// Reconciles the active profile against the live outputs, creating a
+  /// throwaway "Current Setup" when nothing matches. [persist] controls
+  /// whether the resulting config is written to disk — it defaults to true
+  /// for explicit callers, but [init] passes false: on launch we must NOT
+  /// overwrite (and thereby risk re-applying) the user's working kanshi
+  /// config when they haven't changed anything. The captured setup lives in
+  /// memory and is persisted the moment the user makes a real edit.
+  Future<void> ensureCurrentSetupMatches({bool persist = true}) async {
     final matchIdx = _findProfileMatchingCurrent();
     if (matchIdx != null) {
       _activeProfileIndex = matchIdx;
@@ -579,7 +662,7 @@ class KanshiController extends ChangeNotifier {
         debugPrint('failed to write current profile marker: $e');
       }
     }
-    _scheduleSave();
+    if (persist) _scheduleSave();
     notifyListeners();
   }
 
@@ -1098,6 +1181,11 @@ class KanshiController extends ChangeNotifier {
   }
 
   double _maybeSnapScale(String id, double raw) {
+    // Scale snapping disabled in settings → return the raw value untouched.
+    if (!scaleSnapping) {
+      _lastSnappedScale.remove(id);
+      return raw;
+    }
     final last = _lastSnappedScale[id];
     double? best;
     var bestDist = double.infinity;
@@ -1150,6 +1238,230 @@ class KanshiController extends ChangeNotifier {
     _profiles[_activeProfileIndex!] =
         Profile(name: profile.name, monitors: rearranged);
     _scheduleSave();
+    notifyListeners();
+  }
+
+  // ── Health checks ──────────────────────────────────────────────────────
+
+  /// Best-effort environment sanity checks surfaced as a dismissible banner
+  /// on launch. Returns a list of human-readable warnings (empty = all
+  /// good). Never throws — a probe that itself fails is simply skipped.
+  Future<List<String>> checkHealth() async {
+    final warnings = <String>[];
+    if (!monitors.isLive) {
+      warnings.add(
+          'No Wayland output tool (swaymsg/wlr-randr) detected — running as '
+          'an offline profile editor. Changes won\'t reach a compositor.');
+      return warnings;
+    }
+    // kanshi present?
+    try {
+      if (!await _processRunner.exists('kanshi')) {
+        warnings.add(
+            'kanshi is not installed — saved profiles won\'t be applied '
+            'automatically. Install kanshi to get auto-switching.');
+      } else {
+        // kanshi running? (pgrep may be absent; treat probe failure as
+        // "unknown" and stay quiet rather than cry wolf.)
+        try {
+          final r = await _processRunner.run('pgrep', ['-x', 'kanshi']);
+          if (r.exitCode == 1) {
+            warnings.add(
+                'kanshi doesn\'t appear to be running — start it (e.g. via '
+                'your sway config or its systemd service) so profiles apply.');
+          }
+        } catch (_) {/* pgrep missing — skip */}
+      }
+    } catch (_) {/* exists() failure — skip */}
+    // wl-mirror needed for the mirror UX on Sway.
+    if (monitors.supportsMirror) {
+      try {
+        if (!await mirrorRunner.isAvailable()) {
+          warnings.add(
+              'wl-mirror is not installed — monitor mirroring is unavailable.');
+        }
+      } catch (_) {/* skip */}
+    }
+    return warnings;
+  }
+
+  // ── Quick-layout presets ───────────────────────────────────────────────
+  // All presets mutate the active profile in memory (overlap-safe) and
+  // schedule a save; nothing reaches the compositor until the user hits
+  // Apply, so a preset is a previewable suggestion, not a surprise.
+
+  /// Lay every enabled output side-by-side, left-to-right, flush at y=0, and
+  /// drop any mirroring — the classic "extend my desktop across all screens".
+  OpResult extendOutputs() {
+    final idx = _activeProfileIndex;
+    if (idx == null) return const OpResult.err('No active profile.');
+    final profile = _profiles[idx];
+    final enabled = profile.monitors.where((m) => m.enabled).toList()
+      ..sort((a, b) {
+        final byX = a.x.compareTo(b.x);
+        return byX != 0 ? byX : a.id.compareTo(b.id);
+      });
+    if (enabled.isEmpty) return const OpResult.err('No enabled output.');
+    _pushHistory('extend outputs');
+    final placed = <String, MonitorTileData>{};
+    var cursorX = 0.0;
+    for (final m in enabled) {
+      placed[m.id] = m.copyWith(x: cursorX, y: 0, mirrorOf: null);
+      cursorX += m.width / (m.scale == 0 ? 1.0 : m.scale);
+    }
+    _profiles[idx] = Profile(
+      name: profile.name,
+      monitors: [for (final m in profile.monitors) placed[m.id] ?? m],
+    );
+    _scheduleSave();
+    notifyListeners();
+    return const OpResult.ok('Extended across all outputs.');
+  }
+
+  /// Mirror every other enabled output onto the leftmost one (the primary).
+  /// Sway-only — wl-mirror drives the actual duplication on apply/reconcile.
+  OpResult mirrorAll() {
+    if (!supportsMirror) {
+      return const OpResult.err('Mirroring needs the Sway backend.');
+    }
+    final idx = _activeProfileIndex;
+    if (idx == null) return const OpResult.err('No active profile.');
+    final profile = _profiles[idx];
+    final enabled = profile.monitors.where((m) => m.enabled).toList()
+      ..sort((a, b) {
+        final byX = a.x.compareTo(b.x);
+        return byX != 0 ? byX : a.id.compareTo(b.id);
+      });
+    if (enabled.length < 2) {
+      return const OpResult.err('Need at least two enabled outputs to mirror.');
+    }
+    final primary = enabled.first.id;
+    _pushHistory('mirror all onto $primary');
+    final updated = <String, MonitorTileData>{};
+    for (final m in enabled) {
+      updated[m.id] =
+          m.copyWith(mirrorOf: m.id == primary ? null : primary);
+    }
+    _profiles[idx] = Profile(
+      name: profile.name,
+      monitors: [for (final m in profile.monitors) updated[m.id] ?? m],
+    );
+    _scheduleSave();
+    notifyListeners();
+    return OpResult.ok('Mirroring all outputs onto $primary.');
+  }
+
+  /// Enable only [keepId] and disable every other output — "laptop only" /
+  /// "external only". Clears mirroring on the kept output. Refuses if
+  /// [keepId] isn't a known output (would otherwise black everything out).
+  OpResult useOnlyOutput(String keepId) {
+    final idx = _activeProfileIndex;
+    if (idx == null) return const OpResult.err('No active profile.');
+    final profile = _profiles[idx];
+    if (!profile.monitors.any((m) => m.id == keepId)) {
+      return OpResult.err('$keepId not in the active profile.');
+    }
+    _pushHistory('use only $keepId');
+    _profiles[idx] = Profile(
+      name: profile.name,
+      monitors: [
+        for (final m in profile.monitors)
+          m.id == keepId
+              ? m.copyWith(enabled: true, mirrorOf: null, x: 0, y: 0)
+              : m.copyWith(enabled: false, mirrorOf: null),
+      ],
+    );
+    _scheduleSave();
+    notifyListeners();
+    return OpResult.ok('Using only $keepId.');
+  }
+
+  // ── Settings application ───────────────────────────────────────────────
+
+  /// Pushes the controller-backed preferences from [s] into the live
+  /// objects. Called once at startup *before* [init] so the first config
+  /// save already reflects them — it deliberately does NOT trigger a
+  /// reload (init handles the initial apply). The settings UI uses the
+  /// individual `set*` methods below for live changes instead.
+  void applyStartupSettings(AppSettings s) {
+    _snapThreshold = s.snapDistance;
+    scaleSnapping = s.scaleSnapping;
+    autoRevertOnApply = s.autoRevertOnApply;
+    safetyNet.window = Duration(seconds: s.safetyNetSeconds);
+    _revertScheduler.defaultDelay =
+        Duration(seconds: s.customModeRevertSeconds);
+    identifyBannerDuration = Duration(seconds: s.identifyBannerSeconds);
+    config.maxBackups = s.maxBackups;
+    _mirrorScaling = s.mirrorScaling.arg;
+    _workspaceDistribution = s.workspaceManagement.distribution;
+    mirrorRunner.scaling = _mirrorScaling;
+    config.writeOptions = _effectiveWriteOptions();
+  }
+
+  void setSnapDistance(double v) {
+    _snapThreshold = v;
+    notifyListeners();
+  }
+
+  void setScaleSnapping(bool v) {
+    scaleSnapping = v;
+    notifyListeners();
+  }
+
+  void setSafetyNetSeconds(int seconds) {
+    safetyNet.window = Duration(seconds: seconds);
+  }
+
+  void setCustomModeRevertSeconds(int seconds) {
+    _revertScheduler.defaultDelay = Duration(seconds: seconds);
+  }
+
+  void setIdentifyBannerSeconds(int seconds) {
+    identifyBannerDuration = Duration(seconds: seconds);
+  }
+
+  void setMaxBackups(int count) {
+    config.maxBackups = count;
+  }
+
+  /// Change the wl-mirror scaling mode at runtime. Updates both the live
+  /// MirrorRunner and the boot-fallback exec line in the kanshi config,
+  /// then reloads and restarts the running mirrors so the new mode takes
+  /// effect immediately.
+  Future<void> setMirrorScaling(String scaling) async {
+    if (_mirrorScaling == scaling) return;
+    _mirrorScaling = scaling;
+    mirrorRunner.scaling = scaling;
+    config.writeOptions = _effectiveWriteOptions();
+    await _flushSaveAndReload();
+    // Restart live mirrors so they pick up the new --scaling: stop all and
+    // let reconcile respawn them with the updated runner setting.
+    await mirrorRunner.stopAll();
+    await _reconcileMirrors();
+    notifyListeners();
+  }
+
+  // ── Workspace management opt-in ────────────────────────────────────────
+
+  /// Change the workspace-management mode at runtime (settings toggle /
+  /// first-run wizard opt-in). Recomputes the effective write options,
+  /// rewrites the kanshi config (adding or dropping the `exec swaymsg "…"`
+  /// line) and reloads kanshi. When turning management ON, force-applies the
+  /// distribution chain so the change lands immediately rather than only on
+  /// the next profile activation.
+  ///
+  /// Turning it OFF removes the exec line and stops re-applying, but does
+  /// NOT move workspaces back — there is no pre-management snapshot to
+  /// restore to, so the current placement simply stays put until the user
+  /// rearranges it themselves. No-op on backends that don't support it.
+  Future<void> setWorkspaceDistribution(WorkspaceDistribution? dist) async {
+    if (_workspaceDistribution == dist) return;
+    _workspaceDistribution = dist;
+    config.writeOptions = _effectiveWriteOptions();
+    await _flushSaveAndReload();
+    if (dist != null && supportsWorkspaceManagement) {
+      await _verifyAndFixWorkspacePlacement(force: true);
+    }
     notifyListeners();
   }
 
@@ -1730,8 +2042,68 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
+  /// Human-readable problems with the active profile that would make for a
+  /// bad apply: no enabled output, or outputs that overlap. Used as a
+  /// pre-apply dry-run and surfacable in the UI.
+  List<String> validateActiveLayout() {
+    final issues = <String>[];
+    final idx = _activeProfileIndex;
+    if (idx == null) return issues;
+    final mons = _profiles[idx].monitors;
+    if (mons.where((m) => m.enabled).isEmpty) {
+      issues.add('No output is enabled.');
+    }
+    for (final (a, b) in LayoutMath.findOverlaps(mons)) {
+      issues.add('$a and $b overlap.');
+    }
+    return issues;
+  }
+
+  /// If the active profile's outputs overlap, repack them in memory so the
+  /// GUI and the about-to-be-written config agree (the writer also guards
+  /// this, but fixing the model keeps the canvas truthful). Returns true if
+  /// it changed anything.
+  bool _resolveActiveOverlapsIfAny() {
+    final idx = _activeProfileIndex;
+    if (idx == null) return false;
+    final mons = _profiles[idx].monitors;
+    if (!LayoutMath.hasAnyOverlap(mons)) return false;
+    _profiles[idx] = Profile(
+      name: _profiles[idx].name,
+      monitors: LayoutMath.resolveOverlaps(mons),
+    );
+    notifyListeners();
+    return true;
+  }
+
   Future<OpResult> reloadAndApply() async {
+    // Lockout guard: never apply a layout that would leave the user with no
+    // visible output. The "last enabled output" rule already protects the
+    // toggle path; this catches a profile that arrived disabled-only via
+    // load / preset / undo.
+    final issues = validateActiveLayout();
+    final lockout = issues.firstWhere(
+      (i) => i.contains('No output'),
+      orElse: () => '',
+    );
+    if (lockout.isNotEmpty) {
+      return OpResult.err('Refusing to apply: $lockout');
+    }
     try {
+      // Dry-run / auto-fix: never apply an overlapping layout.
+      final autoArranged = _resolveActiveOverlapsIfAny();
+      // Snapshot the *currently-applied* config (what's on disk right now)
+      // BEFORE we overwrite it — that is the last layout the user could see.
+      // The auto-revert must restore THAT, not the just-edited (possibly
+      // unviewable) one. Null means there was no prior config (fresh
+      // install): reverting then means removing what we wrote.
+      String? prevRaw;
+      try {
+        prevRaw = await File(config.configPath).readAsString();
+      } catch (_) {
+        prevRaw = null;
+      }
+
       await config.saveProfiles(_profiles);
       final r = await monitors.restartCompositorProfileApply();
       if (r.exitCode != 0) {
@@ -1739,7 +2111,41 @@ class KanshiController extends ChangeNotifier {
       }
       await refreshConnectedMonitors();
       await _loadConfig();
-      return const OpResult.ok('Reloaded and restarted kanshi.');
+      _hasUnappliedEdits = false;
+
+      // Arm the auto-revert safety net (opt-in, live backends only). If the
+      // user can't see the new layout to click "Keep", the window elapses
+      // and we restore the previously-applied config automatically. Off by
+      // default — routine applies shouldn't pop a countdown.
+      if (monitors.isLive && autoRevertOnApply) {
+        await safetyNet.guard<void>(
+          key: 'layout-apply',
+          label: 'Display layout',
+          doIt: () async {},
+          revert: () async {
+            try {
+              final f = File(config.configPath);
+              if (prevRaw != null) {
+                await f.writeAsString(prevRaw);
+              } else if (await f.exists()) {
+                await f.delete();
+              }
+              await monitors.restartCompositorProfileApply();
+              await _loadConfig();
+              await refreshConnectedMonitors();
+            } catch (e) {
+              debugPrint('layout auto-revert failed: $e');
+            }
+            notifyListeners();
+          },
+        );
+      }
+      if (autoArranged) {
+        return const OpResult.ok('Overlapping layout was auto-arranged and applied.');
+      }
+      return OpResult.ok(monitors.isLive && autoRevertOnApply
+          ? 'Applied. Reverting automatically unless you keep it.'
+          : 'Applied.');
     } catch (e) {
       return OpResult.err('Reload failed: $e');
     }
@@ -1801,6 +2207,9 @@ class KanshiController extends ChangeNotifier {
 
   // ── Internals ──────────────────────────────────────────────────────────
   void _scheduleSave() {
+    // Any scheduled save means the layout was edited; it isn't reflected in
+    // the compositor until the next explicit Apply.
+    _hasUnappliedEdits = true;
     _saveTimer?.cancel();
     if (_configHasIncludes) {
       // Same rationale as `_flushSaveAndReload`: don't render-and-
