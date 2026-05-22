@@ -380,21 +380,32 @@ class _HomePageState extends State<HomePage> {
             bottomNavigationBar: SafetyNetBanner(controller: c),
             body: Row(
               children: [
-                ProfileRail(
-                  controller: c,
-                  activeAccent: widget.activeAccent,
-                  onCreateCurrentSetup: c.createProfileFromCurrentSetup,
+                RepaintBoundary(
+                  child: ProfileRail(
+                    controller: c,
+                    activeAccent: widget.activeAccent,
+                    onCreateCurrentSetup: c.createProfileFromCurrentSetup,
+                  ),
                 ),
                 Expanded(
-                  child: DotGridBackground(
-                    accent: widget.activeAccent ??
-                        Theme.of(context).colorScheme.primary,
-                    child: Stack(
-                      children: [
-                        Padding(
+                  child: Stack(
+                    children: [
+                      // Static backdrop in its own layer — never repaints
+                      // while monitors are dragged.
+                      Positioned.fill(
+                        child: RepaintBoundary(
+                          child: DotGridBackground(
+                            accent: widget.activeAccent ??
+                                Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: Padding(
                           padding:
                               const EdgeInsets.only(top: EditorHeader.height),
-                          child: LayoutBuilder(
+                          child: RepaintBoundary(
+                            child: LayoutBuilder(
                       builder: (context, constraints) {
                         final layout = LayoutMath.computeDisplay(
                           c.activeMonitors,
@@ -537,18 +548,21 @@ class _HomePageState extends State<HomePage> {
                           ],
                         );
                       },
-                    ),
+                            ),
+                          ),
                         ),
-                        Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
+                      ),
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: RepaintBoundary(
                           child: EditorHeader(
                             profileName: c.activeProfile?.name,
                             accent: widget.activeAccent ??
                                 Theme.of(context).colorScheme.primary,
                             hasUnappliedEdits: c.hasUnappliedEdits,
-                            canApply: c.supportsLiveApply,
+                            showApply: c.supportsLiveApply && !c.liveApply,
                             onApply: () async =>
                                 _toast(await c.reloadAndApply()),
                             onIdentify: c.identifyDisplays,
@@ -562,6 +576,7 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               ),
                             ),
+                          ),
                           ),
                         ),
                         // One-click layout presets, floating at the bottom.
@@ -598,7 +613,6 @@ class _HomePageState extends State<HomePage> {
                       ],
                     ),
                   ),
-                ),
                 // Right-hand properties inspector for the selected output.
                 if (_selectedId != null &&
                     c.activeMonitors.any((m) => m.id == _selectedId))

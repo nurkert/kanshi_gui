@@ -2,19 +2,16 @@ import 'package:flutter/material.dart';
 
 /// The editor canvas backdrop: a deep, subtly-tinted dark gradient with a
 /// faint dot grid painted over it, so the area reads as a coordinate space
-/// the monitors live in rather than a flat black void. Purely decorative —
-/// it sits behind the snap lines and the draggable tiles and never
-/// intercepts pointer events.
+/// the monitors live in rather than a flat black void.
+///
+/// Childless on purpose — it's meant to sit in a [RepaintBoundary] behind the
+/// draggable tiles (a `Positioned.fill` layer), so dragging a monitor never
+/// repaints this static grid.
 class DotGridBackground extends StatelessWidget {
-  /// Accent used for the very subtle corner glow. Usually the app accent.
+  /// Accent used for the very subtle tint. Usually the app accent.
   final Color accent;
-  final Widget child;
 
-  const DotGridBackground({
-    super.key,
-    required this.accent,
-    required this.child,
-  });
+  const DotGridBackground({super.key, required this.accent});
 
   @override
   Widget build(BuildContext context) {
@@ -25,15 +22,14 @@ class DotGridBackground extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [
             const Color(0xFF14171C),
-            Color.alphaBlend(accent.withValues(alpha: 0.05), const Color(0xFF0D0F12)),
+            Color.alphaBlend(
+                accent.withValues(alpha: 0.05), const Color(0xFF0D0F12)),
           ],
         ),
       ),
       child: CustomPaint(
-        painter: _DotGridPainter(
-          dotColor: Colors.white.withValues(alpha: 0.05),
-        ),
-        child: child,
+        size: Size.infinite,
+        painter: _DotGridPainter(dotColor: Colors.white.withValues(alpha: 0.05)),
       ),
     );
   }
@@ -41,8 +37,8 @@ class DotGridBackground extends StatelessWidget {
 
 class _DotGridPainter extends CustomPainter {
   final Color dotColor;
-  static const double _spacing = 28;
-  static const double _radius = 1.1;
+  static const double _spacing = 32;
+  static const double _radius = 1.0;
 
   _DotGridPainter({required this.dotColor});
 

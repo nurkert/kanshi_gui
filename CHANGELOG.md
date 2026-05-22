@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **Live apply is the default again (opt-out).** Edits go straight to the
+  compositor as you make them and there is no Apply button; the "unapplied"
+  indicator is therefore always accurate (nothing is ever pending). Turn it
+  off in Settings → Behavior to stage changes behind an explicit Apply.
+- **Performance: dropped the real-time blur and isolated static layers.**
+  The frosted `BackdropFilter`s were recomputed every drag frame; they're
+  gone (translucent fills instead), and the dot-grid backdrop, profile rail
+  and header now live in their own `RepaintBoundary`s so dragging a monitor
+  only re-rasterises the canvas. Snappy again.
 - **Opening the app no longer touches your config — or your screens.**
   Previously every launch silently re-rendered and rewrote your kanshi
   config (even with zero edits); combined with kanshi auto-reload that could

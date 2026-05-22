@@ -104,17 +104,31 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
           SwitchListTile(
-            title: const Text('Confirm layout applies (auto-revert)'),
+            title: const Text('Live apply'),
             subtitle: const Text(
-                'After Apply, run a countdown and roll back automatically '
-                'unless you confirm. Off by default.'),
-            value: s.autoRevertOnApply,
+                'Push changes to the compositor instantly as you make them '
+                '(no Apply button). Turn off to stage changes behind Apply.'),
+            value: s.liveApply,
             onChanged: (v) {
-              s.autoRevertOnApply = v;
-              c.autoRevertOnApply = v;
+              s.liveApply = v;
               _persist();
+              // ignore: discarded_futures
+              c.setLiveApply(v);
             },
           ),
+          if (!s.liveApply)
+            SwitchListTile(
+              title: const Text('Confirm layout applies (auto-revert)'),
+              subtitle: const Text(
+                  'After Apply, run a countdown and roll back automatically '
+                  'unless you confirm. Off by default.'),
+              value: s.autoRevertOnApply,
+              onChanged: (v) {
+                s.autoRevertOnApply = v;
+                c.autoRevertOnApply = v;
+                _persist();
+              },
+            ),
           _SliderTile(
             title: 'Safety-net countdown',
             subtitle: 'Auto-revert a risky mode/disable change after this '

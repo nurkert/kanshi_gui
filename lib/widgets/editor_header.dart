@@ -10,7 +10,9 @@ class EditorHeader extends StatelessWidget {
   final String? profileName;
   final Color accent;
   final bool hasUnappliedEdits;
-  final bool canApply;
+  /// Whether to show the explicit Apply button. Hidden in live-apply mode
+  /// (edits already reach the compositor instantly).
+  final bool showApply;
   final VoidCallback onApply;
   final VoidCallback onIdentify;
   final VoidCallback onSettings;
@@ -20,7 +22,7 @@ class EditorHeader extends StatelessWidget {
     required this.profileName,
     required this.accent,
     required this.hasUnappliedEdits,
-    required this.canApply,
+    required this.showApply,
     required this.onApply,
     required this.onIdentify,
     required this.onSettings,
@@ -72,7 +74,7 @@ class EditorHeader extends StatelessWidget {
                 _UnappliedChip(),
               ],
               const Spacer(),
-              if (canApply) ...[
+              if (showApply) ...[
                 FilledButton.icon(
                   onPressed: onApply,
                   icon: const Icon(Icons.check, size: 18),

@@ -165,6 +165,10 @@ class KanshiController extends ChangeNotifier {
   /// default — routine applies shouldn't nag; opt in for the safety net.
   bool autoRevertOnApply = false;
 
+  /// When true (default), edits push to the compositor immediately and the
+  /// UI hides the Apply button. When false, edits are staged until Apply.
+  bool liveApply = true;
+
   /// How long the identify-display number banners stay on screen.
   Duration identifyBannerDuration = const Duration(seconds: 3);
 
@@ -209,8 +213,9 @@ class KanshiController extends ChangeNotifier {
   List<MonitorTileData> get activeMonitors =>
       activeProfile?.monitors ?? const [];
   bool get isApplyingBatch => _isApplyingBatch;
-  /// See [_hasUnappliedEdits].
-  bool get hasUnappliedEdits => _hasUnappliedEdits;
+  /// True only in staged (non-live) mode. With live apply on, every edit is
+  /// pushed immediately, so there is by definition nothing "unapplied".
+  bool get hasUnappliedEdits => !liveApply && _hasUnappliedEdits;
   bool get supportsLiveApply => monitors.isLive;
   /// True when there's a snapshot to roll back to via [undo].
   bool get canUndo => _undoStack.isNotEmpty;
@@ -1387,6 +1392,7 @@ class KanshiController extends ChangeNotifier {
     _snapThreshold = s.snapDistance;
     scaleSnapping = s.scaleSnapping;
     autoRevertOnApply = s.autoRevertOnApply;
+    liveApply = s.liveApply;
     safetyNet.window = Duration(seconds: s.safetyNetSeconds);
     _revertScheduler.defaultDelay =
         Duration(seconds: s.customModeRevertSeconds);
@@ -1405,6 +1411,19 @@ class KanshiController extends ChangeNotifier {
 
   void setScaleSnapping(bool v) {
     scaleSnapping = v;
+    notifyListeners();
+  }
+
+  /// Toggle live apply at runtime. Switching ON immediately pushes the
+  /// current (possibly staged) layout to the compositor so the screen and
+  /// the GUI agree; switching OFF just starts staging future edits.
+  Future<void> setLiveApply(bool v) async {
+    if (liveApply == v) return;
+    liveApply = v;
+    if (v) {
+      _hasUnappliedEdits = false;
+      await reloadAndApply();
+    }
     notifyListeners();
   }
 
@@ -1844,6 +1863,8 @@ class KanshiController extends ChangeNotifier {
   /// looks wrong.
   Future<OpResult> pushLiveApply(MonitorTileData target) async {
     if (!monitors.isLive) return const OpResult.ok();
+    // Staged mode: hold the change in memory (+ config) until Apply.
+    if (!liveApply) return const OpResult.ok();
     if (!target.enabled) return const OpResult.ok();
     try {
       final resolved = _resolveOutputName(target.id);
