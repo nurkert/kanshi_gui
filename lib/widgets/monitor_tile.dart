@@ -398,10 +398,13 @@ class _MonitorTileState extends State<MonitorTile> {
                         bottomRight: Radius.circular(12),
                       ),
                     ),
-                    child: const Icon(
-                      Icons.open_in_full,
-                      size: 11,
-                      color: Colors.black87,
+                    child: const RotatedBox(
+                      quarterTurns: 1,
+                      child: Icon(
+                        Icons.open_in_full,
+                        size: 11,
+                        color: Colors.black87,
+                      ),
                     ),
                   ),
                 ),
