@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 /// Frosted top bar that floats over the editor canvas. Shows the active
@@ -30,14 +28,11 @@ class EditorHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
+    return Container(
           height: height,
           padding: const EdgeInsets.symmetric(horizontal: 18),
           decoration: BoxDecoration(
-            color: const Color(0xFF14171C).withValues(alpha: 0.55),
+            color: const Color(0xFF14171C).withValues(alpha: 0.92),
             border: Border(
               bottom: BorderSide(
                 color: Colors.white.withValues(alpha: 0.08),
@@ -102,9 +97,7 @@ class EditorHeader extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
+        );
   }
 }
 

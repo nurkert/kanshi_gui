@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -244,9 +243,7 @@ class _MonitorTileState extends State<MonitorTile> {
                 : null,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(14),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                child: Container(
+              child: Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
                     gradient: LinearGradient(
@@ -361,7 +358,6 @@ class _MonitorTileState extends State<MonitorTile> {
                 ),
               ),
             ),
-          ),
           if (canResize)
             Positioned(
               right: 0,
