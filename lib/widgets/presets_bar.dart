@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 /// A small frosted pill of one-click layout presets that floats at the
@@ -23,16 +21,15 @@ class PresetsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (outputIds.isEmpty) return const SizedBox.shrink();
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: Container(
+    return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: const Color(0xFF14171C).withValues(alpha: 0.7),
+            color: const Color(0xFF14171C).withValues(alpha: 0.94),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            boxShadow: const [
+              BoxShadow(color: Colors.black54, blurRadius: 12, spreadRadius: -2),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -54,9 +51,7 @@ class PresetsBar extends StatelessWidget {
                 _SingleMenu(outputIds: outputIds, onUseOnly: onUseOnly),
             ],
           ),
-        ),
-      ),
-    );
+        );
   }
 }
 
