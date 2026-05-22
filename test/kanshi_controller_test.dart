@@ -1162,11 +1162,25 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
+      c.liveApply = false; // dirty tracking only applies in staged mode
       expect(c.hasUnappliedEdits, isFalse);
       c.extendOutputs();
       expect(c.hasUnappliedEdits, isTrue);
       await c.reloadAndApply();
       expect(c.hasUnappliedEdits, isFalse);
+    });
+
+    test('live apply means nothing is ever "unapplied"', () async {
+      final cfg = _tmpConfig(tmp);
+      final fake = FakeMonitorService(
+        outputs: [_mon(id: 'A', x: 0), _mon(id: 'B', x: 1920)],
+      );
+      final c = KanshiController(monitors: fake, config: cfg);
+      await c.init();
+      expect(c.liveApply, isTrue, reason: 'live apply is the default');
+      c.extendOutputs();
+      expect(c.hasUnappliedEdits, isFalse,
+          reason: 'with live apply on, edits are applied immediately');
     });
 
     test('reloadAndApply arms the auto-revert safety net', () async {

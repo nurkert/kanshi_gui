@@ -121,6 +121,10 @@ class AppSettings {
   /// applies are routine and the countdown is intrusive; turn it on if you
   /// want the "keep these settings?" safety net for risky changes.
   bool autoRevertOnApply;
+  /// When true (the default), edits go straight to the compositor as you
+  /// make them and there is no Apply button. Turn it off to stage changes
+  /// behind an explicit Apply.
+  bool liveApply;
 
   // ── Layout & editing ───────────────────────────────────────────────────
   /// Edge/alignment snap distance in logical pixels while dragging tiles.
@@ -160,6 +164,7 @@ class AppSettings {
     this.hotplugToasts = true,
     this.profileSuggestionToasts = true,
     this.autoRevertOnApply = false,
+    this.liveApply = true,
     this.snapDistance = defaultSnapDistance,
     this.scaleSnapping = true,
     this.themeChoice = AppThemeChoice.dark,
@@ -180,6 +185,7 @@ class AppSettings {
     hotplugToasts = true;
     profileSuggestionToasts = true;
     autoRevertOnApply = false;
+    liveApply = true;
     snapDistance = defaultSnapDistance;
     scaleSnapping = true;
     themeChoice = AppThemeChoice.dark;
@@ -237,6 +243,7 @@ class AppSettings {
         profileSuggestionToasts:
             _bool(json['profileSuggestionToasts'], true),
         autoRevertOnApply: _bool(json['autoRevertOnApply'], false),
+        liveApply: _bool(json['liveApply'], true),
         snapDistance: _double(json['snapDistance'], defaultSnapDistance),
         scaleSnapping: _bool(json['scaleSnapping'], true),
         themeChoice: AppThemeChoice.fromJson(json['themeChoice']),
@@ -265,6 +272,7 @@ class AppSettings {
       'hotplugToasts': hotplugToasts,
       'profileSuggestionToasts': profileSuggestionToasts,
       'autoRevertOnApply': autoRevertOnApply,
+      'liveApply': liveApply,
       'snapDistance': snapDistance,
       'scaleSnapping': scaleSnapping,
       'themeChoice': themeChoice.jsonValue,
