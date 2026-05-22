@@ -103,6 +103,18 @@ class _SettingsPageState extends State<SettingsPage> {
               _persist();
             },
           ),
+          SwitchListTile(
+            title: const Text('Confirm layout applies (auto-revert)'),
+            subtitle: const Text(
+                'After Apply, run a countdown and roll back automatically '
+                'unless you confirm. Off by default.'),
+            value: s.autoRevertOnApply,
+            onChanged: (v) {
+              s.autoRevertOnApply = v;
+              c.autoRevertOnApply = v;
+              _persist();
+            },
+          ),
           _SliderTile(
             title: 'Safety-net countdown',
             subtitle: 'Auto-revert a risky mode/disable change after this '
