@@ -43,7 +43,7 @@ class ProfileRail extends StatelessWidget {
                     color: accent, size: 22),
                 const SizedBox(width: 10),
                 Text(
-                  'kanshi',
+                  'kanshi_gui',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.5,
@@ -239,30 +239,50 @@ class _ProfileCardState extends State<_ProfileCard> {
                             ),
                           ),
                   ),
-                  if (_editing)
-                    IconButton(
-                      icon: const Icon(Icons.check, size: 18),
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Save name',
-                      onPressed: _commitRename,
-                    )
-                  else if (showActions) ...[
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 17),
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Rename',
-                      onPressed: () => setState(() {
-                        _ctl.text = widget.name;
-                        _editing = true;
-                      }),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 17),
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Delete',
-                      onPressed: widget.onDelete,
-                    ),
-                  ],
+                  // Fixed-width trailing area so hovering (which reveals the
+                  // actions) never changes the row's size — no jitter.
+                  SizedBox(
+                    width: 72,
+                    child: _editing
+                        ? Align(
+                            alignment: Alignment.centerRight,
+                            child: IconButton(
+                              icon: const Icon(Icons.check, size: 18),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Save name',
+                              onPressed: _commitRename,
+                            ),
+                          )
+                        : Visibility(
+                            visible: showActions,
+                            maintainSize: true,
+                            maintainAnimation: true,
+                            maintainState: true,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined,
+                                      size: 17),
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'Rename',
+                                  onPressed: () => setState(() {
+                                    _ctl.text = widget.name;
+                                    _editing = true;
+                                  }),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 17),
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'Delete',
+                                  onPressed: widget.onDelete,
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
                 ],
               ),
             ),
