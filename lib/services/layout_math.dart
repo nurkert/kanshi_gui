@@ -305,6 +305,77 @@ class LayoutMath {
     return false;
   }
 
+  /// The logical (post-scale) rectangle a monitor occupies in absolute
+  /// monitor space.
+  static Rect _logicalRect(MonitorTileData m) => Rect.fromLTWH(
+        m.x,
+        m.y,
+        m.width / (m.scale == 0 ? 1.0 : m.scale),
+        m.height / (m.scale == 0 ? 1.0 : m.scale),
+      );
+
+  /// Returns the id-pairs of enabled, non-mirror monitors whose logical
+  /// rectangles overlap by more than [epsilon] on *both* axes. The epsilon
+  /// ignores the sub-pixel touching that integer-truncated positions and
+  /// 2-decimal scales routinely produce — we only care about real overlaps
+  /// (one screen sitting on top of another), not flush neighbours.
+  static List<(String, String)> findOverlaps(
+    List<MonitorTileData> mons, {
+    double epsilon = 1.0,
+  }) {
+    final live = mons
+        .where((m) => m.enabled && m.mirrorOf == null)
+        .toList(growable: false);
+    final pairs = <(String, String)>[];
+    for (var i = 0; i < live.length; i++) {
+      for (var j = i + 1; j < live.length; j++) {
+        final isect = _logicalRect(live[i]).intersect(_logicalRect(live[j]));
+        if (isect.width > epsilon && isect.height > epsilon) {
+          pairs.add((live[i].id, live[j].id));
+        }
+      }
+    }
+    return pairs;
+  }
+
+  /// True when any two enabled, non-mirror monitors meaningfully overlap.
+  static bool hasAnyOverlap(List<MonitorTileData> mons, {double epsilon = 1.0}) =>
+      findOverlaps(mons, epsilon: epsilon).isNotEmpty;
+
+  /// Returns [mons] with overlaps removed: if any enabled, non-mirror
+  /// monitors overlap, they are repacked left-to-right, flush, on a single
+  /// row at y = 0 — preserving their existing left-to-right (then
+  /// top-to-bottom) order so the result still resembles the user's intent.
+  /// Disabled and mirror-destination monitors are left untouched (the
+  /// compositor either ignores them or stacks them on a source). Idempotent:
+  /// a layout that doesn't overlap is returned unchanged, so this is safe to
+  /// run on every write.
+  ///
+  /// This is the load-bearing safety net behind "the tool must never produce
+  /// an overlapping config" — Sway happily stacks outputs that share logical
+  /// coordinates, which is exactly the "a screen landed on top of the GUI"
+  /// disaster we refuse to ship.
+  static List<MonitorTileData> resolveOverlaps(List<MonitorTileData> mons) {
+    if (!hasAnyOverlap(mons)) return mons;
+    final active = mons
+        .where((m) => m.enabled && m.mirrorOf == null)
+        .toList()
+      ..sort((a, b) {
+        final byX = a.x.compareTo(b.x);
+        if (byX != 0) return byX;
+        final byY = a.y.compareTo(b.y);
+        if (byY != 0) return byY;
+        return a.id.compareTo(b.id);
+      });
+    final repacked = <String, MonitorTileData>{};
+    var cursorX = 0.0;
+    for (final m in active) {
+      repacked[m.id] = m.copyWith(x: cursorX, y: 0);
+      cursorX += m.width / (m.scale == 0 ? 1.0 : m.scale);
+    }
+    return [for (final m in mons) repacked[m.id] ?? m];
+  }
+
   /// Projects the absolute monitor layout into [viewport] coordinates so it
   /// fits within 80 % of the viewport (centered). Returns a [DisplayLayout]
   /// with the chosen scale/offset and the projected monitor rectangles.
