@@ -93,6 +93,7 @@ void main() {
       expect(s.mirrorScaling, MirrorScaling.fit);
       expect(s.maxBackups, 10);
       expect(s.kanshiConfigPath, isNull);
+      expect(s.autoReapplyOnDrift, isFalse);
     });
 
     test('round-trips all new fields through save/load', () async {
@@ -110,6 +111,7 @@ void main() {
       s.mirrorScaling = MirrorScaling.cover;
       s.maxBackups = 42;
       s.kanshiConfigPath = '/tmp/custom/kanshi';
+      s.autoReapplyOnDrift = true;
       await s.save();
 
       final loaded = await AppSettings.load(path: p);
@@ -125,6 +127,7 @@ void main() {
       expect(loaded.mirrorScaling, MirrorScaling.cover);
       expect(loaded.maxBackups, 42);
       expect(loaded.kanshiConfigPath, '/tmp/custom/kanshi');
+      expect(loaded.autoReapplyOnDrift, isTrue);
     });
 
     test('resetToDefaults restores everything but keeps firstRunDone',

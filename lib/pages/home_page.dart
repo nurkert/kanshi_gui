@@ -610,6 +610,28 @@ class _HomePageState extends State<HomePage> {
                                   setState(() => _healthDismissed = true),
                             ),
                           ),
+                        // Layout-drift banner: surfaces the kanshi-daemon
+                        // hotplug race where live positions silently
+                        // diverge from the active profile. One-click
+                        // re-apply runs `kanshictl reload`.
+                        if (c.hasLayoutDrift)
+                          Positioned(
+                            top: EditorHeader.height +
+                                10 +
+                                (_healthWarnings.isNotEmpty &&
+                                        !_healthDismissed
+                                    ? 96
+                                    : 0),
+                            left: 16,
+                            right: 16,
+                            child: _DriftBanner(
+                              issues: c.layoutDriftIssues,
+                              onReapply: () async {
+                                _toast(await c.reapplyActiveProfile());
+                              },
+                              onDismiss: c.dismissDriftBanner,
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -793,6 +815,87 @@ class _HealthBanner extends StatelessWidget {
                     ),
                 ],
               ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Dismiss',
+              onPressed: onDismiss,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Banner that surfaces a live-vs-profile layout mismatch. Visible when
+/// the kanshi-daemon dropped a `position X,Y` directive during a hotplug
+/// re-apply and the compositor's actual layout no longer matches the GUI's
+/// expectation. One click on "Re-apply" fires `kanshictl reload`.
+class _DriftBanner extends StatelessWidget {
+  final List<String> issues;
+  final Future<void> Function() onReapply;
+  final VoidCallback onDismiss;
+  const _DriftBanner({
+    required this.issues,
+    required this.onReapply,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      color: Color.alphaBlend(
+        Colors.orange.withValues(alpha: 0.14),
+        scheme.surfaceContainerHighest,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Icon(Icons.warning_amber_rounded,
+                  color: Colors.orangeAccent, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Layout drift detected — the compositor is not showing '
+                    'the active profile.',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 4),
+                  for (final i in issues)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Text(i,
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Re-apply'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.orange.shade700,
+              ),
+              onPressed: () {
+                // ignore: discarded_futures
+                onReapply();
+              },
             ),
             IconButton(
               icon: const Icon(Icons.close, size: 18),
