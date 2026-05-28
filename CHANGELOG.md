@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.1 — 2026-05-28
+
+### Fixed
+
+- **Hotplug "layout drift" is now detected and fixable in one click.** When a
+  monitor is re-plugged, kanshi-daemon occasionally re-matches the profile
+  but silently drops a `position X,Y` directive — Sway then parks the
+  re-appearing output at its hotplug-default spot and the live layout no
+  longer matches the active profile (the GUI's preview is right, the screens
+  aren't). The controller compares the active profile against the live
+  output positions on every hotplug event and surfaces an orange banner with
+  the per-output mismatch; "Re-apply" runs `kanshictl reload` (the manual
+  fix). Tolerance 2 px to absorb scale rounding; disabled outputs and mirror
+  destinations are excluded from the check. The check is **snapshot-based**,
+  not live: dragging a tile mutates the profile coords ahead of the
+  compositor, which would otherwise flap the banner every frame; the cached
+  snapshot only refreshes when the live layout actually changes.
+- **Optional auto re-apply on drift** (Settings → Behavior, off by default):
+  fires `kanshictl reload` automatically ~1.5 s after a hotplug if the live
+  layout drifted. The banner still surfaces while we wait, so dismissing it
+  also dismisses the queued auto-reapply for that hotplug cycle.
+
 ## 1.6.0 — 2026-05-22
 
 ### Fixed

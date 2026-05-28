@@ -125,6 +125,12 @@ class AppSettings {
   /// make them and there is no Apply button. Turn it off to stage changes
   /// behind an explicit Apply.
   bool liveApply;
+  /// When true, kanshi_gui automatically fires `kanshictl reload` after a
+  /// hotplug if the live output positions drift away from the active
+  /// profile's positions. Off by default — the drift banner still shows
+  /// so the user can re-apply with one click; this flag just removes that
+  /// click.
+  bool autoReapplyOnDrift;
 
   // ── Layout & editing ───────────────────────────────────────────────────
   /// Edge/alignment snap distance in logical pixels while dragging tiles.
@@ -165,6 +171,7 @@ class AppSettings {
     this.profileSuggestionToasts = true,
     this.autoRevertOnApply = false,
     this.liveApply = true,
+    this.autoReapplyOnDrift = false,
     this.snapDistance = defaultSnapDistance,
     this.scaleSnapping = true,
     this.themeChoice = AppThemeChoice.dark,
@@ -186,6 +193,7 @@ class AppSettings {
     profileSuggestionToasts = true;
     autoRevertOnApply = false;
     liveApply = true;
+    autoReapplyOnDrift = false;
     snapDistance = defaultSnapDistance;
     scaleSnapping = true;
     themeChoice = AppThemeChoice.dark;
@@ -244,6 +252,7 @@ class AppSettings {
             _bool(json['profileSuggestionToasts'], true),
         autoRevertOnApply: _bool(json['autoRevertOnApply'], false),
         liveApply: _bool(json['liveApply'], true),
+        autoReapplyOnDrift: _bool(json['autoReapplyOnDrift'], false),
         snapDistance: _double(json['snapDistance'], defaultSnapDistance),
         scaleSnapping: _bool(json['scaleSnapping'], true),
         themeChoice: AppThemeChoice.fromJson(json['themeChoice']),
@@ -273,6 +282,7 @@ class AppSettings {
       'profileSuggestionToasts': profileSuggestionToasts,
       'autoRevertOnApply': autoRevertOnApply,
       'liveApply': liveApply,
+      'autoReapplyOnDrift': autoReapplyOnDrift,
       'snapDistance': snapDistance,
       'scaleSnapping': scaleSnapping,
       'themeChoice': themeChoice.jsonValue,

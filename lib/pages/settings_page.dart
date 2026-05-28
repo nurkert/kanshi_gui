@@ -129,6 +129,19 @@ class _SettingsPageState extends State<SettingsPage> {
                 _persist();
               },
             ),
+          SwitchListTile(
+            title: const Text('Auto re-apply on layout drift'),
+            subtitle: const Text(
+                'When a hotplug leaves the screens in the wrong position, '
+                'silently run `kanshictl reload` to put them back. Off by '
+                'default — the drift banner still offers a one-click fix.'),
+            value: s.autoReapplyOnDrift,
+            onChanged: (v) {
+              s.autoReapplyOnDrift = v;
+              c.setAutoReapplyOnDrift(v);
+              _persist();
+            },
+          ),
           _SliderTile(
             title: 'Safety-net countdown',
             subtitle: 'Auto-revert a risky mode/disable change after this '
