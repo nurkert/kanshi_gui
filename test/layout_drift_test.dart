@@ -259,6 +259,44 @@ void main() {
             'show drift');
   });
 
+  test(
+      'pushLiveApply refreshes outputs so drift surfaces when Sway auto-arranges',
+      () async {
+    // Reproduces the "Save Current + drag, but reality drifts silently"
+    // case: the user moves a tile, pushLiveApply forwards the new
+    // position to the compositor, but Sway auto-arranges around an
+    // overlap and parks the sibling output somewhere else. Without a
+    // post-apply refresh the cached _currentMonitors stays stale and
+    // the drift banner never surfaces. After the fix, pushLiveApply
+    // schedules a refreshConnectedMonitors() that pulls the real,
+    // drifted state and recomputes drift.
+    final mons = [_mon(id: 'A'), _mon(id: 'B', x: 1920)];
+    final c = await build(
+      profiles: [Profile(name: 'p', monitors: mons)],
+      live: mons,
+    );
+    expect(c.hasLayoutDrift, isFalse);
+    c.postLiveApplyDelay = Duration.zero;
+
+    // User drags B to a new position; pushLiveApply runs an `apply`,
+    // but the fake compositor never actually moves B (its outputs list
+    // stays at x=1920). After the post-apply refresh, the profile
+    // (B@5000) and the live state (B@1920) diverge — that is drift.
+    c.updateMonitor(c.activeMonitors[1].copyWith(x: 5000));
+    final res = await c.pushLiveApply(c.activeMonitors[1]);
+    expect(res.success, isTrue);
+    // Let the zero-delay Timer fire and refreshConnectedMonitors complete.
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(c.hasLayoutDrift, isTrue,
+        reason:
+            'pushLiveApply must refresh outputs so drift between profile '
+            'and live state surfaces immediately');
+    expect(c.layoutDriftIssues, hasLength(1));
+    expect(c.layoutDriftIssues.first, contains('B'));
+  });
+
   test('hotplug clears a prior dismissal so a new drift surfaces',
       () async {
     final profileMons = [_mon(id: 'A'), _mon(id: 'B', x: 1920)];
