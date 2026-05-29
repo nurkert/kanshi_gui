@@ -183,6 +183,14 @@ class KanshiController extends ChangeNotifier {
   /// the body re-checks `hasLayoutDrift` at fire time so a drift that
   /// resolved itself in the meantime doesn't trigger a redundant reload.
   Timer? _driftAutoReapplyTimer;
+  Timer? _liveApplyRefreshTimer;
+  /// Settle window after a [pushLiveApply] before we re-read Sway's outputs.
+  /// Sway can silently auto-arrange around the just-applied output (e.g.
+  /// shift a sibling rightwards to resolve an overlap), so we wait briefly
+  /// and then refresh `_currentMonitors` — that in turn recomputes drift
+  /// and surfaces the banner if the live layout no longer matches the
+  /// profile. Tests override this with [Duration.zero].
+  Duration postLiveApplyDelay = const Duration(milliseconds: 200);
 
   /// How long the identify-display number banners stay on screen.
   Duration identifyBannerDuration = const Duration(seconds: 3);
@@ -558,6 +566,7 @@ class KanshiController extends ChangeNotifier {
     _isDisposed = true;
     _saveTimer?.cancel();
     _driftAutoReapplyTimer?.cancel();
+    _liveApplyRefreshTimer?.cancel();
     _revertScheduler.cancelAll();
     safetyNet.cancelAll();
     _outputSubscription?.cancel();
@@ -1899,10 +1908,26 @@ class KanshiController extends ChangeNotifier {
       if (r.exitCode != 0) {
         return OpResult.err('Live apply failed: ${r.stderr}');
       }
+      _scheduleLiveApplyRefresh();
       return const OpResult.ok();
     } catch (e) {
       return OpResult.err('Live apply error: $e');
     }
+  }
+
+  /// Schedules a `refreshConnectedMonitors()` shortly after a live-apply so
+  /// the cached `_currentMonitors` — and the drift banner that depends on
+  /// it — track Sway's actual post-apply state. Without this, an apply
+  /// that succeeds but gets auto-arranged by the compositor leaves a stale
+  /// snapshot in memory and the drift banner never surfaces.
+  void _scheduleLiveApplyRefresh() {
+    _liveApplyRefreshTimer?.cancel();
+    _liveApplyRefreshTimer = Timer(postLiveApplyDelay, () {
+      if (_isDisposed) return;
+      // Best-effort; refreshConnectedMonitors swallows its own errors.
+      // ignore: discarded_futures
+      refreshConnectedMonitors();
+    });
   }
 
   /// True if the active profile would have zero enabled outputs after
