@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.2 — 2026-05-29
+
+### Fixed
+
+- **Drift banner now surfaces after a drag, not just on hotplug.** 1.6.1 only
+  recomputed drift on hotplug events / explicit reloads, so a drag whose live
+  apply succeeded at the IPC level but got silently auto-arranged by Sway
+  (e.g. a sibling shifted to resolve an overlap) left the cached output
+  snapshot stale and the banner never appeared. `pushLiveApply` now
+  schedules a `refreshConnectedMonitors()` ~200 ms after the apply returns,
+  which re-reads Sway's actual post-apply state and recomputes drift.
+
 ## 1.6.1 — 2026-05-28
 
 ### Fixed
