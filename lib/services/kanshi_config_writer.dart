@@ -78,6 +78,16 @@ class KanshiWriteOptions {
 class KanshiConfigWriter {
   KanshiConfigWriter._();
 
+  /// Escapes a profile name for the single-quoted `profile '<name>' {` form.
+  ///
+  /// Before this, the name went in raw: a profile called "Nico's Desk"
+  /// produced `profile 'Nico's Desk' {`, which kanshi refuses to parse. The
+  /// daemon then stops managing displays altogether and the GUI can no
+  /// longer read its own profiles back — from one apostrophe in a rename
+  /// box. [KanshiConfigParser] performs the inverse.
+  static String escapeProfileName(String name) =>
+      name.replaceAll('\\', r'\\').replaceAll("'", r"\'");
+
   static String render(
     List<Profile> profiles, {
     KanshiWriteOptions options = KanshiWriteOptions.neutral,
@@ -121,7 +131,7 @@ class KanshiConfigWriter {
     // layout passes through untouched.
     final mons = LayoutMath.resolveOverlaps(sanitized);
 
-    buffer.writeln("profile '${profile.name}' {");
+    buffer.writeln("profile '${escapeProfileName(profile.name)}' {");
 
     for (final m in mons) {
       if (!m.enabled) {
@@ -310,9 +320,23 @@ class KanshiConfigWriter {
     List<MonitorMode> modes,
   ) {
     if (modes.isEmpty) {
+      // MonitorTileData.width/height carry the ROTATED extent — both the
+      // parser (kanshi_config_parser.dart) and the backends swap them for a
+      // 90/270 transform. A MonitorMode is a PHYSICAL panel mode, so the
+      // fallback has to swap back.
+      //
+      // Without this, a rotated output whose modes list is empty — which is
+      // every output loaded from the config file, since the config carries
+      // no mode list — had its rotated extent returned as if it were a
+      // physical mode. _sanitizeMonitor then transposed it once and the
+      // render line transposed it a second time, so `transform 270` with
+      // `mode 1920x1080` was written back as `mode 1080x1920`, and the save
+      // after that flipped it again. The mode oscillated on every save and
+      // every second save asked the panel for a resolution it does not have.
+      final landscape = monitor.rotation % 180 == 0;
       return MonitorMode(
-        width: monitor.width,
-        height: monitor.height,
+        width: landscape ? monitor.width : monitor.height,
+        height: landscape ? monitor.height : monitor.width,
         refresh: monitor.refresh > 0 ? monitor.refresh : 60,
       );
     }

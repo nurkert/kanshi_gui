@@ -81,6 +81,7 @@ class ProfileRail extends StatelessWidget {
                         SnackBar(content: Text(r.message!)),
                       );
                     }
+                    return r.success;
                   },
                   onDelete: () => controller.deleteProfile(i),
                 );
@@ -134,7 +135,10 @@ class _ProfileCard extends StatefulWidget {
   final Color accent;
   final ProfileMatchInfo? matchInfo;
   final VoidCallback onSelect;
-  final ValueChanged<String> onRename;
+  /// Returns true when the rename was accepted. A rejected name (empty, a
+  /// duplicate, one containing braces or control characters) keeps the field
+  /// open so the user can correct it instead of silently losing the edit.
+  final bool Function(String newName) onRename;
   final VoidCallback onDelete;
 
   const _ProfileCard({
@@ -165,7 +169,7 @@ class _ProfileCardState extends State<_ProfileCard> {
   }
 
   void _commitRename() {
-    widget.onRename(_ctl.text.trim());
+    if (!widget.onRename(_ctl.text.trim())) return;
     setState(() => _editing = false);
   }
 

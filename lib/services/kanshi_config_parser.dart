@@ -369,12 +369,35 @@ class KanshiConfigParser {
   /// next line). Returns the (un-quoted) name or `null` when the line is not
   /// a profile header.
   static String? _matchProfileHeader(String line) {
+    // `(?:[^'\\]|\\.)*` so an escaped apostrophe does not terminate the
+    // name — the inverse of [KanshiConfigWriter.escapeProfileName].
     final quoted =
-        RegExp(r"^profile\s+'([^']+)'\s*\{?\s*$").firstMatch(line);
-    if (quoted != null) return quoted.group(1)!.trim();
+        RegExp(r"^profile\s+'((?:[^'\\]|\\.)*)'\s*\{?\s*$").firstMatch(line);
+    if (quoted != null) return _unescapeProfileName(quoted.group(1)!).trim();
     final bare = RegExp(r'^profile\s+([^\s{]+)\s*\{?\s*$').firstMatch(line);
     if (bare != null) return bare.group(1)!.trim();
     return null;
+  }
+
+  /// Inverse of [KanshiConfigWriter.escapeProfileName]: turns `\'` back into
+  /// `'` and `\\` back into `\`. A backslash before anything else is kept
+  /// verbatim, so a hand-written name is never mangled by this.
+  static String _unescapeProfileName(String raw) {
+    if (!raw.contains(r'\')) return raw;
+    final out = StringBuffer();
+    for (var i = 0; i < raw.length; i++) {
+      final ch = raw[i];
+      if (ch == r'\' && i + 1 < raw.length) {
+        final next = raw[i + 1];
+        if (next == r'\' || next == "'") {
+          out.write(next);
+          i++;
+          continue;
+        }
+      }
+      out.write(ch);
+    }
+    return out.toString();
   }
 
   static List<MonitorTileData> _parseOutputs(String block) {
