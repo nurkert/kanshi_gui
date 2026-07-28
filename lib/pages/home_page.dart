@@ -104,23 +104,16 @@ class _HomePageState extends State<HomePage> {
     // via the settings menu takes effect on the next event without any
     // re-wiring.
     c.autoSwitchProfileEnabled = () => widget.settings.autoSwitchProfile;
-    c.onConfigSaveBlocked = () {
+    c.onConfigSaveBlocked = (reason) {
       if (!mounted) return;
-      // Persistent SnackBar: the user needs to know that their edits
-      // are NOT landing on disk because their kanshi config uses
-      // `include` directives. Auto-dismissing this would leave them
-      // wondering why their layout reverts after the next launch.
-      // No action button — only the user fixing their config (or the
-      // GUI relaunching) clears it.
+      // Persistent SnackBar: the user needs to know that their edits are NOT
+      // landing on disk. Auto-dismissing this would leave them wondering why
+      // their layout reverts after the next launch. No action button — only
+      // the user fixing their config (or the GUI relaunching) clears it.
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(days: 1),
-          content: const Text(
-            "Your kanshi config uses `include` directives. The GUI "
-            "will not save to avoid orphaning profiles in the "
-            "included files. Move profiles into the main config to "
-            "re-enable saving.",
-          ),
+          content: Text(reason),
         ),
       );
     };
@@ -174,14 +167,15 @@ class _HomePageState extends State<HomePage> {
     } else {
       _wlMirrorAvailable = false;
     }
-    // If the controller's `init()` already detected `include`
-    // directives in the user's kanshi config, fire the warning toast
-    // once on first frame. Without this, the user would only learn
-    // their saves are blocked on their first attempted edit.
-    if (c.configHasIncludes) {
+    // If the controller's `init()` already found a reason saving is refused —
+    // `include` directives, or syntax the parser did not model — say so on
+    // the first frame. Without this the user would only learn their saves are
+    // blocked on their first attempted edit.
+    final blocked = c.saveBlockedReason;
+    if (blocked != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        c.onConfigSaveBlocked?.call();
+        c.onConfigSaveBlocked?.call(blocked);
       });
     }
     // Environment health probe (kanshi present/running, wl-mirror) — surface
