@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/tokens.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/widgets/identify_overlay.dart';
@@ -178,14 +180,16 @@ class _MonitorTileState extends State<MonitorTile> {
     // the fill is now a translucent dark glass merely *tinted* with it, so
     // the canvas reads calm instead of a wall of saturated blocks.
     const mirrorColor = Color(0xFF4FC3F7);
+    // Semantic, from the tokens. Previously three hardcoded hexes and white
+    // text, which is why the light theme reached about a third of the app:
+    // the tile stayed dark whatever the setting said.
+    final c = context.colors;
     final statusColor = !isEnabled
-        ? const Color(0xFF8A8F98)
+        ? c.textTertiary
         : hasMirrorAccent
             ? mirrorColor
-            : (widget.exists
-                ? const Color(0xFF34D399)
-                : const Color(0xFFF87171));
-    final textColor = isEnabled ? Colors.white : Colors.white70;
+            : (widget.exists ? c.ok : c.danger);
+    final textColor = isEnabled ? c.textPrimary : c.textSecondary;
     final canDrag = isEnabled && !isMirrorDestination;
     final canResize = canDrag;
     final canChangeMode = canDrag;
@@ -242,31 +246,28 @@ class _MonitorTileState extends State<MonitorTile> {
                   }
                 : null,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: R.screenR,
               child: Container(
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        statusColor.withValues(alpha: isEnabled ? 0.22 : 0.14),
-                        statusColor.withValues(alpha: 0.06),
-                      ],
-                    ),
+                    borderRadius: R.screenR,
+                    // A flat surface, not a saturated status wall. The tile
+                    // represents a screen; colouring the whole rectangle by
+                    // state made every screen shout its state at the same
+                    // volume and left nothing for the state that matters.
+                    // State reads from the border and the dot instead.
+                    color: !isEnabled
+                        ? c.screenFillOff
+                        : (widget.isSelected
+                            ? c.screenFillSelected
+                            : c.screenFill),
                     border: Border.all(
-                      color: statusColor.withValues(
-                          alpha: widget.isSelected ? 1.0 : 0.9),
-                      width: widget.isSelected ? 2.5 : 1.5,
+                      color: widget.isSelected
+                          ? c.accent
+                          : (isEnabled ? c.hairlineStrong : c.hairline),
+                      width: widget.isSelected
+                          ? Borders.ring
+                          : Borders.hairline,
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: statusColor.withValues(
-                            alpha: widget.isSelected ? 0.5 : 0.28),
-                        blurRadius: widget.isSelected ? 26 : 18,
-                        spreadRadius: widget.isSelected ? 0 : -4,
-                      ),
-                    ],
                   ),
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 10),
