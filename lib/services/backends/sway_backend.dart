@@ -7,6 +7,7 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/kanshi_daemon.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
 
 /// MonitorService implementation backed by `swaymsg` (Sway compositor).
@@ -369,37 +370,11 @@ class SwayBackend implements MonitorService {
   }
 
   @override
-  Future<ProcessResult> restartCompositorProfileApply() async {
-    // Prefer kanshictl if available — it asks the running kanshi to reload
-    // its config without a full process restart, avoiding screen flicker.
-    if (await _runner.exists('kanshictl')) {
-      final pgrep = await _runner.run('pgrep', ['-x', 'kanshi']);
-      if (pgrep.exitCode == 0) {
-        final r = await _runner.run('kanshictl', ['reload']);
-        if (r.exitCode == 0) return r;
-        // Fall through to systemd / pkill on failure.
-      }
-    }
-    // Prefer the systemd user unit if it's active.
-    final check = await _runner.run('systemctl', [
-      '--user',
-      'is-active',
-      '--quiet',
-      'kanshi.service',
-    ]);
-    if (check.exitCode == 0) {
-      return _runner
-          .run('systemctl', ['--user', 'restart', 'kanshi.service']);
-    }
-    // Fallback: kill + setsid restart, with a brief settle delay.
-    return _runner.run('bash', [
-      '-c',
-      'pkill -x kanshi; for i in 1 2 3 4 5; do '
-          'pgrep -x kanshi >/dev/null || break; sleep 0.1; done; '
-          'setsid kanshi -c \$HOME/.config/kanshi/config '
-          '>/tmp/kanshi_gui.log 2>&1 &'
-    ]);
-  }
+  /// Delegates to [KanshiDaemon]: reloading kanshi has nothing to do with
+  /// which compositor is underneath, and this chain used to be duplicated
+  /// verbatim across two backends.
+  Future<ProcessResult> restartCompositorProfileApply() =>
+      KanshiDaemon(_runner).reload();
 
   /// Returns the mode in [m.modes] that matches the tile's nominal
   /// (unrotated) width/height/refresh — or null if none match. Prefer this
