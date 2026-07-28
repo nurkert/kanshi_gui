@@ -2026,6 +2026,26 @@ class KanshiController extends ChangeNotifier {
   /// computed on read.
   List<String> get layoutDriftIssues => _drift.issues;
 
+  /// The live outputs that are not where the active setup says they should
+  /// be, so the canvas can draw them where they actually are instead of
+  /// describing the difference in a sentence.
+  List<MonitorTileData> get driftedLiveOutputs {
+    if (!hasLayoutDrift) return const [];
+    final profile = activeProfile;
+    if (profile == null) return const [];
+    final wanted = {
+      for (final m in profile.monitors)
+        if (m.enabled && m.mirrorOf == null) m.id: m,
+    };
+    return [
+      for (final live in _currentMonitors)
+        if (wanted[live.id] case final want?)
+          if ((want.x - live.x).abs() > DriftMonitor.tolerance ||
+              (want.y - live.y).abs() > DriftMonitor.tolerance)
+            live,
+    ];
+  }
+
   void _recomputeDriftIssues() => _drift.recompute(
         isLive: monitors.isLive,
         activeProfile: activeProfile,
