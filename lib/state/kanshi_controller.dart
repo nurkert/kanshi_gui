@@ -16,6 +16,7 @@ import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/state/app_status.dart';
+import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 import 'package:kanshi_gui/state/save_coordinator.dart';
@@ -61,7 +62,12 @@ class KanshiController extends ChangeNotifier {
   double get snapThreshold => _snapThreshold;
 
   List<Profile> _profiles = [];
-  List<MonitorTileData> _currentMonitors = [];
+  late final LiveOutputs _live = LiveOutputs(monitors);
+
+  /// The connected hardware, owned by [LiveOutputs]. Read-only here on
+  /// purpose: this used to be assignable from four places, which is how the
+  /// auto-created setup ended up aliasing it and blinding drift detection.
+  List<MonitorTileData> get _currentMonitors => _live.current;
   int? _activeProfileIndex;
   bool _isApplyingBatch = false;
   /// True when the active layout has edits that haven't been pushed to the
@@ -136,7 +142,6 @@ class KanshiController extends ChangeNotifier {
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
   final Map<String, double> _lastSnappedScale = {};
   List<SnapLine> _activeSnapLines = const [];
-  StreamSubscription<List<MonitorTileData>>? _outputSubscription;
   void Function(String message)? onHotplugToast;
   /// Fired after a hotplug event when the connected output set matches a
   /// non-active profile better than the currently active one (confidence
@@ -598,38 +603,21 @@ class KanshiController extends ChangeNotifier {
   /// window are coalesced, and once the set holds still the pipeline runs once
   /// more against the complete set. Responsiveness is kept; the final state is
   /// computed from the whole picture.
-  Duration hotplugSettleWindow = const Duration(milliseconds: 400);
-  Timer? _hotplugSettleTimer;
-  List<MonitorTileData>? _latestOutputs;
+  /// Forwarded to [LiveOutputs.settleWindow]; see there for why a dock salvo
+  /// must not run the pipeline once per event.
+  Duration get hotplugSettleWindow => _live.settleWindow;
+  set hotplugSettleWindow(Duration v) => _live.settleWindow = v;
 
   void _subscribeHotplug() {
-    if (!monitors.isLive) return;
-    _outputSubscription = monitors.watchOutputs().listen((newOutputs) {
+    _live.subscribe((change) {
       if (_isDisposed) return;
-      _latestOutputs = newOutputs;
-      final midBurst = _hotplugSettleTimer?.isActive ?? false;
-      if (!midBurst) _handleOutputsChanged(newOutputs);
-      _hotplugSettleTimer?.cancel();
-      if (hotplugSettleWindow > Duration.zero) {
-        _hotplugSettleTimer = Timer(hotplugSettleWindow, () {
-          final settled = _latestOutputs;
-          _latestOutputs = null;
-          if (settled == null || _isDisposed) return;
-          // Nothing moved on from what the leading edge already handled.
-          final settledIds = settled.map((m) => m.id).toSet();
-          final handledIds = _currentMonitors.map((m) => m.id).toSet();
-          if (settledIds.length == handledIds.length &&
-              settledIds.containsAll(handledIds)) {
-            return;
-          }
-          _handleOutputsChanged(settled);
-        });
-      }
+      _handleOutputsChanged(change);
     });
   }
 
-  void _handleOutputsChanged(List<MonitorTileData> newOutputs) {
+  void _handleOutputsChanged(OutputsChanged change) {
     {
+      final newOutputs = change.outputs;
       // Cancelling the subscription does NOT abort an in-flight handler;
       // the body must self-guard so a hotplug event delivered between
       // `dispose()` setting the flag and the runtime tearing the
@@ -637,11 +625,8 @@ class KanshiController extends ChangeNotifier {
       // controller (debug assertion) or fire callbacks against widgets
       // that have already detached.
       if (_isDisposed) return;
-      final oldIds = _currentMonitors.map((m) => m.id).toSet();
-      final newIds = newOutputs.map((m) => m.id).toSet();
-      final added = newIds.difference(oldIds);
-      final removed = oldIds.difference(newIds);
-      _currentMonitors = newOutputs;
+      final added = change.added;
+      final removed = change.removed;
       // Any in-flight drag becomes invalid the moment the connected set
       // changes — the layout it started in is no longer the layout it
       // would commit into. Cancel via the epoch token; the cancel helper
@@ -710,12 +695,11 @@ class KanshiController extends ChangeNotifier {
     // before touching the post-dispose controller.
     _isDisposed = true;
     _saves.dispose();
-    _hotplugSettleTimer?.cancel();
     _driftAutoReapplyTimer?.cancel();
     _liveApplyRefreshTimer?.cancel();
     _revertScheduler.cancelAll();
     safetyNet.cancelAll();
-    _outputSubscription?.cancel();
+    _live.dispose();
     _identifyTimer?.cancel();
     _killIdentifyBanners();
     _killSafetyPrompts();
@@ -734,20 +718,10 @@ class KanshiController extends ChangeNotifier {
   }
 
   Future<void> refreshConnectedMonitors() async {
-    if (!monitors.isLive) {
-      _currentMonitors = [];
-      _recomputeDriftIssues();
-      notifyListeners();
-      return;
-    }
-    try {
-      _currentMonitors = await monitors.getOutputs();
-      _rehydrateProfilesAgainst(_currentMonitors);
-      _recomputeDriftIssues();
-      notifyListeners();
-    } catch (e) {
-      debugPrint('refreshConnectedMonitors failed: $e');
-    }
+    if (!await _live.refresh()) return;
+    _rehydrateProfilesAgainst(_currentMonitors);
+    _recomputeDriftIssues();
+    notifyListeners();
   }
 
   /// Walks every profile and refreshes the per-monitor `id`, `manufacturer`,
