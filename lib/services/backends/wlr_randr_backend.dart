@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -52,6 +53,8 @@ class WlrRandrBackend implements MonitorService {
     final serial = (output['serial'] ?? '').toString().trim();
     final fullName =
         '$make $model $serial'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final descriptor =
+        composeKanshiDescriptor(make: make, model: model, serial: serial);
     final enabled = output['enabled'] == true;
 
     final modesRaw = (output['modes'] as List?)?.cast<Map<String, dynamic>>()
@@ -94,6 +97,7 @@ class WlrRandrBackend implements MonitorService {
     return MonitorTileData(
       id: name.isNotEmpty ? name : fullName,
       manufacturer: fullName.isNotEmpty ? fullName : name,
+      edidDescriptor: descriptor ?? '',
       x: (position['x'] as num).toDouble(),
       y: (position['y'] as num).toDouble(),
       width: width,

@@ -587,6 +587,9 @@ void main() {
       c.createProfileFromCurrentSetup();
       await c.setMirror('B', 'A');
       expect(mr.activeDestinations, contains('B'));
+      // Unplug and replug are two deliberate, separate events here, not one
+      // dock salvo, so switch the settle barrier off for this test.
+      c.hotplugSettleWindow = Duration.zero;
       // B unplugs.
       fake.emitOutputs([_mon(id: 'A', x: 0, y: 0)]);
       await Future<void>.delayed(Duration.zero);

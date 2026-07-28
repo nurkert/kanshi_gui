@@ -176,6 +176,9 @@ void main() {
         ],
       );
       c.autoSwitchProfileEnabled = () => true;
+      // Two deliberate, separate hotplugs — not one dock salvo — so the
+      // settle barrier that coalesces bursts is off for this test.
+      c.hotplugSettleWindow = Duration.zero;
       final fake = c.monitors as FakeMonitorService;
       // First hotplug: auto-switch into 'desk'.
       fake.emitOutputs([_mon(id: 'A'), _mon(id: 'B', x: 1920)]);

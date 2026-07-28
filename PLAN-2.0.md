@@ -623,10 +623,13 @@ Diese kann nur der Maintainer treffen.
 
 - **O1 — Das Wort.** „Setup" (meine Empfehlung: deckt „Nur Laptop" ab, übersetzt sauber, und
   verspricht nichts Geografisches) oder „Ort" (wärmer, aber falsch für Laptop- und Zugfälle)?
-- **O2 — Migration bestehender Configs auf EDID.** Still mit Backup und einer Notizzeile
-  (schnell, entspricht „it just works"), oder ein einmaliger „Das würde ich ändern"-Diff zum
-  Bestätigen (sicherer — es ist die eine Datei, die darüber entscheidet, ob beim nächsten
-  Login ein Bild da ist)?
+- ~~**O2 — Migration bestehender Configs auf EDID.**~~ **Entschieden in M3: evidenzbasiert und
+  schrittweise.** Eine EDID-Kennung wird ausschließlich geschrieben, wenn ein Backend sie
+  tatsächlich gemeldet hat — nie aus der gespeicherten Anzeigebezeichnung erraten. Das ist
+  wichtig, weil die Anzeigebezeichnung das von kanshi geforderte `Unknown` weglässt und eine
+  daraus abgeleitete Kennung nie matchen würde. Ein Profil für Hardware, die gerade nicht
+  angeschlossen ist, behält also seinen Portnamen, bis du wieder an diesem Schreibtisch
+  sitzt. Kein Big-Bang-Rewrite der Datei, keine Rückfrage nötig.
 - **O3 — Default-Theme für Bestandsnutzer.** Bei Dunkel bleiben oder beim Upgrade auf System
   wechseln? Neuinstallationen bekommen so oder so System.
 - **O4 — Setups, die sich um genau einen Bildschirm unterscheiden** (die klassische
