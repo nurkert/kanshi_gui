@@ -19,6 +19,7 @@ import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
+import 'package:kanshi_gui/state/drag_sessions.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 import 'package:kanshi_gui/state/save_coordinator.dart';
 import 'package:kanshi_gui/state/workspace_placement.dart';
@@ -64,6 +65,8 @@ class KanshiController extends ChangeNotifier {
   double get snapThreshold => _snapThreshold;
 
   List<Profile> _profiles = [];
+  late final DragSessions _drags = DragSessions()
+    ..onChanged = notifyListeners;
   late final LiveOutputs _live = LiveOutputs(monitors);
   late final WorkspacePlacement _workspaces = WorkspacePlacement(monitors);
 
@@ -143,8 +146,7 @@ class KanshiController extends ChangeNotifier {
   String? get saveBlockedReason => _saves.blockedReason;
 
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
-  final Map<String, double> _lastSnappedScale = {};
-  List<SnapLine> _activeSnapLines = const [];
+
   void Function(String message)? onHotplugToast;
   /// Fired after a hotplug event when the connected output set matches a
   /// non-active profile better than the currently active one (confidence
@@ -191,25 +193,17 @@ class KanshiController extends ChangeNotifier {
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
   final List<ProcessStream> _identifyBanners = [];
-  final Map<String, _DragSession> _dragSessions = {};
-  static const _alignmentEscapeLimit = 2;
-  Rect? _pinnedLayoutBounds;
   /// Monotonically increasing token bumped whenever in-flight drag state
   /// is invalidated (hotplug clearing sessions, profile switch, etc.).
   /// Tiles snapshot this on `beginDragSession` and treat any later
   /// `onPanUpdate` / `onPanEnd` whose snapshot doesn't match the current
   /// epoch as stale — they snap back instead of writing into a session
   /// the controller has already torn down.
-  int _dragCancelEpoch = 0;
 
   /// Scale values the slider rasters onto on release. Chosen for real-world
   /// HiDPI scenarios; intentionally excludes integer scales > 3 because
   /// they are essentially never useful and would create the "I can't get
   /// off 1.0" trap if every integer were a magnet.
-  static const _scaleSnapValues = <double>[
-    1.0, 1.25, 1.333, 1.5, 1.75, 2.0, 2.5, 3.0,
-  ];
-  static const _scaleSnapTolerance = 0.03;
 
   /// User opt-in for the Sway workspace distribution. `null` means the
   /// feature is off; a non-null value also picks how workspaces are spread
@@ -294,7 +288,7 @@ class KanshiController extends ChangeNotifier {
   /// mismatch means an external event (hotplug, profile switch) tore
   /// down the drag and the gesture should be aborted to its start
   /// position.
-  int get dragCancelEpoch => _dragCancelEpoch;
+  int get dragCancelEpoch => _drags.cancelEpoch;
   List<Profile> get profiles => List.unmodifiable(_profiles);
   List<MonitorTileData> get currentMonitors =>
       List.unmodifiable(_currentMonitors);
@@ -318,7 +312,7 @@ class KanshiController extends ChangeNotifier {
   String? get nextUndoLabel => _history.nextUndoLabel;
   String? get nextRedoLabel => _history.nextRedoLabel;
   bool get supportsMirror => monitors.supportsMirror;
-  List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
+  List<SnapLine> get activeSnapLines => _drags.activeSnapLines;
 
   /// Backend capability: can this compositor distribute workspaces via the
   /// Sway exec chain at all? True only for the Sway backend (wlr-randr /
@@ -354,7 +348,7 @@ class KanshiController extends ChangeNotifier {
   /// would shift `minX`/`minY` every frame, causing the entire layout —
   /// including non-dragged tiles — to reflow under the cursor and produce
   /// "duplicate" / overlapping ghost imprints.
-  Rect? get pinnedLayoutBounds => _pinnedLayoutBounds;
+  Rect? get pinnedLayoutBounds => _drags.pinnedBounds;
   Map<String, int> get identifyNumbers =>
       Map.unmodifiable(_identifyNumbers);
   bool get isIdentifying => _identifyNumbers.isNotEmpty;
@@ -1054,7 +1048,6 @@ class KanshiController extends ChangeNotifier {
       overrides:
           rollbackTo != null ? {dragged.id: rollbackTo} : null,
     );
-    final session = _dragSessions[dragged.id];
     // Only enabled, non-mirrored monitors are real snap / overlap
     // targets — disabled tiles and mirror tiles are rendered parked
     // beside the active cluster, not at their stored coordinates, so
@@ -1063,15 +1056,7 @@ class KanshiController extends ChangeNotifier {
     final activeOnly =
         mons.where((m) => m.enabled && m.mirrorOf == null).toList();
     final activeIdx = activeOnly.indexWhere((m) => m.id == dragged.id);
-    final result = LayoutMath.snapToEdges(
-      mons[idx],
-      activeOnly,
-      snapThreshold,
-      yAlignmentEnabled:
-          (session?.yEscapeCount ?? 0) < _alignmentEscapeLimit,
-      xAlignmentEnabled:
-          (session?.xEscapeCount ?? 0) < _alignmentEscapeLimit,
-    );
+    final result = _drags.commitSnap(mons[idx], activeOnly, snapThreshold);
     mons[idx] = result.tile;
     activeOnly[activeIdx] = result.tile;
     if (LayoutMath.hasOverlap(result.tile, activeOnly, activeIdx) &&
@@ -1080,7 +1065,7 @@ class KanshiController extends ChangeNotifier {
     }
     _profiles[_activeProfileIndex!] =
         Profile(name: _profiles[_activeProfileIndex!].name, monitors: mons);
-    _activeSnapLines = const [];
+    _drags.clearPreview();
     _scheduleSave();
     notifyListeners();
   }
@@ -1099,22 +1084,16 @@ class KanshiController extends ChangeNotifier {
   /// snapshot captures the tile state at drag-start so a cancellation
   /// can restore the profile to what it was before the drag began.
   int beginDragSession(String id, [MonitorTileData? rollback]) {
-    _dragSessions[id] = _DragSession()..rollbackOrigin = rollback;
-    if (_activeProfileIndex != null) {
-      // Pin against the truly-independent active cluster only — mirror
-      // tiles and disabled ones are parked, so pinning a bounding box
-      // that includes them would freeze the canvas around phantom
-      // positions.
-      final mons = _profiles[_activeProfileIndex!]
-          .monitors
-          .where((m) => m.enabled && m.mirrorOf == null)
-          .toList();
-      if (mons.isNotEmpty) {
-        _pinnedLayoutBounds = LayoutMath.boundingBox(mons);
-        notifyListeners();
-      }
-    }
-    return _dragCancelEpoch;
+    // Pin against the truly-independent active cluster only — mirror tiles
+    // and disabled ones are parked, so a bounding box that included them
+    // would freeze the canvas around phantom positions.
+    final cluster = _activeProfileIndex == null
+        ? const <MonitorTileData>[]
+        : _profiles[_activeProfileIndex!]
+            .monitors
+            .where((m) => m.enabled && m.mirrorOf == null)
+            .toList();
+    return _drags.begin(id, rollback, cluster);
   }
 
   /// Cancel every in-flight drag session: roll the profile back to each
@@ -1123,40 +1102,28 @@ class KanshiController extends ChangeNotifier {
   /// mid-gesture detects the invalidation and snaps back. No-op when
   /// there are no active sessions and no pinned bounds.
   void _cancelInFlightDrags() {
-    if (_dragSessions.isEmpty && _pinnedLayoutBounds == null) return;
-    if (_activeProfileIndex != null) {
-      final mons = [..._profiles[_activeProfileIndex!].monitors];
-      var dirty = false;
-      for (final entry in _dragSessions.entries) {
-        final rollback = entry.value.rollbackOrigin;
-        if (rollback == null) continue;
-        final idx = mons.indexWhere((m) => m.id == entry.key);
-        if (idx == -1) continue;
-        mons[idx] = rollback;
-        dirty = true;
-      }
-      if (dirty) {
-        _profiles[_activeProfileIndex!] = Profile(
-          name: _profiles[_activeProfileIndex!].name,
-          monitors: mons,
-        );
-      }
+    final rollbacks = _drags.cancelAll();
+    if (rollbacks.isEmpty || _activeProfileIndex == null) return;
+    final mons = [..._profiles[_activeProfileIndex!].monitors];
+    var dirty = false;
+    rollbacks.forEach((id, origin) {
+      final idx = mons.indexWhere((m) => m.id == id);
+      if (idx == -1) return;
+      mons[idx] = origin;
+      dirty = true;
+    });
+    if (dirty) {
+      _profiles[_activeProfileIndex!] = Profile(
+        name: _profiles[_activeProfileIndex!].name,
+        monitors: mons,
+      );
     }
-    _dragSessions.clear();
-    _pinnedLayoutBounds = null;
-    _dragCancelEpoch++;
   }
 
   /// UI calls this when the drag ends (mouse up). Clears the session so the
   /// next grab is fresh and releases the layout pin so the canvas reflows
   /// to the post-drag state.
-  void endDragSession(String id) {
-    _dragSessions.remove(id);
-    if (_pinnedLayoutBounds != null) {
-      _pinnedLayoutBounds = null;
-      notifyListeners();
-    }
-  }
+  void endDragSession(String id) => _drags.end(id);
 
   /// Computes the snap result for [dragged] without mutating any state and
   /// publishes the active snap lines so the UI can render guide lines while
@@ -1165,97 +1132,23 @@ class KanshiController extends ChangeNotifier {
   /// session, that axis's alignment magnet stays off until the next grab.
   void previewSnap(MonitorTileData dragged) {
     if (_activeProfileIndex == null) {
-      if (_activeSnapLines.isNotEmpty) {
-        _activeSnapLines = const [];
-        notifyListeners();
-      }
+      _drags.clearPreview();
       return;
     }
-    final mons = _profiles[_activeProfileIndex!]
-        .monitors
-        .where((m) => m.enabled && m.mirrorOf == null)
-        .toList();
-    final session = _dragSessions[dragged.id];
-    final result = LayoutMath.snapToEdges(
+    _drags.previewSnap(
       dragged,
-      mons,
+      _profiles[_activeProfileIndex!]
+          .monitors
+          .where((m) => m.enabled && m.mirrorOf == null)
+          .toList(),
       snapThreshold,
-      yAlignmentEnabled:
-          (session?.yEscapeCount ?? 0) < _alignmentEscapeLimit,
-      xAlignmentEnabled:
-          (session?.xEscapeCount ?? 0) < _alignmentEscapeLimit,
     );
-
-    if (session != null) {
-      // A *transition* from "y-alignment was applied" → "no longer applied
-      // even though the corresponding edge is still snapped" counts as
-      // the user pulling out of the alignment.
-      if (session.lastYAlignmentApplied &&
-          !result.yAlignmentApplied &&
-          result.xEdgeSnapped) {
-        session.yEscapeCount++;
-      }
-      if (session.lastXAlignmentApplied &&
-          !result.xAlignmentApplied &&
-          result.yEdgeSnapped) {
-        session.xEscapeCount++;
-      }
-      session.lastYAlignmentApplied = result.yAlignmentApplied;
-      session.lastXAlignmentApplied = result.xAlignmentApplied;
-    }
-
-    if (!_snapLineListsEqual(_activeSnapLines, result.activeLines)) {
-      _activeSnapLines = result.activeLines;
-      notifyListeners();
-    }
   }
 
-  void clearSnapPreview() {
-    if (_activeSnapLines.isNotEmpty) {
-      _activeSnapLines = const [];
-      notifyListeners();
-    }
-  }
+  void clearSnapPreview() => _drags.clearPreview();
 
-  bool _snapLineListsEqual(List<SnapLine> a, List<SnapLine> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  double _maybeSnapScale(String id, double raw) {
-    // Scale snapping disabled in settings → return the raw value untouched.
-    if (!scaleSnapping) {
-      _lastSnappedScale.remove(id);
-      return raw;
-    }
-    final last = _lastSnappedScale[id];
-    double? best;
-    var bestDist = double.infinity;
-    for (final v in _scaleSnapValues) {
-      final dist = (raw - v).abs();
-      if (dist > _scaleSnapTolerance) continue;
-      // Direction-aware: if we just left this value, require ~2× tolerance
-      // before re-snapping to the same one — avoids the "stuck on 1.0" trap.
-      if (last != null && (last - v).abs() < 1e-9) {
-        if (dist > 0 && (raw - last).abs() < _scaleSnapTolerance * 2) {
-          continue;
-        }
-      }
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = v;
-      }
-    }
-    if (best != null) {
-      _lastSnappedScale[id] = best;
-      return best;
-    }
-    _lastSnappedScale.remove(id);
-    return raw;
-  }
+  double _maybeSnapScale(String id, double raw) =>
+      _drags.snapScale(id, raw, enabled: scaleSnapping);
 
   Future<void> rearrangeActiveLayout() async {
     if (_activeProfileIndex == null) return;
@@ -2920,19 +2813,3 @@ class ProfileMatchInfo {
   });
 }
 
-/// Per-drag bookkeeping for the alignment-escape heuristic. Keeps track of
-/// the previous frame's alignment state so the controller can detect when
-/// the user has "broken out" of an alignment snap, and counts those breakouts
-/// per axis. After [_alignmentEscapeLimit] escapes the alignment magnet on
-/// that axis stays off until the next [beginDragSession] call. Also carries
-/// the pre-drag tile snapshot so that an externally-driven cancellation
-/// (hotplug, profile switch) can roll the profile back to where it started
-/// — `updateMonitor` writes mid-drag positions into the profile that we'd
-/// otherwise commit by accident.
-class _DragSession {
-  bool lastYAlignmentApplied = false;
-  bool lastXAlignmentApplied = false;
-  int yEscapeCount = 0;
-  int xEscapeCount = 0;
-  MonitorTileData? rollbackOrigin;
-}
