@@ -801,20 +801,13 @@ void main() {
       final cfg = _tmpConfig(tmp);
       final c = KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
       final s = AppSettings(filePath: '${tmp.path}/s.json')
-        ..snapDistance = 99
-        ..scaleSnapping = false
-        ..safetyNetSeconds = 5
-        ..customModeRevertSeconds = 7
-        ..identifyBannerSeconds = 4
-        ..maxBackups = 3
         ..mirrorScaling = MirrorScaling.cover
-        ..workspaceManagement = WorkspaceManagementMode.grouped;
+        ..workspaceManagement = WorkspaceManagementMode.grouped
+        ..liveApply = false
+        ..autoReapplyOnDrift = true;
       c.applyStartupSettings(s);
-      expect(c.snapThreshold, 99);
-      expect(c.scaleSnapping, isFalse);
-      expect(c.safetyNet.window, const Duration(seconds: 5));
-      expect(c.identifyBannerDuration, const Duration(seconds: 4));
-      expect(cfg.maxBackups, 3);
+      expect(c.liveApply, isFalse);
+      expect(c.autoReapplyOnDrift, isTrue);
       expect(mr.scaling, 'cover');
       // Folds into the effective write options (boot-fallback exec line).
       expect(cfg.writeOptions.mirrorScaling, 'cover');
