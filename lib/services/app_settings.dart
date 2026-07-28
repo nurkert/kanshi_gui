@@ -106,7 +106,10 @@ enum MirrorScaling {
 /// had for missing keys.
 class AppSettings {
   final String filePath;
-  bool firstRunDone;
+  /// Whether the one-line "drag a screen to move it" hint has been shown.
+  /// All that survives of the first-run wizard: the app no longer asks four
+  /// questions before it will show the user their own desk.
+  bool coachHintShown;
   /// When true, plugging a known monitor set in switches the GUI to the
   /// matching profile automatically (with an Undo toast). When false the
   /// hotplug listener falls back to the suggestion SnackBar.
@@ -140,7 +143,7 @@ class AppSettings {
 
   AppSettings({
     required this.filePath,
-    this.firstRunDone = false,
+    this.coachHintShown = false,
     this.autoSwitchProfile = true,
     this.workspaceManagement = WorkspaceManagementMode.off,
     this.liveApply = true,
@@ -168,7 +171,10 @@ class AppSettings {
       final json = jsonDecode(raw) as Map<String, dynamic>;
       return AppSettings(
         filePath: p,
-        firstRunDone: json['firstRunDone'] == true,
+        // Existing installs pass their old firstRunDone through, so an
+        // upgrade does not re-show a hint they have already seen.
+        coachHintShown:
+            json['coachHintShown'] == true || json['firstRunDone'] == true,
         // Missing key → keep the default (true). An older settings.json
         // upgrades silently on next save.
         autoSwitchProfile: json['autoSwitchProfile'] is bool
@@ -241,7 +247,7 @@ class AppSettings {
 
   Future<void> _writeOnce() async {
     final json = jsonEncode({
-      'firstRunDone': firstRunDone,
+      'coachHintShown': coachHintShown,
       'autoSwitchProfile': autoSwitchProfile,
       'workspaceManagement': workspaceManagement.jsonValue,
       'liveApply': liveApply,
