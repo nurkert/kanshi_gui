@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 
 /// Frosted top bar that floats over the editor canvas. Shows the active
 /// profile name (with an "unapplied changes" dot) on the left and the canvas
@@ -30,14 +32,15 @@ class EditorHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
           height: height,
           padding: const EdgeInsets.symmetric(horizontal: 18),
           decoration: BoxDecoration(
-            color: const Color(0xFF14171C).withValues(alpha: 0.92),
+            color: c.surface,
             border: Border(
               bottom: BorderSide(
-                color: Colors.white.withValues(alpha: 0.08),
+                color: c.hairline,
               ),
             ),
           ),
@@ -51,7 +54,7 @@ class EditorHeader extends StatelessWidget {
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                        color: accent.withValues(alpha: 0.7), blurRadius: 7),
+                        color: c.accentSoft, blurRadius: 7),
                   ],
                 ),
               ),
@@ -106,12 +109,13 @@ class EditorHeader extends StatelessWidget {
 class _UnappliedChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
+        color: c.attention.withValues(alpha: 0.18),
+        borderRadius: R.chipR,
+        border: Border.all(color: c.attention.withValues(alpha: 0.5)),
       ),
       child: const Row(
         mainAxisSize: MainAxisSize.min,
@@ -141,10 +145,11 @@ class _HeaderAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return IconButton(
       icon: Icon(icon, size: 20),
       tooltip: tooltip,
-      color: Colors.white.withValues(alpha: 0.85),
+      color: c.textPrimary,
       onPressed: onPressed,
     );
   }

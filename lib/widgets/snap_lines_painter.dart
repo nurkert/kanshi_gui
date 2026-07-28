@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'dart:math' as math;
 
@@ -25,7 +26,7 @@ class SnapLinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (lines.isEmpty) return;
-    final base = accent ?? const Color(0xFF4FC3F7);
+    final base = accent ?? AppColors.fallbackAccent;
     final paint = Paint()
       ..color = base.withValues(alpha: 0.85)
       ..strokeWidth = 2.0
