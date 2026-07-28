@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kanshi_gui/design/app_theme.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/pages/first_run_wizard.dart';
 import 'package:kanshi_gui/pages/home_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
@@ -108,78 +110,26 @@ class _KanshiAppState extends State<KanshiApp> {
       ? Color(widget.settings.accentArgb!)
       : widget.accent;
 
-  /// Seed for the Material 3 colour scheme. Falls back to the historical
-  /// teal when there's neither an override nor a Sway-derived accent.
-  Color get _seed => _accent ?? const Color(0xFF26A69A);
+  /// The accent every surface is tinted from. Sway's `client.focused` when it
+  /// could be read, so the app agrees with the window manager it sits beside.
+  Color get _seed => _accent ?? AppColors.fallbackAccent;
 
   /// Called by the settings page after an appearance change so the
   /// MaterialApp (theme mode, accent) rebuilds without an app restart.
   void _onAppearanceChanged() => setState(() {});
 
-  ThemeData _theme(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: _seed,
-      brightness: brightness,
-    );
-    final base = ThemeData(
-      colorScheme: scheme,
-      useMaterial3: true,
-      // The canvas/editor chrome reads better tight; nudge the global
-      // visual density a touch denser than Material's airy default.
-      visualDensity: VisualDensity.comfortable,
-    );
-    return base.copyWith(
-      // Frosted surfaces float over the dark canvas; kill the default
-      // tonal elevation tint so cards/sheets stay crisp instead of muddy.
-      cardTheme: base.cardTheme.copyWith(
-        elevation: 0,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-      ),
-      dividerTheme: base.dividerTheme.copyWith(
-        color: scheme.outlineVariant.withValues(alpha: 0.4),
-        space: 1,
-      ),
-      // Unify every menu/dropdown surface: rounded, raised, on a clearly
-      // distinct container colour so they read as floating panels rather
-      // than flat default boxes. Covers MenuAnchor (tile three-dot menu,
-      // presets), PopupMenuButton, and DropdownMenu/DropdownButtonFormField.
-      menuTheme: MenuThemeData(
-        style: MenuStyle(
-          backgroundColor:
-              WidgetStatePropertyAll(scheme.surfaceContainerHigh),
-          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-          elevation: const WidgetStatePropertyAll(8),
-          padding: const WidgetStatePropertyAll(
-              EdgeInsets.symmetric(vertical: 6)),
-          shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-      ),
-      popupMenuTheme: PopupMenuThemeData(
-        color: scheme.surfaceContainerHigh,
-        surfaceTintColor: Colors.transparent,
-        elevation: 8,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-      dropdownMenuTheme: DropdownMenuThemeData(
-        menuStyle: MenuStyle(
-          backgroundColor:
-              WidgetStatePropertyAll(scheme.surfaceContainerHigh),
-          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-          elevation: const WidgetStatePropertyAll(8),
-          shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-      ),
-    );
-  }
+  /// The whole theme comes from the token layer.
+  ///
+  /// Not `ColorScheme.fromSeed` any more: that derived every surface from
+  /// Material's tonal algorithm, so the app's colours were whatever the
+  /// algorithm produced from one accent — and menus, dialogs and dropdowns,
+  /// which render in their own overlay and inherit nothing from the canvas,
+  /// were the most visible casualties. See [AppTheme].
+  ThemeData _theme(Brightness brightness) => AppTheme.build(
+        brightness == Brightness.dark
+            ? AppColors.dark(_seed)
+            : AppColors.light(_seed),
+      );
 
   @override
   Widget build(BuildContext context) {
