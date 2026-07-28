@@ -18,6 +18,7 @@ import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
+import 'package:kanshi_gui/state/save_coordinator.dart';
 
 /// Lightweight result type returned by mutating controller operations so the
 /// UI can decide whether to show a snackbar. Avoids leaking [ProcessResult]
@@ -68,7 +69,16 @@ class KanshiController extends ChangeNotifier {
   /// a save, cleared on a successful [reloadAndApply]. Drives the header's
   /// "unapplied changes" dot + Apply button.
   bool _hasUnappliedEdits = false;
-  Timer? _saveTimer;
+  late final SaveCoordinator _saves = _buildSaveCoordinator();
+
+  SaveCoordinator _buildSaveCoordinator() {
+    final s = SaveCoordinator(config);
+    s.onBlocked = (reason) => onConfigSaveBlocked?.call(reason);
+    s.onChanged = () {
+      if (!_isDisposed) notifyListeners();
+    };
+    return s;
+  }
   /// Serialises [_reconcileMirrors] so concurrent calls (hotplug listener,
   /// `setActiveProfile`, undo/redo, `setMirror`) cannot interleave inside
   /// `MirrorRunner` and clobber each other's `_entries[dst]` state. Each
@@ -87,17 +97,7 @@ class KanshiController extends ChangeNotifier {
   /// directives. While true, all save paths short-circuit and fire
   /// [onConfigSaveBlocked] instead of writing — overwriting would
   /// orphan profiles in the included files.
-  bool _configHasIncludes = false;
-  bool get configHasIncludes => _configHasIncludes;
-
-  /// Set during [init] when the live config holds syntax the parser did not
-  /// model. While non-null, saving is refused by [ConfigService] because
-  /// re-rendering the model would delete what was never read.
-  String? _configUnparsedLoss;
-
-  /// Whether the last attempted config write reached disk. Null until the
-  /// first save of the session.
-  bool? _lastSaveOk;
+  bool get configHasIncludes => _saves.hasIncludes;
 
   /// Whether a kanshi daemon was seen running. Null until probed.
   bool? _kanshiRunning;
@@ -116,9 +116,9 @@ class KanshiController extends ChangeNotifier {
   /// Deliberately conservative: every gate that cannot be checked downgrades
   /// the sentence. The green check must never be a decoration.
   AssuranceLevel get assuranceLevel {
-    if (_lastSaveOk == false) return AssuranceLevel.written;
+    if (_saves.lastSaveOk == false) return AssuranceLevel.written;
     if (saveBlockedReason != null) return AssuranceLevel.written;
-    if (_lastSaveOk == null && _profiles.isEmpty) {
+    if (_saves.lastSaveOk == null && _profiles.isEmpty) {
       return AssuranceLevel.unknown;
     }
     // No live backend: the file is all we can speak for.
@@ -131,30 +131,8 @@ class KanshiController extends ChangeNotifier {
   }
 
   /// Why saving is currently refused, or null when it is not.
-  String? get saveBlockedReason {
-    if (_configHasIncludes) return _includeBlockedReason;
-    final loss = _configUnparsedLoss;
-    if (loss != null) {
-      return 'Your kanshi config uses syntax kanshi_gui does not understand '
-          'yet, and $loss would be deleted if it saved. Your changes are '
-          'being kept in memory only.';
-    }
-    return null;
-  }
+  String? get saveBlockedReason => _saves.blockedReason;
 
-  static const String _includeBlockedReason =
-      'Your kanshi config uses `include` directives. kanshi_gui will not save '
-      'to avoid orphaning profiles in the included files. Move those profiles '
-      'into the main config to re-enable saving.';
-
-  static String _writeFailedReason(Object e) =>
-      'Could not write your kanshi config: $e. Your changes are being kept '
-      'in memory only and will be lost when you close the app.';
-
-  static String _notFullyParsedReason(ConfigNotFullyParsedException e) =>
-      'Your kanshi config uses syntax kanshi_gui does not understand yet, and '
-      '${e.loss} would be deleted if it saved. Your changes are being kept in '
-      'memory only.';
   final Map<String, MonitorMode> _lastModeBeforeCustom = {};
   final Map<String, double> _lastSnappedScale = {};
   List<SnapLine> _activeSnapLines = const [];
@@ -476,19 +454,10 @@ class KanshiController extends ChangeNotifier {
     // that helper schedules a save, and we want the include-block
     // flag to be in place so the schedule short-circuits cleanly
     // instead of throwing later from inside the debounce timer.
-    try {
-      _configHasIncludes = await config.hasIncludeDirectives();
-    } catch (_) {
-      _configHasIncludes = false;
-    }
-    // Same idea for syntax the parser did not model: knowing it up front lets
-    // the UI say so on the first frame rather than after the user's first
-    // edit silently fails to land.
-    try {
-      _configUnparsedLoss = await config.unparsedContentDescription();
-    } catch (_) {
-      _configUnparsedLoss = null;
-    }
+    // Learn the shape of the live config before anything can schedule a
+    // save, so a refusal is known up front rather than after the user's
+    // first edit silently fails to land.
+    await _saves.inspect();
     // persist: false — opening the app must never rewrite (and risk
     // re-applying) the user's working config. See [ensureCurrentSetupMatches].
     await ensureCurrentSetupMatches(persist: false);
@@ -740,7 +709,7 @@ class KanshiController extends ChangeNotifier {
     // about to call `notifyListeners` or fire a callback bails out
     // before touching the post-dispose controller.
     _isDisposed = true;
-    _saveTimer?.cancel();
+    _saves.dispose();
     _hotplugSettleTimer?.cancel();
     _driftAutoReapplyTimer?.cancel();
     _liveApplyRefreshTimer?.cancel();
@@ -973,40 +942,7 @@ class KanshiController extends ChangeNotifier {
   /// working. Used by every code path that needs the kanshi reload to
   /// see the just-written config (mirror / rank / undo / redo).
   Future<void> _flushSaveAndReload() async {
-    _saveTimer?.cancel();
-    if (_configHasIncludes) {
-      // The user's main config pulls in other files via `include`.
-      // Saving would render only the profiles WE parsed (which
-      // didn't include the included files') and silently overwrite
-      // the include line — orphaning every profile in the included
-      // files. Surface a UI warning instead.
-      onConfigSaveBlocked?.call(_includeBlockedReason);
-      return;
-    }
-    try {
-      await config.saveProfiles(_profiles);
-      _lastSaveOk = true;
-    } on ConfigHasIncludesException {
-      // Race-safe fallback: if the user added an `include` directive
-      // since `init()` ran (we cached the answer there), the
-      // ConfigService throws this and we surface the same warning
-      // path as the upfront block.
-      _lastSaveOk = false;
-      _configHasIncludes = true;
-      onConfigSaveBlocked?.call(_includeBlockedReason);
-    } on ConfigNotFullyParsedException catch (e) {
-      _lastSaveOk = false;
-      onConfigSaveBlocked?.call(_notFullyParsedReason(e));
-    } on ConfigRoundTripException catch (e) {
-      _lastSaveOk = false;
-      onConfigSaveBlocked?.call(e.toString());
-    } catch (e) {
-      // Read-only config, a full disk, a vanished directory. This used to be
-      // swallowed as "best effort", so undo/redo/setMirror reported success
-      // while nothing had been written and the layout silently reverted on
-      // the next launch.
-      onConfigSaveBlocked?.call(_writeFailedReason(e));
-    }
+    await _saves.flush(_profiles);
     try {
       await monitors.restartCompositorProfileApply();
     } catch (_) {/* best effort */}
@@ -2722,8 +2658,7 @@ class KanshiController extends ChangeNotifier {
       config.invalidateInspectionCache();
       await _loadConfig();
       await refreshConnectedMonitors();
-      _configHasIncludes = await config.hasIncludeDirectives();
-      _configUnparsedLoss = await config.unparsedContentDescription();
+      await _saves.inspect();
       await ensureCurrentSetupMatches(persist: false);
       // Ask kanshi to apply the file we just put back, without rendering
       // anything over it.
@@ -2792,37 +2727,7 @@ class KanshiController extends ChangeNotifier {
     // Any scheduled save means the layout was edited; it isn't reflected in
     // the compositor until the next explicit Apply.
     _hasUnappliedEdits = true;
-    _saveTimer?.cancel();
-    if (_configHasIncludes) {
-      // Same rationale as `_flushSaveAndReload`: don't render-and-
-      // overwrite a config we only partially parsed.
-      onConfigSaveBlocked?.call(_includeBlockedReason);
-      return;
-    }
-    _saveTimer = Timer(const Duration(milliseconds: 600), () {
-      // The save itself runs through ConfigService, which throws
-      // `ConfigHasIncludesException` if the user added an include
-      // since we last checked. Catch and route to the same UI path.
-      // Fire-and-forget by design — a debounced save's errors are
-      // best-effort and the next mutation will re-trigger.
-      // ignore: discarded_futures
-      config.saveProfiles(_profiles).then((_) {
-        _lastSaveOk = true;
-        if (!_isDisposed) notifyListeners();
-      }).catchError((Object e) {
-        _lastSaveOk = false;
-        if (e is ConfigHasIncludesException) {
-          _configHasIncludes = true;
-          onConfigSaveBlocked?.call(_includeBlockedReason);
-        } else if (e is ConfigNotFullyParsedException) {
-          onConfigSaveBlocked?.call(_notFullyParsedReason(e));
-        } else if (e is ConfigRoundTripException) {
-          onConfigSaveBlocked?.call(e.toString());
-        } else {
-          onConfigSaveBlocked?.call(_writeFailedReason(e));
-        }
-      });
-    });
+    _saves.schedule(_profiles);
   }
 
   // Thin aliases onto the domain module. Kept so the ~40 existing call sites
