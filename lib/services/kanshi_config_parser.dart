@@ -1,14 +1,6 @@
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 
-/// Tokenises and parses the subset of kanshi config files this app produces
-/// and reads. It is more permissive than the previous regex-only approach:
-///
-/// - profile names may be quoted ('…') or bare
-/// - inline `#` and `//` comments are stripped
-/// - braces are matched by counting (so per-profile blocks may contain inner
-///   braces in `exec` lines, etc.)
-/// - whitespace is normalised between tokens
 /// What [KanshiConfigParser.diagnose] found in a config file, compared with
 /// what the parser was able to turn into [Profile]s.
 ///
@@ -74,6 +66,18 @@ class KanshiConfigDiagnostics {
       'globalDefaults $globalOutputDefaults)';
 }
 
+/// Tokenises and parses the subset of kanshi config files this app produces
+/// and reads. It is more permissive than the previous regex-only approach:
+///
+/// - profile names may be quoted ('…') or bare, with `\'` escapes
+/// - output criteria may be 'single-quoted', "double-quoted" or bare
+/// - inline `#` and `//` comments are stripped
+/// - braces are matched by counting (so per-profile blocks may contain inner
+///   braces in `exec` lines, etc.)
+/// - whitespace is normalised between tokens
+///
+/// It does NOT model all of kanshi's DSL — see [diagnose], which is how the
+/// save path finds out that it must not overwrite a file it only half read.
 class KanshiConfigParser {
   KanshiConfigParser._();
 
@@ -130,6 +134,7 @@ class KanshiConfigParser {
     final rankByProfile = _extractRankComments(content);
     final mirrorByProfile = _extractMirrorComments(content);
     final edidByProfile = _extractEdidComments(content);
+    final portByProfile = _extractPortComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -178,6 +183,7 @@ class KanshiConfigParser {
       final ranks = rankByProfile[header] ?? const <String, int>{};
       final mirrors = mirrorByProfile[header] ?? const <String, String>{};
       final edids = edidByProfile[header] ?? const <String, String>{};
+      final ports = portByProfile[header] ?? const <String, String>{};
       profiles.add(Profile(
         name: header,
         monitors: _applyEdids(
@@ -187,7 +193,8 @@ class KanshiConfigParser {
             // since older GUI versions wrote both and the annotation is
             // canonical now.
             _applyMirrors(
-              _applyMirrorExecs(_parseOutputs(blockText), blockText),
+              _applyMirrorExecs(
+                  _parseOutputs(blockText, ports), blockText),
               mirrors,
             ),
             ranks,
@@ -276,6 +283,50 @@ class KanshiConfigParser {
         if (m != null) {
           (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
               m.group(2)!;
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:port '<descriptor>'='<connector>'` annotations out of
+  /// each profile body. Returned map is profile-name → EDID descriptor →
+  /// connector name.
+  ///
+  /// The writer emits these whenever it addresses an output by its stable
+  /// EDID description, which is the whole point of M3: kanshi matches on
+  /// something that survives a reboot and a redock, while the GUI still gets
+  /// to know which port that was last time. A stale entry costs nothing —
+  /// rehydration against the live output set corrects the connector anyway.
+  static Map<String, Map<String, String>> _extractPortComments(
+    String content,
+  ) {
+    final out = <String, Map<String, String>>{};
+    final portLine = RegExp(
+      r"^\s*#\s*kanshi_gui:port\s+'((?:[^'\\]|\\')*)'\s*=\s*'([^']*)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = portLine.firstMatch(raw);
+        if (m != null) {
+          (out[currentProfile] ??= <String, String>{})[
+              m.group(1)!.replaceAll(r"\'", "'")] = m.group(2)!;
         }
         depth += _countChar(raw, '{') - _countChar(raw, '}');
         if (depth <= 0) {
@@ -510,19 +561,41 @@ class KanshiConfigParser {
     return out.toString();
   }
 
-  static List<MonitorTileData> _parseOutputs(String block) {
+  static List<MonitorTileData> _parseOutputs(
+    String block, [
+    Map<String, String> portByDescriptor = const {},
+  ]) {
     final outputs = <MonitorTileData>[];
+    // Three criteria spellings: 'single-quoted' (what this app has always
+    // written for connectors), "double-quoted" (kanshi(5)'s documented form,
+    // and what a stable EDID description needs because it contains spaces),
+    // and bare.
     final outputRE = RegExp(
-      r"output\s+(?:'([^']+)'|(\S+))\s+(enable|disable)([^\n]*)",
+      "output\\s+(?:'([^']+)'|\"([^\"]+)\"|(\\S+))"
+      r"\s+(enable|disable)([^\n]*)",
       caseSensitive: false,
     );
 
     for (final m in outputRE.allMatches(block)) {
-      final name = (m.group(1) ?? m.group(2) ?? '').trim();
-      if (name.isEmpty) continue;
-      final state = m.group(3)!.toLowerCase();
-      final rest = m.group(4) ?? '';
+      final quoted = m.group(1);
+      final doubleQuoted = m.group(2);
+      final criteria = (quoted ?? doubleQuoted ?? m.group(3) ?? '').trim();
+      if (criteria.isEmpty) continue;
+      final state = m.group(4)!.toLowerCase();
+      final rest = m.group(5) ?? '';
       final isEnabled = state == 'enable';
+
+      // A criteria containing spaces is an EDID description, not a
+      // connector. Keep it as the stable identity and resolve the connector
+      // through the `# kanshi_gui:port` annotation when one was recorded —
+      // a stale annotation is harmless, since rehydration against the live
+      // output set corrects the id anyway.
+      final looksLikeDescriptor =
+          doubleQuoted != null || criteria.contains(' ');
+      final descriptor = looksLikeDescriptor ? criteria : '';
+      final name = looksLikeDescriptor
+          ? (portByDescriptor[criteria] ?? criteria)
+          : criteria;
 
       final scaleMatch = RegExp(r'scale\s+([\d.]+)').firstMatch(rest);
       final modeMatch =
@@ -570,6 +643,7 @@ class KanshiConfigParser {
       outputs.add(MonitorTileData(
         id: name,
         manufacturer: name,
+        edidDescriptor: descriptor,
         x: posX,
         y: posY,
         width: width,

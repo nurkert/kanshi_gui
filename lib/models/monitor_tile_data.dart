@@ -29,7 +29,21 @@ import 'monitor_mode.dart';
 /// - [scale] is the per-output HiDPI scale factor (1.0 = 1×, 2.0 = 2×).
 class MonitorTileData {
   final String id;
-  final String manufacturer; // Neuer Herstellerstring
+
+  /// Human-readable label built from EDID, with missing fields dropped so a
+  /// laptop panel is not called "… Unknown" in the UI. Display only — see
+  /// [edidDescriptor] for the string kanshi matches on.
+  final String manufacturer;
+
+  /// The exact `make model serial` triple kanshi(5) matches description
+  /// criteria against, with missing fields filled in as the literal
+  /// "Unknown". Empty when the display supplies no usable EDID.
+  ///
+  /// Kept apart from [manufacturer] because the two genuinely differ: sway
+  /// reports the laptop panel as `InfoVision … 0x057D Unknown`, while the
+  /// label the user should see stops at `0x057D`. Writing the label into the
+  /// config as criteria would simply never match.
+  final String edidDescriptor;
   final double x;
   final double y;
   final double width;
@@ -56,6 +70,7 @@ class MonitorTileData {
   MonitorTileData({
     required this.id,
     required this.manufacturer,
+    this.edidDescriptor = '',
     required this.x,
     required this.y,
     required this.width,
@@ -74,6 +89,7 @@ class MonitorTileData {
   MonitorTileData copyWith({
     String? id,
     String? manufacturer,
+    String? edidDescriptor,
     double? x,
     double? y,
     double? width,
@@ -91,6 +107,7 @@ class MonitorTileData {
     return MonitorTileData(
       id: id ?? this.id,
       manufacturer: manufacturer ?? this.manufacturer,
+      edidDescriptor: edidDescriptor ?? this.edidDescriptor,
       x: x ?? this.x,
       y: y ?? this.y,
       width: width ?? this.width,

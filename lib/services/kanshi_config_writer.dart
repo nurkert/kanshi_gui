@@ -1,3 +1,4 @@
+import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -131,11 +132,24 @@ class KanshiConfigWriter {
     // layout passes through untouched.
     final mons = LayoutMath.resolveOverlaps(sanitized);
 
+    // How kanshi should address each output. Descriptions win wherever the
+    // display supplied one and it is unique inside this profile; see
+    // [chooseOutputCriteria]. Outputs whose EDID we have never observed keep
+    // the connector name — the descriptor is never guessed, only recorded.
+    final criteria = chooseOutputCriteria(
+      mons.map((m) => m.id),
+      (connector) {
+        final m = mons.firstWhere((e) => e.id == connector);
+        return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
+      },
+    );
+
     buffer.writeln("profile '${escapeProfileName(profile.name)}' {");
 
     for (final m in mons) {
+      final crit = criteria[m.id] ?? OutputCriteria.connector(m.id);
       if (!m.enabled) {
-        buffer.writeln("    output '${m.id}' disable");
+        buffer.writeln("    output ${crit.configForm} disable");
         continue;
       }
       // mode line is always landscape-oriented, transform handles rotation.
@@ -162,9 +176,23 @@ class KanshiConfigWriter {
       final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
       buffer.writeln(
-        "    output '${m.id}' enable scale ${m.scale.toStringAsFixed(2)} "
+        "    output ${crit.configForm} enable "
+        "scale ${m.scale.toStringAsFixed(2)} "
         "mode ${baseW.toInt()}x${baseH.toInt()}@${formatHz(refresh)}Hz "
         "transform $transform position $posX,$posY",
+      );
+    }
+
+    // Record which connector each stable criteria resolved to when the file
+    // was written. Purely informational for the GUI (it shows the port and
+    // can re-key its annotations); kanshi ignores it, and a stale entry is
+    // harmless because the live output set is what actually resolves names.
+    for (final m in mons) {
+      final crit = criteria[m.id];
+      if (crit == null || !crit.isDescription) continue;
+      buffer.writeln(
+        "    # kanshi_gui:port '${crit.value.replaceAll("'", r"\'")}'"
+        "='${m.id}'",
       );
     }
 
@@ -261,6 +289,7 @@ class KanshiConfigWriter {
       final chain = buildSwayWorkspaceChain(
         ranked,
         distribution: options.workspaceDistribution,
+        criteria: criteria,
       );
       if (chain != null) {
         // Earlier (1.5.12) we tried to claim a named workspace per
@@ -437,6 +466,7 @@ String? buildSwayWorkspaceChain(
   List<WorkspaceRankEntry> ranked, {
   int maxWorkspaces = 9,
   WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
+  Map<String, OutputCriteria> criteria = const {},
 }) {
   final n = ranked.length;
   if (n == 0) return null;
@@ -446,19 +476,34 @@ String? buildSwayWorkspaceChain(
         maxWorkspaces: maxWorkspaces);
     // Phase 1: persistent output binding. NO `number` keyword — see
     // the docstring above for why.
-    parts.add("workspace $ws output '${ranked[rank].id}'");
+    parts.add('workspace $ws output ${_execCriteria(ranked[rank].id, criteria)}');
   }
   for (var ws = 1; ws <= maxWorkspaces; ws++) {
     final rank = workspaceSlotRank(ws, n, distribution,
         maxWorkspaces: maxWorkspaces);
     // Phase 2: focus the numeric slot (renamed-workspace safe) and
     // force-move any pre-existing workspace to its new home output.
-    parts.add("workspace number $ws");
-    parts.add("move workspace to output '${ranked[rank].id}'");
+    parts.add('workspace number $ws');
+    parts.add(
+        'move workspace to output ${_execCriteria(ranked[rank].id, criteria)}');
   }
   parts.add('workspace number 1');
   return parts.join('; ');
 }
+
+/// How an output is spelled inside the `exec swaymsg \"…\"` chain.
+///
+/// The chain is already inside a double-quoted shell string, so kanshi(5)
+/// documents the nesting a description needs:
+///
+/// > exec swaymsg workspace 1, move workspace to output '\"Some Other Company
+/// > GTBZ 2525\"'
+///
+/// Getting this wrong is silent: sway does not fail the command, it just
+/// drops the `output` target it cannot resolve and the workspace stays
+/// wherever it was created.
+String _execCriteria(String id, Map<String, OutputCriteria> criteria) =>
+    (criteria[id] ?? OutputCriteria.connector(id)).swayExecForm;
 
 /// Maps a 1-indexed workspace number [ws] to the 0..N-1 output rank that
 /// owns it, for [n] ranked outputs under the chosen [distribution]. Shared
