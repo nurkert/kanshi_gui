@@ -12,11 +12,20 @@ import 'monitor_mode.dart';
 ///   `output … position X Y` IPC, so a 4K display at scale 2.0 placed
 ///   flush to the right of a 1080p panel sits at `x = 1920` (the logical
 ///   extent of the 1080p neighbour), not `x = 3840`.
-/// - [width] / [height] are **physical** pixels — the raw mode dimensions
-///   of the panel. The kanshi config and `swaymsg output mode` both want
-///   the physical mode here. To get the logical extent at a given scale
-///   use `width / scale`, which is what the snap math, the bounding box
-///   helper and the destination filter all do.
+/// - [width] / [height] are unscaled pixels of the **rotated** extent — the
+///   space the output actually occupies once [rotation] is applied. Both
+///   backends produce them that way (`sway_backend.dart:110`,
+///   `wlr_randr_backend.dart:90`) and so does the config parser, so a
+///   2560x1440 panel at `transform 90` is stored as `1440 x 2560`.
+///   To get the logical extent at a given scale use `width / scale`, which
+///   is what the snap math, the bounding box helper and the destination
+///   filter all do.
+///
+///   The kanshi config and `swaymsg output mode` want the **physical** mode
+///   instead, so the write paths swap back with `rotation % 180 == 0`.
+///   Swapping in the wrong direction is not a rounding detail: it used to
+///   make the mode of a rotated output oscillate on every save. If you are
+///   converting between the two, convert exactly once.
 /// - [scale] is the per-output HiDPI scale factor (1.0 = 1×, 2.0 = 2×).
 class MonitorTileData {
   final String id;

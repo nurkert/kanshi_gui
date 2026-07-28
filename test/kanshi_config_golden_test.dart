@@ -84,32 +84,30 @@ void main() {
     group('saving is idempotent', () {
       // A save must be a fixed point: rendering the same model twice has to
       // produce the same bytes. Where it does not, repeated saves walk the
-      // config somewhere the user never asked it to go.
-      //
-      // The three fixtures that carry a rotated output fail for one shared
-      // reason — the transposed-mode oscillation below — so they name the
-      // milestone that fixes it rather than the symptom.
-      const rotationOscillation = 'M1 (A1.5) — the transposed-mode oscillation';
-      const fixtures = <String, String?>{
-        'manpage_include_and_block.conf': null,
-        'manpage_exec.conf': rotationOscillation, // DP-1 transform 270
-        'directives_full.conf': rotationOscillation, // eDP-1 flipped-90
-        'writer_dialect.conf': rotationOscillation, // HDMI-A-2 transform 270
-      };
-      fixtures.forEach((fixture, skipReason) {
+      // config somewhere the user never asked it to go. Three of these
+      // fixtures carry a rotated output, which is what made this fail before
+      // M1 fixed the transposed-mode fallback.
+      for (final fixture in const [
+        'manpage_include_and_block.conf',
+        'manpage_exec.conf', // DP-1 transform 270
+        'directives_full.conf', // eDP-1 flipped-90
+        'writer_dialect.conf', // HDMI-A-2 transform 270
+      ]) {
         test(fixture, () {
           final once = _roundTrip(fixture);
           final twice = KanshiConfigWriter.render(KanshiConfigParser.parse(once));
           expect(twice, once, reason: 'a second save changed the file again');
-        }, skip: skipReason);
-      });
+        });
+      }
     });
 
     test('a rotated output keeps its physical mode across repeated saves', () {
-      // The parser stores width/height ALREADY ROTATED (parser:420) while the
-      // writer transposes again on the way out (writer:312), so a `transform
-      // 270` output oscillates between 1920x1080 and 1080x1920 on every save.
-      // Every other save therefore writes a mode the panel cannot do.
+      // MonitorTileData.width/height carry the ROTATED extent, a MonitorMode
+      // is a PHYSICAL panel mode. When the modes list is empty — which it
+      // always is for outputs loaded from the config file — the writer's
+      // fallback used to hand the rotated extent back as a physical mode, so
+      // a `transform 270` output oscillated between 1920x1080 and 1080x1920
+      // and every second save asked the panel for a mode it does not have.
       var current = _read('writer_dialect.conf');
       final seen = <String>{};
       for (var i = 0; i < 4; i++) {
@@ -119,7 +117,7 @@ void main() {
       expect(seen, hasLength(1),
           reason: 'the mode of the rotated output changed between saves: $seen');
       expect(seen.single, '1920x1080@60Hz');
-    }, skip: 'M1 (A1.5) — the transposed-mode oscillation');
+    });
   });
 }
 

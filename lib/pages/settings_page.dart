@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
@@ -41,9 +43,17 @@ class _SettingsPageState extends State<SettingsPage> {
   ];
 
   void _persist() {
-    // Fire-and-forget: the atomic write is fast and the UI doesn't block.
-    // ignore: discarded_futures
-    s.save();
+    // The UI does not block on the write, but a failed write must not vanish:
+    // silently losing a preference the user just set is exactly the kind of
+    // thing that makes an app feel unreliable. AppSettings.save() serialises
+    // and coalesces internally, so calling this on every slider frame costs
+    // at most two writes per drag.
+    unawaited(s.save().catchError((Object e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save settings: $e')),
+      );
+    }));
     setState(() {});
   }
 

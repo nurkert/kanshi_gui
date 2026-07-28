@@ -114,6 +114,12 @@ class KanshiController extends ChangeNotifier {
   /// a persistent SnackBar so the user knows why their changes are
   /// not landing on disk.
   void Function()? onConfigSaveBlocked;
+  /// Fired when a safety-net revert threw. This is the worst moment the app
+  /// has: the risky change is still in effect — the user may be looking at
+  /// a black screen — and the automatic way out just failed. It must be
+  /// surfaced with a retry, never swallowed. [retrySafetyNetReverts] runs
+  /// the failed inverses again.
+  void Function(String label, Object error)? onSafetyNetRevertFailed;
   /// Wallclock of the last manual profile switch. Auto-suggestions are
   /// suppressed for [_suggestionCooldown] after this so a user who just
   /// picked profile A on purpose doesn't get nagged into switching back.
@@ -214,6 +220,10 @@ class KanshiController extends ChangeNotifier {
         _processRunner = processRunner ?? const DefaultProcessRunner() {
     config.writeOptions = _effectiveWriteOptions();
     safetyNet.onChange((_) => notifyListeners());
+    safetyNet.onRevertFailed = (key, label, error) {
+      debugPrint('safety-net revert failed for $key: $error');
+      onSafetyNetRevertFailed?.call(label, error);
+    };
     // The runner mutates failedDestinations / activeDestinations on
     // wl-mirror exits. UI surfaces that via this controller's
     // notifyListeners pipeline.
@@ -680,13 +690,18 @@ class KanshiController extends ChangeNotifier {
       _activeProfileIndex = matchIdx;
     } else {
       const currentName = 'Current Setup';
+      // COPY the live list. Handing `_currentMonitors` itself to the profile
+      // aliased the compositor snapshot into the editor: every drag wrote
+      // through the profile into what the app believed the compositor was
+      // doing, so drift detection compared the live layout against itself
+      // and could never report anything.
+      final snapshot = List<MonitorTileData>.from(_currentMonitors);
       final idx = _profiles.indexWhere((p) => p.name == currentName);
       if (idx == -1) {
-        _profiles.add(Profile(name: currentName, monitors: _currentMonitors));
+        _profiles.add(Profile(name: currentName, monitors: snapshot));
         _activeProfileIndex = _profiles.length - 1;
       } else {
-        _profiles[idx] =
-            Profile(name: currentName, monitors: _currentMonitors);
+        _profiles[idx] = Profile(name: currentName, monitors: snapshot);
         _activeProfileIndex = idx;
       }
     }
@@ -875,10 +890,39 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Rejects names that cannot survive a round trip through the kanshi
+  /// config. Returns null when [name] is acceptable, otherwise the reason.
+  ///
+  /// The writer used to interpolate the name straight into
+  /// `profile '<name>' {`, so an empty name produced `profile '' {` and a
+  /// name containing a newline or a brace produced a file kanshi refuses to
+  /// parse — at which point the daemon stops managing displays entirely and
+  /// the GUI cannot read its own profiles back. Apostrophes and backslashes
+  /// are not rejected: they are escaped by the writer and unescaped by the
+  /// parser, because "Nico's Desk" is a name a person would reasonably type.
+  static String? profileNameError(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return 'Profile name cannot be empty.';
+    if (trimmed.length > 120) return 'Profile name is too long.';
+    if (RegExp(r'[\x00-\x1f\x7f]').hasMatch(trimmed)) {
+      return 'Profile name cannot contain line breaks or control characters.';
+    }
+    if (trimmed.contains('{') || trimmed.contains('}')) {
+      return 'Profile name cannot contain { or }.';
+    }
+    if (trimmed.startsWith('#')) {
+      return 'Profile name cannot start with #.';
+    }
+    return null;
+  }
+
   OpResult renameProfile(int index, String newName) {
     if (index < 0 || index >= _profiles.length) {
       return const OpResult.err('Profile index out of range.');
     }
+    final invalid = profileNameError(newName);
+    if (invalid != null) return OpResult.err(invalid);
+    newName = newName.trim();
     final exists = _profiles.any((p) =>
         p.name.toLowerCase() == newName.toLowerCase() &&
         p != _profiles[index]);
@@ -1467,6 +1511,27 @@ class KanshiController extends ChangeNotifier {
     safetyNet.window = Duration(seconds: seconds);
   }
 
+  /// True while at least one safety-net revert has failed and the user is
+  /// still sitting in the state it was supposed to undo.
+  bool get hasFailedSafetyNetRevert => safetyNet.hasFailedRevert;
+
+  /// Re-runs every safety-net revert that previously threw. Returns an
+  /// error result naming what is still broken, so a failed retry cannot be
+  /// mistaken for a successful one.
+  Future<OpResult> retrySafetyNetReverts() async {
+    if (!safetyNet.hasFailedRevert) {
+      return const OpResult.ok('Nothing to undo.');
+    }
+    final stillFailing = await safetyNet.retryFailedReverts();
+    notifyListeners();
+    if (stillFailing.isEmpty) {
+      return const OpResult.ok('Put your display back.');
+    }
+    return OpResult.err(
+        'Could not undo: ${stillFailing.join(', ')}. Try re-applying the '
+        'profile, or run `kanshictl reload`.');
+  }
+
   void setCustomModeRevertSeconds(int seconds) {
     _revertScheduler.defaultDelay = Duration(seconds: seconds);
   }
@@ -1869,16 +1934,34 @@ class KanshiController extends ChangeNotifier {
       notifyListeners();
       // Guard a *disable* with a SafetyNet — re-enable on timeout.
       if (!enabled) {
+        // Capture the OWNING profile by name, not the list, and not the
+        // active index: both go stale during a 15-second countdown.
+        final ownerProfile = _profiles[_activeProfileIndex!].name;
         await safetyNet.guard(
           key: 'toggle:$target',
           label: 'Disabled $target',
           doIt: () async {},
           revert: () async {
-            await monitors.enable(target);
-            await monitors.apply(mons[idx]);
-            mons[idx] = mons[idx].copyWith(enabled: true);
-            _scheduleSave();
-            notifyListeners();
+            final r1 = await monitors.enable(target);
+            if (r1.exitCode != 0) {
+              throw StateError('could not re-enable $target: ${r1.stderr}');
+            }
+            final restored = _updateMonitorIn(
+                ownerProfile, id, (m) => m.copyWith(enabled: true));
+            if (!restored) {
+              throw StateError(
+                  'turned $target back on, but the profile "$ownerProfile" '
+                  'no longer holds it — the saved layout still says disabled');
+            }
+            final tile = _monitorIn(ownerProfile, id);
+            if (tile != null) {
+              final r2 = await monitors.apply(tile.copyWith(id: target));
+              if (r2.exitCode != 0) {
+                throw StateError(
+                    'turned $target back on but could not restore its '
+                    'layout: ${r2.stderr}');
+              }
+            }
           },
         );
       }
@@ -1932,15 +2015,32 @@ class KanshiController extends ChangeNotifier {
 
   /// True if the active profile would have zero enabled outputs after
   /// disabling the monitor at [idx].
+  /// True when disabling the output at [idx] would leave the user with no
+  /// screen they can actually see.
+  ///
+  /// This used to count every *enabled* monitor in the profile, including
+  /// ones that are not plugged in. A three-output "Home Office" profile used
+  /// on the train — where only the laptop panel is live — therefore counted
+  /// the two absent externals as "still enabled", let the block pass, and
+  /// allowed the one physically present screen to be switched off. The guard
+  /// has to reason about what the user can see, so it counts only outputs
+  /// that are both enabled and connected.
   bool _wouldLockOutUser(int idx) {
     if (_activeProfileIndex == null) return false;
     final mons = _profiles[_activeProfileIndex!].monitors;
-    var enabledLeft = 0;
+    // Offline editor (no live backend, nothing enumerated): there is no
+    // screen to lock the user out of, and connectivity is unknowable. Fall
+    // back to the profile-only count so editing a profile for hardware that
+    // is not present still behaves.
+    final liveKnown = _currentMonitors.isNotEmpty;
+    var visibleLeft = 0;
     for (var i = 0; i < mons.length; i++) {
       if (i == idx) continue;
-      if (mons[i].enabled) enabledLeft++;
+      if (!mons[i].enabled) continue;
+      if (liveKnown && !monitorIsConnected(mons[i])) continue;
+      visibleLeft++;
     }
-    return enabledLeft == 0;
+    return visibleLeft == 0;
   }
 
   Future<OpResult> applyMode(String id, MonitorMode mode) async {
@@ -1986,21 +2086,28 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
 
     if (priorTile.enabled) {
+      // The profile this mode belongs to, captured now. Resolving against
+      // `_activeProfileIndex` when the timer fires would restore the old
+      // mode into whatever profile the user had switched to by then.
+      final ownerProfile = _profiles[_activeProfileIndex!].name;
       await safetyNet.guard(
         key: 'mode:$target',
         label: 'Mode change on $target',
         doIt: () async {},
         revert: () async {
           // Restore the prior mode at the compositor and in the profile.
-          await monitors.setMode(target, priorMode);
-          if (_activeProfileIndex != null) {
-            final cur = _profiles[_activeProfileIndex!].monitors;
-            final i = cur.indexWhere((m) => m.id == priorTile.id);
-            if (i != -1) {
-              cur[i] = priorTile;
-              _scheduleSave();
-              notifyListeners();
-            }
+          final r = await monitors.setMode(target, priorMode);
+          if (r.exitCode != 0) {
+            throw StateError(
+                'could not put $target back to its previous mode: ${r.stderr}');
+          }
+          final restored =
+              _updateMonitorIn(ownerProfile, priorTile.id, (_) => priorTile);
+          if (!restored) {
+            throw StateError(
+                'restored the mode on $target, but the profile '
+                '"$ownerProfile" no longer holds it — the saved layout still '
+                'has the new mode');
           }
           await refreshConnectedMonitors();
         },
@@ -2405,6 +2512,44 @@ class KanshiController extends ChangeNotifier {
 
   bool monitorIsConnected(MonitorTileData m) =>
       _currentMonitors.any((c) => _matchesOutput(c.id, m.id));
+
+  /// The monitor [outputId] inside the profile named [profileName], looked up
+  /// at call time, or null if either is gone.
+  MonitorTileData? _monitorIn(String profileName, String outputId) {
+    final pIdx = _profiles.indexWhere((p) => p.name == profileName);
+    if (pIdx == -1) return null;
+    final i =
+        _profiles[pIdx].monitors.indexWhere((m) => m.id == outputId);
+    return i == -1 ? null : _profiles[pIdx].monitors[i];
+  }
+
+  /// Applies [update] to [outputId] inside the profile named [profileName],
+  /// re-resolving both at call time. Returns false when either is gone.
+  ///
+  /// Deferred work — safety-net reverts above all — must never capture a
+  /// `List<MonitorTileData>` and write into it after an await. Nearly every
+  /// mutation (scaleMonitor, snapAndCommit, the presets, setMirror, …)
+  /// replaces the whole [Profile] object, so a captured list becomes an
+  /// orphan: the revert wrote into it, nothing read it, and the compositor
+  /// and the saved config disagreed from then on. Nor may deferred work
+  /// simply use whatever profile happens to be active when the timer fires —
+  /// the user may have switched in the meantime, and the change would land
+  /// in a profile it was never part of.
+  bool _updateMonitorIn(
+    String profileName,
+    String outputId,
+    MonitorTileData Function(MonitorTileData) update,
+  ) {
+    final pIdx = _profiles.indexWhere((p) => p.name == profileName);
+    if (pIdx == -1) return false;
+    final mons = _profiles[pIdx].monitors;
+    final i = mons.indexWhere((m) => m.id == outputId);
+    if (i == -1) return false;
+    mons[i] = update(mons[i]);
+    _scheduleSave();
+    notifyListeners();
+    return true;
+  }
 
   // ── Internals ──────────────────────────────────────────────────────────
   void _scheduleSave() {
