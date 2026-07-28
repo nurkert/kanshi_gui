@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
 /// Persistent, always-visible left rail listing the profiles. Replaces the
@@ -19,15 +21,16 @@ class ProfileRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     final scheme = Theme.of(context).colorScheme;
-    final accent = activeAccent ?? scheme.primary;
+    final accent = activeAccent ?? c.accent;
     return Container(
       width: width,
       decoration: BoxDecoration(
         color: scheme.surface,
         border: Border(
           right: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.5),
+            color: c.hairline,
           ),
         ),
       ),
@@ -175,7 +178,7 @@ class _ProfileCardState extends State<_ProfileCard> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final c = context.colors;
     final active = widget.isActive;
     final showActions = _hovered || active;
 
@@ -187,21 +190,21 @@ class _ProfileCardState extends State<_ProfileCard> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: R.controlR,
             color: active
-                ? widget.accent.withValues(alpha: 0.16)
+                ? c.accentSoft
                 : (_hovered
-                    ? scheme.onSurface.withValues(alpha: 0.05)
+                    ? c.hairline
                     : Colors.transparent),
             border: Border.all(
               color: active
-                  ? widget.accent.withValues(alpha: 0.7)
+                  ? c.accent
                   : Colors.transparent,
             ),
             boxShadow: active
                 ? [
                     BoxShadow(
-                      color: widget.accent.withValues(alpha: 0.22),
+                      color: c.accentSoft,
                       blurRadius: 14,
                       spreadRadius: -4,
                     ),
@@ -209,7 +212,7 @@ class _ProfileCardState extends State<_ProfileCard> {
                 : null,
           ),
           child: InkWell(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: R.controlR,
             onTap: widget.onSelect,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
@@ -239,7 +242,7 @@ class _ProfileCardState extends State<_ProfileCard> {
                             style: TextStyle(
                               fontWeight:
                                   active ? FontWeight.w700 : FontWeight.w500,
-                              color: scheme.onSurface,
+                              color: c.textPrimary,
                             ),
                           ),
                   ),
@@ -304,21 +307,22 @@ class _MatchDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     final Color color;
     final String tooltip;
     switch (info.status) {
       case ProfileMatchStatus.full:
-        color = const Color(0xFF34D399);
+        color = c.ok;
         tooltip = 'All ${info.matched} outputs connected';
         break;
       case ProfileMatchStatus.partial:
-        color = const Color(0xFFFBBF24);
+        color = c.attention;
         tooltip = info.missing.isEmpty
             ? '${info.matched} of ${info.profileEnabled} outputs connected'
             : '${info.missing.join(", ")} missing';
         break;
       case ProfileMatchStatus.none:
-        color = const Color(0xFF6B7280);
+        color = c.textTertiary;
         tooltip = info.profileEnabled == 0
             ? 'No enabled outputs in profile'
             : 'No matching output connected';
@@ -333,7 +337,7 @@ class _MatchDot extends StatelessWidget {
           color: color,
           shape: BoxShape.circle,
           boxShadow: [
-            BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 5),
+            BoxShadow(color: color, blurRadius: 5),
           ],
         ),
       ),
