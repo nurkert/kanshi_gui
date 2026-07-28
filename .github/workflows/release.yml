@@ -1,8 +1,12 @@
 name: Build and Release Debian Packages
 
+# Releases are cut from an annotated tag, never from a branch push. Before
+# v2.0 this workflow ran on every push to main, so an unreviewed commit —
+# and, because no CI gate existed, an untested one — published a .deb and
+# moved the "latest" release. Tagging makes publishing a deliberate act.
 on:
   push:
-    branches: [ main ]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -77,10 +81,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine version
+      # The tag is the source of truth for what gets published; pubspec.yaml
+      # is the source of truth for what got built. If they disagree, the
+      # release would advertise a version the binaries do not carry, so fail
+      # loudly instead of publishing a mislabelled artifact.
+      - name: Determine and verify version
         id: version
         run: |
           version=$(awk -F': ' '/^version:/{print $2}' pubspec.yaml)
+          tag="${GITHUB_REF_NAME}"
+          echo "pubspec version: $version"
+          echo "tag:             $tag"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag '$tag' does not match pubspec.yaml version '$version' (expected 'v$version')."
+            exit 1
+          fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts
@@ -97,5 +112,9 @@ jobs:
           name: v${{ steps.version.outputs.value }}
           artifacts: dist/*.deb
           artifactErrorsFailBuild: true
-          allowUpdates: true
+          # No allowUpdates: re-running against an existing release used to
+          # replace its binaries in place, so the tag and the published .deb
+          # could end up describing different commits. Publishing twice for
+          # the same version is now an error, which is the honest outcome.
+          allowUpdates: false
           makeLatest: true
