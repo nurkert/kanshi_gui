@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/design/app_theme.dart';
 import 'package:kanshi_gui/design/tokens.dart';
-import 'package:kanshi_gui/pages/first_run_wizard.dart';
 import 'package:kanshi_gui/pages/home_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
@@ -84,14 +83,6 @@ class KanshiApp extends StatefulWidget {
 }
 
 class _KanshiAppState extends State<KanshiApp> {
-  late bool _showWizard;
-
-  @override
-  void initState() {
-    super.initState();
-    _showWizard = !widget.settings.firstRunDone;
-  }
-
   ThemeMode get _themeMode {
     switch (widget.settings.themeChoice) {
       case AppThemeChoice.system:
@@ -136,18 +127,16 @@ class _KanshiAppState extends State<KanshiApp> {
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
       themeMode: _themeMode,
-      home: _showWizard
-          ? FirstRunWizard(
-              controller: widget.controller,
-              settings: widget.settings,
-              onDone: () => setState(() => _showWizard = false),
-            )
-          : HomePage(
-              controller: widget.controller,
-              settings: widget.settings,
-              activeAccent: _accent,
-              onAppearanceChanged: _onAppearanceChanged,
-            ),
+      // No wizard. The first launch shows the user their own desk, already
+      // detected and already saved — asking them to answer four questions
+      // before they may look at it was the app introducing itself instead of
+      // doing its job.
+      home: HomePage(
+        controller: widget.controller,
+        settings: widget.settings,
+        activeAccent: _accent,
+        onAppearanceChanged: _onAppearanceChanged,
+      ),
     );
   }
 }
