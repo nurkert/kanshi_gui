@@ -484,11 +484,8 @@ class _HomePageState extends State<HomePage> {
                       // Static backdrop in its own layer — never repaints
                       // while monitors are dragged.
                       Positioned.fill(
-                        child: RepaintBoundary(
-                          child: DotGridBackground(
-                            accent: widget.activeAccent ??
-                                Theme.of(context).colorScheme.primary,
-                          ),
+                        child: const RepaintBoundary(
+                          child: DotGridBackground(),
                         ),
                       ),
                       Positioned.fill(

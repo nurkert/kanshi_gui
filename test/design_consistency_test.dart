@@ -17,7 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// a new file starts at zero. That turns "we should tidy this up some day"
 /// into something the build enforces.
 const Map<String, int> _allowedInlineStyling = {
-  'widgets/monitor_tile.dart': 23,
+  'widgets/monitor_tile.dart': 16,
   'pages/settings_page.dart': 12,
   'widgets/profile_rail.dart': 12,
   'widgets/decision_card.dart': 10,
@@ -26,13 +26,12 @@ const Map<String, int> _allowedInlineStyling = {
   'widgets/assurance_line.dart': 7,
   'widgets/presets_bar.dart': 6,
   'widgets/identify_overlay.dart': 5,
-  'widgets/dot_grid_background.dart': 4,
   'pages/home_page.dart': 3,
   'widgets/snap_lines_painter.dart': 2,
-  'widgets/properties_inspector.dart': 1,
   // Not a widget: it parses a colour out of the sway config, which is where
   // the accent comes from in the first place.
   'services/sway_theme.dart': 1,
+  'widgets/properties_inspector.dart': 1,
 };
 
 /// Literal colours, radii and text styles: the three ways a call site decides

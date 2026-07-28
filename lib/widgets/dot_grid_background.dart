@@ -1,35 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
 
-/// The editor canvas backdrop: a deep, subtly-tinted dark gradient with a
-/// faint dot grid painted over it, so the area reads as a coordinate space
-/// the monitors live in rather than a flat black void.
+/// The canvas backdrop.
 ///
-/// Childless on purpose — it's meant to sit in a [RepaintBoundary] behind the
-/// draggable tiles (a `Positioned.fill` layer), so dragging a monitor never
-/// repaints this static grid.
+/// A flat field with a faint dot grid, so the area reads as a coordinate
+/// space the screens stand in rather than a decorated panel. It used to be an
+/// accent-tinted diagonal gradient between two hardcoded near-blacks, which
+/// meant the canvas — the largest surface in the window — stayed dark in the
+/// light theme no matter what the setting said.
+///
+/// Childless on purpose: it sits in a [RepaintBoundary] behind the draggable
+/// tiles, so dragging a screen never repaints the grid.
 class DotGridBackground extends StatelessWidget {
-  /// Accent used for the very subtle tint. Usually the app accent.
-  final Color accent;
-
-  const DotGridBackground({super.key, required this.accent});
+  const DotGridBackground({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFF14171C),
-            Color.alphaBlend(
-                accent.withValues(alpha: 0.05), const Color(0xFF0D0F12)),
-          ],
-        ),
-      ),
+    final c = context.colors;
+    return ColoredBox(
+      color: c.bg,
       child: CustomPaint(
         size: Size.infinite,
-        painter: _DotGridPainter(dotColor: Colors.white.withValues(alpha: 0.05)),
+        painter: _DotGridPainter(dotColor: c.hairline),
       ),
     );
   }
@@ -37,6 +29,9 @@ class DotGridBackground extends StatelessWidget {
 
 class _DotGridPainter extends CustomPainter {
   final Color dotColor;
+
+  /// One dot per 32 logical pixels: close enough to read as a grid, far
+  /// enough not to compete with the screens standing on it.
   static const double _spacing = 32;
   static const double _radius = 1.0;
 
