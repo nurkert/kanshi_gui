@@ -9,6 +9,7 @@ import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
+import 'package:kanshi_gui/services/kanshi_daemon.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
@@ -104,13 +105,7 @@ class KanshiController extends ChangeNotifier {
   /// Re-probes whether kanshi is running. Cheap, and the answer decides
   /// whether the app may promise that the layout comes back after a reboot.
   Future<void> refreshKanshiRunning() async {
-    try {
-      final r = await _processRunner.run('pgrep', ['-x', 'kanshi']);
-      _kanshiRunning = r.exitCode == 0;
-    } catch (_) {
-      // pgrep missing — unknowable rather than false.
-      _kanshiRunning = null;
-    }
+    _kanshiRunning = await KanshiDaemon(_processRunner).isRunning();
     if (!_isDisposed) notifyListeners();
   }
 

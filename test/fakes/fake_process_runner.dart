@@ -16,15 +16,23 @@ class FakeProcessRunner implements ProcessRunner {
   /// Default ProcessResult returned when no scripted response matches.
   final ProcessResult fallback;
 
+  /// Invocations (`binary args` joined) that should THROW rather than return
+  /// a non-zero exit code. Models the real difference between "the tool said
+  /// no" and "the tool is not there at all" — a distinction that matters,
+  /// because an unguarded throw skips the rest of a fallback chain.
+  final Set<String> throwing;
+
   /// Recorded invocations in call order.
   final List<List<String>> calls = [];
 
   FakeProcessRunner({
     Map<String, ProcessResult>? responses,
     Set<String>? installed,
+    Set<String>? throwing,
     ProcessResult? fallback,
   })  : responses = responses ?? <String, ProcessResult>{},
         installed = installed ?? <String>{},
+        throwing = throwing ?? <String>{},
         fallback = fallback ?? ProcessResult(0, 0, '', '');
 
   @override
@@ -36,6 +44,9 @@ class FakeProcessRunner implements ProcessRunner {
     final invocation = [executable, ...arguments];
     calls.add(invocation);
     final key = invocation.join(' ');
+    if (throwing.contains(key)) {
+      throw ProcessException(executable, arguments, 'No such file');
+    }
     return responses[key] ?? fallback;
   }
 
