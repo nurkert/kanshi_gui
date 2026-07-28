@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 
 /// A small frosted pill of one-click layout presets that floats at the
 /// bottom of the canvas. Each preset only previews into the in-memory
@@ -21,14 +23,15 @@ class PresetsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (outputIds.isEmpty) return const SizedBox.shrink();
+    final c = context.colors;
     return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: const Color(0xFF14171C).withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            boxShadow: const [
-              BoxShadow(color: Colors.black54, blurRadius: 12, spreadRadius: -2),
+            color: c.surfaceRaised,
+            borderRadius: R.cardR,
+            border: Border.all(color: c.hairline),
+            boxShadow: [
+              BoxShadow(color: c.scrim, blurRadius: 12, spreadRadius: -2),
             ],
           ),
           child: Row(
@@ -69,6 +72,7 @@ class _PresetButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Tooltip(
       message: tooltip,
       child: TextButton.icon(
@@ -76,7 +80,7 @@ class _PresetButton extends StatelessWidget {
         icon: Icon(icon, size: 18),
         label: Text(label),
         style: TextButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.9),
+          foregroundColor: c.textSecondary,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
       ),
@@ -108,7 +112,7 @@ class _SingleMenu extends StatelessWidget {
           icon: const Icon(Icons.crop_square, size: 18),
           label: const Text('Single'),
           style: TextButton.styleFrom(
-            foregroundColor: Colors.white.withValues(alpha: 0.9),
+            foregroundColor: context.colors.textSecondary,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           ),
         ),
