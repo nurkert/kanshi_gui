@@ -20,6 +20,7 @@ import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/drag_sessions.dart';
+import 'package:kanshi_gui/state/drift_monitor.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 import 'package:kanshi_gui/state/save_coordinator.dart';
 import 'package:kanshi_gui/state/workspace_placement.dart';
@@ -65,6 +66,7 @@ class KanshiController extends ChangeNotifier {
   double get snapThreshold => _snapThreshold;
 
   List<Profile> _profiles = [];
+  final DriftMonitor _drift = DriftMonitor();
   late final DragSessions _drags = DragSessions()
     ..onChanged = notifyListeners;
   late final LiveOutputs _live = LiveOutputs(monitors);
@@ -232,7 +234,6 @@ class KanshiController extends ChangeNotifier {
 
   /// True after the user explicitly dismissed the drift banner so it does
   /// not nag again until the next hotplug clears it.
-  bool _driftDismissed = false;
 
   /// Debounce timer for the auto-reapply path. Cleared on every hotplug;
   /// the body re-checks `hasLayoutDrift` at fire time so a drift that
@@ -577,7 +578,7 @@ class KanshiController extends ChangeNotifier {
       // banner — the new live layout might genuinely diverge from the
       // active profile (the kanshi-daemon position-drop race) and the
       // user deserves another chance to see/repair it.
-      _driftDismissed = false;
+      _drift.resetDismissal();
       _recomputeDriftIssues();
       notifyListeners();
       _scheduleDriftAutoReapply();
@@ -2129,78 +2130,29 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
-  /// Cached snapshot of layoutDriftIssues, refreshed only on hotplug
-  /// events (and the explicit refresh paths). Computing live would flap
-  /// during a drag: the profile's coords mutate per pan-update while
-  /// `_currentMonitors` only catches up after Sway emits the output
-  /// event, so a transient diff exists for every dragged pixel. The
-  /// banner must only surface real, settled drift — typically the
-  /// kanshi-daemon hotplug race — not the user's own in-progress edits.
-  List<String> _driftIssuesCache = const [];
+  /// Per-output positional differences (in logical sway-coord pixels) between
+  /// the active profile and the applied layout, as of the last hotplug.
+  /// Owned by [DriftMonitor]; see there for why it is cached rather than
+  /// computed on read.
+  List<String> get layoutDriftIssues => _drift.issues;
 
-  /// Per-output positional differences (in *logical* sway-coord pixels)
-  /// between the active profile and the actually-applied live layout, as
-  /// of the last hotplug event. Empty when they match. Non-empty after
-  /// the known kanshi-daemon race where a hotplug re-match silently
-  /// drops a `position X,Y` directive — the GUI's expectation is still
-  /// correct, but the compositor never got the placement command. A
-  /// 2-px tolerance absorbs scale rounding.
-  List<String> get layoutDriftIssues => _driftIssuesCache;
-
-  void _recomputeDriftIssues() {
-    final next = _computeDriftIssues();
-    if (!_listEquals(next, _driftIssuesCache)) {
-      _driftIssuesCache = next;
-    }
-  }
-
-  List<String> _computeDriftIssues() {
-    if (!monitors.isLive) return const [];
-    final profile = activeProfile;
-    if (profile == null) return const [];
-    if (_currentMonitors.isEmpty) return const [];
-    const tol = 2.0;
-    final liveById = {for (final m in _currentMonitors) m.id: m};
-    final issues = <String>[];
-    for (final pe in profile.monitors) {
-      if (!pe.enabled || pe.mirrorOf != null) continue;
-      final live = liveById[pe.id];
-      if (live == null) continue;
-      final dx = (pe.x - live.x).abs();
-      final dy = (pe.y - live.y).abs();
-      if (dx > tol || dy > tol) {
-        issues.add(
-          '${pe.id}: expected '
-          '(${pe.x.toStringAsFixed(0)}, ${pe.y.toStringAsFixed(0)})'
-          ' but is at '
-          '(${live.x.toStringAsFixed(0)}, ${live.y.toStringAsFixed(0)})',
-        );
-      }
-    }
-    return issues;
-  }
-
-  static bool _listEquals(List<String> a, List<String> b) {
-    if (identical(a, b)) return true;
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
+  void _recomputeDriftIssues() => _drift.recompute(
+        isLive: monitors.isLive,
+        activeProfile: activeProfile,
+        liveOutputs: _currentMonitors,
+      );
 
   /// True when the drift banner should currently be visible: there's an
   /// actual drift AND the user has not already dismissed it for this
   /// hotplug cycle. Cleared on the next hotplug so a new drift surfaces.
-  bool get hasLayoutDrift =>
-      !_driftDismissed && layoutDriftIssues.isNotEmpty;
+  bool get hasLayoutDrift => _drift.shouldSurface;
 
   /// Hides the drift banner for the current hotplug cycle without applying
   /// any change. The next hotplug event clears the dismissal so a new drift
   /// surfaces again.
   void dismissDriftBanner() {
-    if (_driftDismissed) return;
-    _driftDismissed = true;
+    if (!_drift.shouldSurface) return;
+    _drift.dismiss();
     notifyListeners();
   }
 
@@ -2233,7 +2185,7 @@ class KanshiController extends ChangeNotifier {
       return OpResult.err('Could not ask kanshi to re-apply: $e');
     }
     await refreshConnectedMonitors();
-    _driftDismissed = false;
+    _drift.resetDismissal();
     notifyListeners();
     return const OpResult.ok('Layout re-applied.');
   }
