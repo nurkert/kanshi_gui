@@ -486,6 +486,38 @@ Ruhe*:
   Fenster gerade schwarz geworden ist. Fest 15 s, kein Regler. Nur Enter behält, nur Esc
   revertiert.
 
+### 7.3a Die Formsprache muss durchgezogen werden — auch durch die Controls
+
+Der bisher hässlichste Bruch war nicht die Leinwand, sondern dass **Dropdowns aus der
+Formsprache herausfielen**: sie sind native Material-Widgets und bringen ihr eigenes
+Aussehen mit, das mit nichts sonst im Fenster zusammenpasst. Das gilt für die ganze
+Familie. Bestandsaufnahme im heutigen Code:
+
+| Control | Vorkommen |
+|---|---|
+| `SnackBar` | 24 (entfallen mit M5) |
+| `TextButton` | 17 |
+| `FilledButton` | 11 |
+| `SwitchListTile` | 9 |
+| `DropdownMenu` | 9 |
+| `IconButton` | 7 |
+| `showDialog` / `AlertDialog` | 6 / 6 |
+| `TextField` | 6 |
+| `DropdownButton` | 5 |
+| `MenuAnchor` | 4 |
+| `SegmentedButton` | 2 |
+| `Slider`, `PopupMenuButton` | je 1 |
+
+Anforderung für M7 und M10: **kein Control bleibt auf Material-Defaults.** Jedes wird
+entweder zentral aus den Tokens durchgestylt — über `ThemeData`, nicht pro Aufrufstelle —
+oder durch eine eigene Komponente ersetzt. Menüs, Dropdowns, Dialoge und Popups zählen
+ausdrücklich dazu: sie rendern in einem eigenen Overlay und erben deshalb *nicht*
+automatisch, was an der Kachel eingestellt wurde. Genau daran ist es bisher gescheitert.
+
+Prüfbar gemacht: ein Test, der `lib/` nach direkt konstruierten Material-Controls außerhalb
+der Theme- und Komponentenschicht durchsucht und fehlschlägt, wenn eine neue Aufrufstelle
+dazukommt. Sonst schleicht sich der Bruch beim nächsten Feature wieder ein.
+
 ### 7.3 Tokens
 
 Nach `lib/design/tokens.dart`, literale Werte:
@@ -607,6 +639,10 @@ danach, auf Basis dieses Reviews, eine bewusst **eckigere** Design-Sprache. Das 
 die Radien-Skala aus 7.3 (chip 6 · screen 10 · control 8 · card 14 · sheet 20) nach unten
 und zieht Kanten-, Raster- und Trennlinien-Sprache nach. Zum Schluss der Feinschliff an
 Abständen, Typo und Motion.
+
+Explizit im Scope: **die Formsprache muss durch jedes Control durchgezogen sein** — siehe
+7.3a. Dropdowns, Menüs und Dialoge sind der bekannte Bruch, weil sie in einem eigenen
+Overlay rendern und nichts von der Kachel erben.
 
 Hängt an M7 und M8: ein Review vor dem Umbau würde nur den alten Zustand bewerten.
 
