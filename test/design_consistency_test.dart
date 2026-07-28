@@ -18,9 +18,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// into something the build enforces.
 const Map<String, int> _allowedInlineStyling = {
   'widgets/monitor_tile.dart': 16,
-  // Both of these are deleted in M8, so converting them onto the tokens now
-  // would be work aimed at files that are about to disappear.
-  'pages/settings_page.dart': 12,
+  // Deleted later in M8, so converting it onto the tokens now would be work
+  // aimed at a file that is about to disappear.
   'pages/first_run_wizard.dart': 8,
   'widgets/identify_overlay.dart': 4,
   'widgets/editor_header.dart': 4,
