@@ -9,8 +9,118 @@ import 'package:kanshi_gui/models/profiles.dart';
 /// - braces are matched by counting (so per-profile blocks may contain inner
 ///   braces in `exec` lines, etc.)
 /// - whitespace is normalised between tokens
+/// What [KanshiConfigParser.diagnose] found in a config file, compared with
+/// what the parser was able to turn into [Profile]s.
+///
+/// The parser models the subset of kanshi's DSL that the GUI writes. Anything
+/// outside that subset is not an error — kanshi accepts it happily — but the
+/// GUI must know it did not understand the file, because [KanshiConfigWriter]
+/// re-renders the whole config from the model and would drop whatever the
+/// parser never saw.
+class KanshiConfigDiagnostics {
+  /// `profile` headers present in the file, named or not.
+  final int profilesInFile;
+
+  /// Profiles the parser produced.
+  final int profilesParsed;
+
+  /// `output` / `...output` directives inside profile blocks.
+  final int outputsInFile;
+
+  /// Monitors the parser produced across all profiles.
+  final int outputsParsed;
+
+  /// Global-scope `output <criteria> …` default lines. The model has no
+  /// place for them, so re-rendering deletes them.
+  final int globalOutputDefaults;
+
+  const KanshiConfigDiagnostics({
+    required this.profilesInFile,
+    required this.profilesParsed,
+    required this.outputsInFile,
+    required this.outputsParsed,
+    required this.globalOutputDefaults,
+  });
+
+  /// True when everything in the file made it into the model, so rendering
+  /// the model back cannot lose a profile or an output.
+  bool get isLossless =>
+      profilesInFile == profilesParsed &&
+      outputsInFile == outputsParsed &&
+      globalOutputDefaults == 0;
+
+  /// Human-readable summary of what would be lost, or null when nothing is.
+  String? get lossDescription {
+    if (isLossless) return null;
+    final parts = <String>[];
+    if (profilesInFile != profilesParsed) {
+      parts.add('${profilesInFile - profilesParsed} of $profilesInFile '
+          'profiles');
+    }
+    if (outputsInFile != outputsParsed) {
+      parts.add('${outputsInFile - outputsParsed} of $outputsInFile '
+          'output lines');
+    }
+    if (globalOutputDefaults > 0) {
+      parts.add('$globalOutputDefaults global output default'
+          '${globalOutputDefaults == 1 ? '' : 's'}');
+    }
+    return parts.join(' and ');
+  }
+
+  @override
+  String toString() => 'KanshiConfigDiagnostics(profiles '
+      '$profilesParsed/$profilesInFile, outputs $outputsParsed/$outputsInFile, '
+      'globalDefaults $globalOutputDefaults)';
+}
+
 class KanshiConfigParser {
   KanshiConfigParser._();
+
+  /// Counts what the file contains and what [parse] managed to read from it.
+  ///
+  /// This is the basis of the save-refusal gate: the GUI re-renders the whole
+  /// config from its model, so a file it only partially understood must not
+  /// be overwritten. Before this existed, a hand-written config using kanshi's
+  /// optional-`enable` form parsed as zero monitors per profile, the writer
+  /// skipped every empty profile, and the first save replaced the user's file
+  /// with an empty one.
+  static KanshiConfigDiagnostics diagnose(String content) {
+    final stripped = _stripComments(content).split('\n');
+    final profileHeader = RegExp(r'^\s*profile\b');
+    final outputLine = RegExp(r'^\s*(?:\.\.\.)?output\s+\S');
+
+    var profilesInFile = 0;
+    var outputsInFile = 0;
+    var globalOutputDefaults = 0;
+    var depth = 0;
+
+    for (final line in stripped) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      if (depth == 0 && profileHeader.hasMatch(trimmed)) {
+        profilesInFile++;
+      } else if (outputLine.hasMatch(trimmed)) {
+        if (depth > 0) {
+          outputsInFile++;
+        } else {
+          globalOutputDefaults++;
+        }
+      }
+      depth += _countChar(line, '{') - _countChar(line, '}');
+      if (depth < 0) depth = 0;
+    }
+
+    final parsed = parse(content);
+    return KanshiConfigDiagnostics(
+      profilesInFile: profilesInFile,
+      profilesParsed: parsed.length,
+      outputsInFile: outputsInFile,
+      outputsParsed:
+          parsed.fold<int>(0, (n, p) => n + p.monitors.length),
+      globalOutputDefaults: globalOutputDefaults,
+    );
+  }
 
   static List<Profile> parse(String content) {
     final profiles = <Profile>[];
