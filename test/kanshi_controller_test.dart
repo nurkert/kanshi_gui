@@ -1108,7 +1108,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.extendOutputs();
+      final r = await c.extendOutputs();
       expect(r.success, isTrue);
       final a = c.activeMonitors.firstWhere((m) => m.id == 'A');
       final b = c.activeMonitors.firstWhere((m) => m.id == 'B');
@@ -1127,7 +1127,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.mirrorAll();
+      final r = await c.mirrorAll();
       expect(r.success, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf, isNull);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'B').mirrorOf, 'A');
@@ -1140,7 +1140,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      expect(c.mirrorAll().success, isFalse);
+      expect((await c.mirrorAll()).success, isFalse);
     });
 
     test('useOnlyOutput enables the target and disables the rest', () async {
@@ -1150,7 +1150,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.useOnlyOutput('A');
+      final r = await c.useOnlyOutput('A');
       expect(r.success, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'B').enabled, isFalse);

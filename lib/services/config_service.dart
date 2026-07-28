@@ -200,7 +200,40 @@ class ConfigService {
     }
   }
 
-  Future<void> saveProfiles(List<Profile> profiles) async {
+  /// Serialises writes so two saves can never interleave.
+  ///
+  /// [saveProfiles] is async and was previously re-entrant: two overlapping
+  /// calls both took a backup, both wrote the SAME `<path>.tmp`, and both
+  /// renamed it over the live config. The loser's rename hit a file the
+  /// winner had already moved, and the file could end up holding the older
+  /// of the two renders — i.e. an edit silently rolled back.
+  Future<void> _writeChain = Future.value();
+
+  /// Distinguishes temp files between processes and instances.
+  static int _writeSeq = 0;
+
+  Future<void> saveProfiles(List<Profile> profiles) {
+    // A snapshot per call: `profiles` and its Profile objects are mutable and
+    // owned by the controller, which keeps editing while a write is queued.
+    // Without this, a queued save would render whatever the model looks like
+    // when it finally runs, not what the caller asked to persist.
+    final snapshot = [
+      for (final p in profiles)
+        Profile(name: p.name, monitors: List.of(p.monitors)),
+    ];
+    final completer = Completer<void>();
+    _writeChain = _writeChain.then((_) async {
+      try {
+        await _saveProfilesLocked(snapshot);
+        completer.complete();
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _saveProfilesLocked(List<Profile> profiles) async {
     // Refuse to save when the user's main config pulls in other files
     // via `include`. We only parse the main file, so a render-and-
     // overwrite would silently drop the `include` line and orphan
@@ -261,7 +294,7 @@ class ConfigService {
       backup = await file.copy('$backupPrefix.$ts');
     }
 
-    final tmp = File('$configPath.tmp');
+    final tmp = File('$configPath.tmp.${pid}_${_writeSeq++}');
     try {
       // Atomic write: a partial failure leaves the live config untouched
       // (the tmp file is on the same filesystem so rename is atomic).
