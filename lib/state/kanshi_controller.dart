@@ -21,6 +21,7 @@ import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 import 'package:kanshi_gui/state/save_coordinator.dart';
+import 'package:kanshi_gui/state/workspace_placement.dart';
 
 /// Lightweight result type returned by mutating controller operations so the
 /// UI can decide whether to show a snackbar. Avoids leaking [ProcessResult]
@@ -64,6 +65,7 @@ class KanshiController extends ChangeNotifier {
 
   List<Profile> _profiles = [];
   late final LiveOutputs _live = LiveOutputs(monitors);
+  late final WorkspacePlacement _workspaces = WorkspacePlacement(monitors);
 
   /// The connected hardware, owned by [LiveOutputs]. Read-only here on
   /// purpose: this used to be assignable from four places, which is how the
@@ -501,90 +503,19 @@ class KanshiController extends ChangeNotifier {
   /// is cheap (declarations no-op, focus dances end at ws 1).
   Future<void> _verifyAndFixWorkspacePlacement({bool force = false}) async {
     if (_isDisposed) return;
-    if (!monitors.isLive) return;
-    // The chain only makes sense on backends that opt in to the Sway
-    // workspace exec — on wlr-randr / niri / etc. the writer doesn't
-    // emit one in the first place and the live `get_workspaces` IPC
-    // doesn't exist. Short-circuit explicitly so we don't burn an
-    // IPC round-trip just to read an empty map back from the default
-    // no-op impl.
-    // Gate on the *effective* options (backend capability AND the user's
-    // opt-in), not the backend's raw capability — when management is off
-    // we must not touch the live workspace layout at all.
-    if (!config.writeOptions.injectSwayWorkspaceExec) return;
     final activeIdx = _activeProfileIndex;
     if (activeIdx == null) return;
-    try {
-      // Compute the desired mapping from the active profile's enabled,
-      // non-mirror outputs — the same predicate the writer applies when
-      // rendering the kanshi exec line.
-      final desiredMons = _profiles[activeIdx]
-          .monitors
-          .where((m) => m.enabled && m.mirrorOf == null)
-          .toList();
-      if (desiredMons.isEmpty) return;
-      // Resolve the desired mapping against *live* output ids — a
-      // profile's monitor.id may be a manufacturer fallback that doesn't
-      // match what sway currently calls the port. _resolveOutputName
-      // does the lookup; skip outputs we can't resolve to a live name
-      // (they'd produce sway warnings either way).
-      final connectedIds = _currentMonitors.map((m) => m.id).toSet();
-      final resolved = <MonitorTileData>[];
-      for (final m in desiredMons) {
-        final live = _resolveOutputName(m.id);
-        if (!connectedIds.contains(live)) continue;
-        resolved.add(m.copyWith(id: live));
-      }
-      if (resolved.isEmpty) return;
-      final ranked = resolveWorkspaceRanks(resolved);
-      if (ranked.isEmpty) return;
-
-      // Build the desired ws→output map the same way the chain does:
-      // ws (1..maxWorkspaces) → ranked[(ws-1) mod n].id.
-      const maxWs = 9;
-      final n = ranked.length;
-      final dist = config.writeOptions.workspaceDistribution;
-      final desired = <int, String>{
-        for (var ws = 1; ws <= maxWs; ws++)
-          ws: ranked[workspaceSlotRank(ws, n, dist, maxWorkspaces: maxWs)].id,
-      };
-
-      Map<int, String> actual;
-      try {
-        actual = await monitors.getWorkspaceOutputs();
-      } catch (e) {
-        debugPrint('verifyWorkspacePlacement: getWorkspaceOutputs failed: $e');
-        return;
-      }
-      if (_isDisposed) return;
-      // Only check the workspaces the compositor actually has — sway
-      // doesn't pre-create empty workspaces, so absence is "we'll
-      // create it on first focus, the chain's `workspace number N
-      // output X` already declared the home". A mismatch on any
-      // *existing* workspace is what matters: it means a workspace
-      // already lives on the wrong output and needs `move workspace
-      // to output` to relocate.
-      final mismatched = actual.entries.any((e) {
-        final want = desired[e.key];
-        return want != null && want != e.value;
-      });
-      // Orphan check: any live workspace whose number is OUTSIDE the
-      // 1..maxWs range (typically a stuck ws 10 from an earlier session
-      // or transient state) is also a reason to re-run the chain. The
-      // chain visits every ws 1..N and ends focused on ws 1, which
-      // displaces the orphan; if it was empty, sway garbage-collects it.
-      final hasOrphan = actual.keys.any((k) => k < 1 || k > maxWs);
-      if (!force && !mismatched && !hasOrphan) return;
-      final chain = buildSwayWorkspaceChain(ranked, distribution: dist);
-      if (chain == null) return;
-      try {
-        await monitors.applyWorkspaceChain(chain);
-      } catch (e) {
-        debugPrint('verifyWorkspacePlacement: applyWorkspaceChain failed: $e');
-      }
-    } catch (e, st) {
-      debugPrint('verifyWorkspacePlacement failed: $e\n$st');
-    }
+    await _workspaces.verifyAndFix(
+      // The effective option, not the backend's raw capability: when the user
+      // has workspace management off we must not touch the live layout.
+      enabled: config.writeOptions.injectSwayWorkspaceExec,
+      profileMonitors: _profiles[activeIdx].monitors,
+      liveOutputs: _currentMonitors,
+      distribution: config.writeOptions.workspaceDistribution,
+      resolveConnector: _resolveOutputName,
+      force: force,
+      isCancelled: () => _isDisposed,
+    );
   }
 
   /// How long the output set must stay unchanged before the hotplug pipeline

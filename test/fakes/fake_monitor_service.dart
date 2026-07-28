@@ -162,7 +162,9 @@ class FakeMonitorService implements MonitorService {
 
   @override
   Future<ProcessResult?> applyWorkspaceChain(String chain) async {
-    calls.add('applyWorkspaceChain');
+    // Record the chain itself, not just that one happened: tests assert on
+    // which identity it addresses outputs by.
+    calls.add('workspaceChain $chain');
     workspaceChainCalls.add(chain);
     return ProcessResult(0, 0, '', '');
   }
