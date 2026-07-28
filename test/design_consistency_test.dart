@@ -18,18 +18,18 @@ import 'package:flutter_test/flutter_test.dart';
 /// into something the build enforces.
 const Map<String, int> _allowedInlineStyling = {
   'widgets/monitor_tile.dart': 16,
+  // Both of these are deleted in M8, so converting them onto the tokens now
+  // would be work aimed at files that are about to disappear.
   'pages/settings_page.dart': 12,
-  'widgets/profile_rail.dart': 12,
-  'widgets/decision_card.dart': 10,
   'pages/first_run_wizard.dart': 8,
-  'widgets/assurance_line.dart': 7,
-  'widgets/identify_overlay.dart': 5,
+  'widgets/identify_overlay.dart': 4,
   'widgets/editor_header.dart': 4,
   'pages/home_page.dart': 3,
   // Not a widget: it parses a colour out of the sway config, which is where
   // the accent comes from in the first place.
   'services/sway_theme.dart': 1,
   'widgets/snap_lines_painter.dart': 1,
+  'widgets/profile_rail.dart': 1,
   'widgets/properties_inspector.dart': 1,
 };
 

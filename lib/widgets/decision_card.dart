@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
 /// The safety-net countdown, as a card over a dimmed canvas.
@@ -56,7 +58,7 @@ class _DecisionCardState extends State<DecisionCard> {
     final progress = window.inMilliseconds == 0
         ? 0.0
         : (remaining.inMilliseconds / window.inMilliseconds).clamp(0.0, 1.0);
-    final scheme = Theme.of(context).colorScheme;
+    final c = context.colors;
 
     return Positioned.fill(
       child: Focus(
@@ -78,12 +80,12 @@ class _DecisionCardState extends State<DecisionCard> {
         child: Container(
           // Dimmed, not blocked: the user can still see what changed. There
           // is deliberately no onTap — clicking the scrim must not answer.
-          color: Colors.black.withValues(alpha: 0.40),
+          color: c.scrim,
           alignment: Alignment.center,
           child: Material(
-            color: scheme.surfaceContainerHighest,
+            color: c.surfaceRaised,
             elevation: 12,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: R.sheetR,
             child: Container(
               width: 420,
               padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
@@ -93,32 +95,23 @@ class _DecisionCardState extends State<DecisionCard> {
                 children: [
                   Text(
                     'Can you read this?',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface,
-                    ),
+                    style: T.title.copyWith(color: c.textPrimary),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     '${prompt.label}. If you can read this, it worked. '
                     'Otherwise it puts itself back in '
                     '${remaining.inSeconds} seconds.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      height: 1.35,
-                      color: scheme.onSurface.withValues(alpha: 0.72),
-                    ),
+                    style: T.body.copyWith(color: c.textSecondary),
                   ),
                   const SizedBox(height: 16),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
+                    borderRadius: R.chipR,
                     child: LinearProgressIndicator(
                       value: progress,
                       minHeight: 4,
-                      backgroundColor:
-                          scheme.onSurface.withValues(alpha: 0.12),
-                      color: const Color(0xFFE8A33D),
+                      backgroundColor: c.hairlineStrong,
+                      color: c.attention,
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -131,10 +124,7 @@ class _DecisionCardState extends State<DecisionCard> {
                       Expanded(
                         child: Text(
                           'Enter keeps · Esc puts it back',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.45),
-                          ),
+                          style: T.caption.copyWith(color: c.textTertiary),
                         ),
                       ),
                       TextButton(

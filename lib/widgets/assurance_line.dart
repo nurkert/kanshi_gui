@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 
 /// The one status surface: 36 px, pinned above the window's bottom edge,
@@ -25,11 +27,11 @@ class AssuranceLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final (icon, tint) = _leading(scheme);
+    final c = context.colors;
+    final (icon, tint) = _leading(c);
 
     return Material(
-      color: scheme.surfaceContainerHighest,
+      color: c.surface,
       child: SizedBox(
         height: height,
         child: Row(
@@ -48,11 +50,7 @@ class AssuranceLine extends StatelessWidget {
                   key: ValueKey(status.message),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: tint ?? scheme.onSurface.withValues(alpha: 0.78),
-                  ),
+                  style: T.label.copyWith(color: tint ?? c.textSecondary),
                 ),
               ),
             ),
@@ -71,10 +69,7 @@ class AssuranceLine extends StatelessWidget {
                 padding: const EdgeInsets.only(right: 14),
                 child: Text(
                   trailingNote!,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurface.withValues(alpha: 0.38),
-                  ),
+                  style: T.caption.copyWith(color: c.textTertiary),
                 ),
               ),
             const SizedBox(width: 4),
@@ -84,13 +79,13 @@ class AssuranceLine extends StatelessWidget {
     );
   }
 
-  (Widget, Color?) _leading(ColorScheme scheme) {
+  (Widget, Color?) _leading(AppColors c) {
     switch (status.level) {
       case StatusLevel.attention:
       case StatusLevel.decision:
         return (
-          Icon(Icons.error_outline, size: 16, color: scheme.error),
-          scheme.error,
+          Icon(Icons.error_outline, size: 16, color: c.danger),
+          c.danger,
         );
       case StatusLevel.working:
         return (
@@ -105,8 +100,7 @@ class AssuranceLine extends StatelessWidget {
         switch (status.assurance) {
           case AssuranceLevel.verified:
             return (
-              const Icon(Icons.check_circle_outline,
-                  size: 16, color: Color(0xFF3FBF7F)),
+              Icon(Icons.check_circle_outline, size: 16, color: c.ok),
               null,
             );
           case AssuranceLevel.writtenOnly:
@@ -114,14 +108,12 @@ class AssuranceLine extends StatelessWidget {
             // Deliberately NOT a check. The sentence next to it says what is
             // and is not known; a check here would be a small lie.
             return (
-              Icon(Icons.circle,
-                  size: 9, color: scheme.onSurface.withValues(alpha: 0.35)),
+              Icon(Icons.circle, size: 9, color: c.textTertiary),
               null,
             );
           case AssuranceLevel.unknown:
             return (
-              Icon(Icons.circle_outlined,
-                  size: 12, color: scheme.onSurface.withValues(alpha: 0.28)),
+              Icon(Icons.circle_outlined, size: 12, color: c.textTertiary),
               null,
             );
         }
