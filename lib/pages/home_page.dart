@@ -7,8 +7,10 @@ import 'package:kanshi_gui/pages/settings_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
+import 'package:kanshi_gui/widgets/assurance_line.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
 import 'package:kanshi_gui/widgets/editor_header.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
@@ -219,6 +221,72 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+
+  /// The single status the assurance line shows, in strict priority order:
+  /// attention beats working beats settled. A decision (the safety-net
+  /// countdown) outranks all of them and is rendered by its own surface
+  /// above the line, because the user may be looking at a screen that just
+  /// went black and a 36px row at the bottom is the wrong shape for a
+  /// question they must answer.
+  AppStatus _statusFor(KanshiController c) {
+    final blocked = c.saveBlockedReason;
+    if (blocked != null) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: blocked,
+        actionLabel: 'Show file',
+        onAction: () => _revealConfigInFileManager(),
+      );
+    }
+    if (c.hasFailedSafetyNetRevert) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: "I could not put your display back on my own.",
+        actionLabel: 'Try again',
+        onAction: () async => _toast(await c.retrySafetyNetReverts()),
+      );
+    }
+    if (c.hasLayoutDrift) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: c.layoutDriftIssues.length == 1
+            ? 'A screen is not where you put it.'
+            : '${c.layoutDriftIssues.length} screens are not where you put '
+                'them.',
+        actionLabel: 'Put back',
+        onAction: () async => _toast(await c.reapplyActiveProfile()),
+      );
+    }
+    if (c.kanshiRunning == false) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: "kanshi isn't running, so this won't come back after a "
+            'reboot.',
+        actionLabel: 'Details',
+        onAction: _showHelp,
+      );
+    }
+    if (_healthWarnings.isNotEmpty && !_healthDismissed) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: _healthWarnings.first,
+        actionLabel: 'Dismiss',
+        onAction: () => setState(() => _healthDismissed = true),
+      );
+    }
+    return AppStatus.settled(
+      c.assuranceLevel,
+      screenCount: c.activeMonitors.where((m) => m.enabled).length,
+    );
+  }
+
+  void _revealConfigInFileManager() {
+    // Deliberately just tells the user where it is: opening a file manager
+    // from a Wayland desktop app is a portal dance that can fail silently,
+    // and a path they can copy always works.
+    _toast(OpResult.err('Your kanshi config: ${c.config.configPath}'));
+  }
+
   void _toast(OpResult r) {
     if (!mounted || r.message == null) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -395,7 +463,20 @@ class _HomePageState extends State<HomePage> {
               onShowLogs: _showLogs,
               onShowHelp: _showHelp,
               child: Scaffold(
-            bottomNavigationBar: SafetyNetBanner(controller: c),
+            bottomNavigationBar: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // A decision outranks every other level, so it sits above
+                // the line rather than inside it.
+                SafetyNetBanner(controller: c),
+                AssuranceLine(
+                  status: _statusFor(c),
+                  trailingNote: c.assuranceLevel == AssuranceLevel.verified
+                      ? 'verified'
+                      : null,
+                ),
+              ],
+            ),
             body: Row(
               children: [
                 RepaintBoundary(
@@ -617,40 +698,13 @@ class _HomePageState extends State<HomePage> {
                             ),
                           ),
                         ),
-                        // Environment health warnings (dismissible).
-                        if (_healthWarnings.isNotEmpty && !_healthDismissed)
-                          Positioned(
-                            top: EditorHeader.height + 10,
-                            left: 16,
-                            right: 16,
-                            child: _HealthBanner(
-                              warnings: _healthWarnings,
-                              onDismiss: () =>
-                                  setState(() => _healthDismissed = true),
-                            ),
-                          ),
-                        // Layout-drift banner: surfaces the kanshi-daemon
-                        // hotplug race where live positions silently
-                        // diverge from the active profile. One-click
-                        // re-apply runs `kanshictl reload`.
-                        if (c.hasLayoutDrift)
-                          Positioned(
-                            top: EditorHeader.height +
-                                10 +
-                                (_healthWarnings.isNotEmpty &&
-                                        !_healthDismissed
-                                    ? 96
-                                    : 0),
-                            left: 16,
-                            right: 16,
-                            child: _DriftBanner(
-                              issues: c.layoutDriftIssues,
-                              onReapply: () async {
-                                _toast(await c.reapplyActiveProfile());
-                              },
-                              onDismiss: c.dismissDriftBanner,
-                            ),
-                          ),
+                        // Health warnings and layout drift no longer float
+                        // over the canvas: they are levels of the single
+                        // assurance line at the bottom of the window. Two
+                        // banners stacked with a hardcoded 96px offset — and
+                        // able to appear alongside the safety-net bar and two
+                        // SnackBars — is what "not thought through" looked
+                        // like from outside.
                       ],
                     ),
                   ),
@@ -794,136 +848,3 @@ class _HomePageState extends State<HomePage> {
 
 }
 
-/// Dismissible card surfacing [KanshiController.checkHealth] warnings at the
-/// top of the canvas (e.g. "kanshi isn't running").
-class _HealthBanner extends StatelessWidget {
-  final List<String> warnings;
-  final VoidCallback onDismiss;
-  const _HealthBanner({required this.warnings, required this.onDismiss});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(12),
-      color: Color.alphaBlend(
-        Colors.amber.withValues(alpha: 0.12),
-        scheme.surfaceContainerHighest,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Icon(Icons.warning_amber_rounded,
-                  color: Colors.amber, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final w in warnings)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(w,
-                          style: Theme.of(context).textTheme.bodyMedium),
-                    ),
-                ],
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Dismiss',
-              onPressed: onDismiss,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Banner that surfaces a live-vs-profile layout mismatch. Visible when
-/// the kanshi-daemon dropped a `position X,Y` directive during a hotplug
-/// re-apply and the compositor's actual layout no longer matches the GUI's
-/// expectation. One click on "Re-apply" fires `kanshictl reload`.
-class _DriftBanner extends StatelessWidget {
-  final List<String> issues;
-  final Future<void> Function() onReapply;
-  final VoidCallback onDismiss;
-  const _DriftBanner({
-    required this.issues,
-    required this.onReapply,
-    required this.onDismiss,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(12),
-      color: Color.alphaBlend(
-        Colors.orange.withValues(alpha: 0.14),
-        scheme.surfaceContainerHighest,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Icon(Icons.warning_amber_rounded,
-                  color: Colors.orangeAccent, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Layout drift detected — the compositor is not showing '
-                    'the active profile.',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w500),
-                  ),
-                  const SizedBox(height: 4),
-                  for (final i in issues)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(i,
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('Re-apply'),
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.orange.shade700,
-              ),
-              onPressed: () {
-                // ignore: discarded_futures
-                onReapply();
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Dismiss',
-              onPressed: onDismiss,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

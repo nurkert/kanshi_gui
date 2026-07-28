@@ -175,8 +175,10 @@ void main() {
     expect(c.hasLayoutDrift, isFalse);
     expect(c.layoutDriftIssues, isNotEmpty,
         reason: 'dismiss only hides the banner; the issue list is unchanged');
-    expect(runner.calls, isEmpty,
-        reason: 'dismiss must not run kanshictl');
+    expect(runner.calls.where((inv) => inv.isNotEmpty && inv[0] != 'pgrep'),
+        isEmpty,
+        reason: 'dismiss must not run kanshictl '
+            '(pgrep is the harmless is-kanshi-running probe)');
   });
 
   test('reapplyActiveProfile asks the backend to reload and refreshes outputs',
@@ -237,7 +239,8 @@ void main() {
     await c.init();
     final res = await c.reapplyActiveProfile();
     expect(res.success, isFalse);
-    expect(runner.calls, isEmpty);
+    expect(runner.calls.where((inv) => inv.isNotEmpty && inv[0] != 'pgrep'),
+        isEmpty);
   });
 
   test('editing the active profile does not flap the drift banner',
