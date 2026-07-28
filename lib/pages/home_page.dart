@@ -3,12 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
-import 'package:kanshi_gui/pages/settings_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
+import 'package:kanshi_gui/widgets/advanced_sheet.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
 import 'package:kanshi_gui/widgets/assurance_line.dart';
 import 'package:kanshi_gui/widgets/decision_card.dart';
@@ -676,15 +676,14 @@ class _HomePageState extends State<HomePage> {
                             onApply: () async =>
                                 _toast(await c.reloadAndApply()),
                             onIdentify: c.identifyDisplays,
-                            onSettings: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => SettingsPage(
-                                  controller: c,
-                                  settings: widget.settings,
-                                  onAppearanceChanged:
-                                      widget.onAppearanceChanged,
-                                ),
-                              ),
+                            // A sheet, not a page: settings are a detour, and
+                            // a detour that replaces the whole window makes
+                            // the user find their way back.
+                            onSettings: () => AdvancedSheet.show(
+                              context,
+                              controller: c,
+                              settings: widget.settings,
+                              onAppearanceChanged: widget.onAppearanceChanged,
                             ),
                           ),
                           ),
