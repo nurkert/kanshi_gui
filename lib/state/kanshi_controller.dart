@@ -19,6 +19,7 @@ import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/mirror_coordinator.dart';
+import 'package:kanshi_gui/state/profile_store.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/drag_sessions.dart';
 import 'package:kanshi_gui/state/drift_monitor.dart';
@@ -66,7 +67,14 @@ class KanshiController extends ChangeNotifier {
   double _snapThreshold;
   double get snapThreshold => _snapThreshold;
 
-  List<Profile> _profiles = [];
+  final ProfileStore _store = ProfileStore();
+
+  /// Read-only view onto [ProfileStore]. Every write goes through a named
+  /// store method, so no caller can hold a mutable list across an await.
+  List<Profile> get _profiles => _store.profiles;
+
+  int? get _activeProfileIndex => _store.activeIndex;
+  set _activeProfileIndex(int? v) => _store.activeIndex = v;
   final DriftMonitor _drift = DriftMonitor();
   late final MirrorCoordinator _mirrors =
       MirrorCoordinator(monitors, mirrorRunner);
@@ -79,7 +87,6 @@ class KanshiController extends ChangeNotifier {
   /// purpose: this used to be assignable from four places, which is how the
   /// auto-created setup ended up aliasing it and blinding drift detection.
   List<MonitorTileData> get _currentMonitors => _live.current;
-  int? _activeProfileIndex;
   bool _isApplyingBatch = false;
   /// True when the active layout has edits that haven't been pushed to the
   /// compositor via an explicit Apply yet. Set whenever a mutation schedules
@@ -636,7 +643,7 @@ class KanshiController extends ChangeNotifier {
 
   // ── Profile mutations ──────────────────────────────────────────────────
   Future<void> _loadConfig() async {
-    _profiles = await config.loadProfiles();
+    _store.replaceAll(await config.loadProfiles());
     _activeProfileIndex = _findProfileMatchingCurrent() ??
         (_profiles.isNotEmpty ? 0 : null);
     notifyListeners();
@@ -709,10 +716,10 @@ class KanshiController extends ChangeNotifier {
       final snapshot = List<MonitorTileData>.from(_currentMonitors);
       final idx = _profiles.indexWhere((p) => p.name == currentName);
       if (idx == -1) {
-        _profiles.add(Profile(name: currentName, monitors: snapshot));
-        _activeProfileIndex = _profiles.length - 1;
+        _store.add(Profile(name: currentName, monitors: snapshot),
+            makeActive: true);
       } else {
-        _profiles[idx] = Profile(name: currentName, monitors: snapshot);
+        _store.setMonitors(idx, snapshot);
         _activeProfileIndex = idx;
       }
     }
@@ -769,11 +776,7 @@ class KanshiController extends ChangeNotifier {
 
   Future<void> _restoreSnapshot(HistoryEntry entry) async {
     final activeChanged = _activeProfileIndex != entry.activeIndex;
-    _profiles = [
-      for (final p in entry.profiles)
-        Profile(name: p.name, monitors: [...p.monitors]),
-    ];
-    _activeProfileIndex = entry.activeIndex;
+    _store.replaceAll(entry.profiles, activeIndex: entry.activeIndex);
     // If undoing rolled the user *back* to a different active profile
     // (e.g. they hit Undo on the auto-switch toast), arm the
     // suggestion-cooldown so a flaky cable wiggle doesn't immediately
@@ -888,7 +891,7 @@ class KanshiController extends ChangeNotifier {
       return const OpResult.err('Profile name already exists!');
     }
     _pushHistory("rename '${_profiles[index].name}' → '$newName'");
-    _profiles[index].name = newName;
+    _store.rename(index, newName);
     _scheduleSave();
     notifyListeners();
     return const OpResult.ok();
@@ -897,20 +900,7 @@ class KanshiController extends ChangeNotifier {
   void deleteProfile(int index) {
     if (index < 0 || index >= _profiles.length) return;
     _pushHistory("delete '${_profiles[index].name}'");
-    final wasActive = _activeProfileIndex;
-    _profiles.removeAt(index);
-    // Adjust the active index so it keeps pointing at the same Profile
-    // object after the removal:
-    //   - exactly the deleted profile  → no active profile
-    //   - active index sits *after* the deleted one → shift down by one
-    //   - active index sits *before*   → unchanged
-    if (wasActive != null) {
-      if (wasActive == index) {
-        _activeProfileIndex = null;
-      } else if (wasActive > index) {
-        _activeProfileIndex = wasActive - 1;
-      }
-    }
+    _store.removeAt(index);
     _scheduleSave();
     notifyListeners();
   }
@@ -929,8 +919,7 @@ class KanshiController extends ChangeNotifier {
               );
       }).toList(),
     );
-    _profiles.add(newProfile);
-    _activeProfileIndex = _profiles.length - 1;
+    _store.add(newProfile, makeActive: true);
     _scheduleSave();
     notifyListeners();
   }
@@ -1032,8 +1021,7 @@ class KanshiController extends ChangeNotifier {
         }
       }
     }
-    _profiles[_activeProfileIndex!] =
-        Profile(name: _profiles[_activeProfileIndex!].name, monitors: mons);
+    _store.setMonitors(_activeProfileIndex!, mons);
     _scheduleSave();
     notifyListeners();
   }
@@ -1066,8 +1054,7 @@ class KanshiController extends ChangeNotifier {
         rollbackTo != null) {
       mons[idx] = rollbackTo;
     }
-    _profiles[_activeProfileIndex!] =
-        Profile(name: _profiles[_activeProfileIndex!].name, monitors: mons);
+    _store.setMonitors(_activeProfileIndex!, mons);
     _drags.clearPreview();
     _scheduleSave();
     notifyListeners();
@@ -1116,10 +1103,7 @@ class KanshiController extends ChangeNotifier {
       dirty = true;
     });
     if (dirty) {
-      _profiles[_activeProfileIndex!] = Profile(
-        name: _profiles[_activeProfileIndex!].name,
-        monitors: mons,
-      );
+      _store.setMonitors(_activeProfileIndex!, mons);
     }
   }
 
@@ -1176,8 +1160,7 @@ class KanshiController extends ChangeNotifier {
       rearranged.add(m.copyWith(x: currentX, y: 0));
       currentX += advance(m) + spacing;
     }
-    _profiles[_activeProfileIndex!] =
-        Profile(name: profile.name, monitors: rearranged);
+    _store.setMonitors(_activeProfileIndex!, rearranged);
     _scheduleSave();
     notifyListeners();
     await _applyActiveProfileLive();
@@ -1289,10 +1272,8 @@ class KanshiController extends ChangeNotifier {
       placed[m.id] = m.copyWith(x: cursorX, y: 0, mirrorOf: null);
       cursorX += m.width / (m.scale == 0 ? 1.0 : m.scale);
     }
-    _profiles[idx] = Profile(
-      name: profile.name,
-      monitors: [for (final m in profile.monitors) placed[m.id] ?? m],
-    );
+    _store.setMonitors(
+        idx, [for (final m in profile.monitors) placed[m.id] ?? m]);
     _scheduleSave();
     notifyListeners();
     final failed = await _applyActiveProfileLive();
@@ -1326,10 +1307,8 @@ class KanshiController extends ChangeNotifier {
       updated[m.id] =
           m.copyWith(mirrorOf: m.id == primary ? null : primary);
     }
-    _profiles[idx] = Profile(
-      name: profile.name,
-      monitors: [for (final m in profile.monitors) updated[m.id] ?? m],
-    );
+    _store.setMonitors(
+        idx, [for (final m in profile.monitors) updated[m.id] ?? m]);
     _scheduleSave();
     notifyListeners();
     await _reconcileMirrors();
@@ -1351,15 +1330,12 @@ class KanshiController extends ChangeNotifier {
       return OpResult.err('$keepId not in the active profile.');
     }
     _pushHistory('use only $keepId');
-    _profiles[idx] = Profile(
-      name: profile.name,
-      monitors: [
+    _store.setMonitors(idx, [
         for (final m in profile.monitors)
           m.id == keepId
               ? m.copyWith(enabled: true, mirrorOf: null, x: 0, y: 0)
               : m.copyWith(enabled: false, mirrorOf: null),
-      ],
-    );
+      ]);
     _scheduleSave();
     notifyListeners();
     await _reconcileMirrors();
@@ -1538,8 +1514,7 @@ class KanshiController extends ChangeNotifier {
       }
     }
     mons[idx] = mons[idx].copyWith(workspaceRank: rank);
-    _profiles[_activeProfileIndex!] =
-        Profile(name: profile.name, monitors: mons);
+    _store.setMonitors(_activeProfileIndex!, mons);
     // Flush before reload to avoid a stale-config race in kanshi.
     await _flushSaveAndReload();
     notifyListeners();
@@ -1615,10 +1590,7 @@ class KanshiController extends ChangeNotifier {
         ? 'stop $destId mirroring'
         : 'mirror $destId onto $srcId');
     mons[destIdx] = mons[destIdx].copyWith(mirrorOf: srcId);
-    _profiles[_activeProfileIndex!] = Profile(
-      name: _profiles[_activeProfileIndex!].name,
-      monitors: mons,
-    );
+    _store.setMonitors(_activeProfileIndex!, mons);
 
     // Flush the save *before* reconciling and reloading. The previous
     // 600 ms-debounced save plus immediate `kanshictl reload` had a
@@ -2144,10 +2116,7 @@ class KanshiController extends ChangeNotifier {
     if (idx == null) return false;
     final mons = _profiles[idx].monitors;
     if (!LayoutMath.hasAnyOverlap(mons)) return false;
-    _profiles[idx] = Profile(
-      name: _profiles[idx].name,
-      monitors: LayoutMath.resolveOverlaps(mons),
-    );
+    _store.setMonitors(idx, LayoutMath.resolveOverlaps(mons));
     notifyListeners();
     return true;
   }
@@ -2298,39 +2267,17 @@ class KanshiController extends ChangeNotifier {
   bool monitorIsConnected(MonitorTileData m) =>
       _currentMonitors.any((c) => _matchesOutput(c.id, m.id));
 
-  /// The monitor [outputId] inside the profile named [profileName], looked up
-  /// at call time, or null if either is gone.
-  MonitorTileData? _monitorIn(String profileName, String outputId) {
-    final pIdx = _profiles.indexWhere((p) => p.name == profileName);
-    if (pIdx == -1) return null;
-    final i =
-        _profiles[pIdx].monitors.indexWhere((m) => m.id == outputId);
-    return i == -1 ? null : _profiles[pIdx].monitors[i];
-  }
+  /// Delegates to [ProfileStore]; see there for why deferred work must
+  /// re-resolve rather than capture a list.
+  MonitorTileData? _monitorIn(String profileName, String outputId) =>
+      _store.monitorIn(profileName, outputId);
 
-  /// Applies [update] to [outputId] inside the profile named [profileName],
-  /// re-resolving both at call time. Returns false when either is gone.
-  ///
-  /// Deferred work — safety-net reverts above all — must never capture a
-  /// `List<MonitorTileData>` and write into it after an await. Nearly every
-  /// mutation (scaleMonitor, snapAndCommit, the presets, setMirror, …)
-  /// replaces the whole [Profile] object, so a captured list becomes an
-  /// orphan: the revert wrote into it, nothing read it, and the compositor
-  /// and the saved config disagreed from then on. Nor may deferred work
-  /// simply use whatever profile happens to be active when the timer fires —
-  /// the user may have switched in the meantime, and the change would land
-  /// in a profile it was never part of.
   bool _updateMonitorIn(
     String profileName,
     String outputId,
     MonitorTileData Function(MonitorTileData) update,
   ) {
-    final pIdx = _profiles.indexWhere((p) => p.name == profileName);
-    if (pIdx == -1) return false;
-    final mons = _profiles[pIdx].monitors;
-    final i = mons.indexWhere((m) => m.id == outputId);
-    if (i == -1) return false;
-    mons[i] = update(mons[i]);
+    if (!_store.updateMonitorIn(profileName, outputId, update)) return false;
     _scheduleSave();
     notifyListeners();
     return true;
