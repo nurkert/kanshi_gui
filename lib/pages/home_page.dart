@@ -11,13 +11,13 @@ import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
 import 'package:kanshi_gui/widgets/assurance_line.dart';
+import 'package:kanshi_gui/widgets/decision_card.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
 import 'package:kanshi_gui/widgets/editor_header.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
 import 'package:kanshi_gui/widgets/profile_rail.dart';
 import 'package:kanshi_gui/widgets/properties_inspector.dart';
-import 'package:kanshi_gui/widgets/safety_net_banner.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
 /// Top-level page: hosts the AppBar, the sliding sidebar, and the layout
@@ -463,19 +463,11 @@ class _HomePageState extends State<HomePage> {
               onShowLogs: _showLogs,
               onShowHelp: _showHelp,
               child: Scaffold(
-            bottomNavigationBar: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // A decision outranks every other level, so it sits above
-                // the line rather than inside it.
-                SafetyNetBanner(controller: c),
-                AssuranceLine(
-                  status: _statusFor(c),
-                  trailingNote: c.assuranceLevel == AssuranceLevel.verified
-                      ? 'verified'
-                      : null,
-                ),
-              ],
+            bottomNavigationBar: AssuranceLine(
+              status: _statusFor(c),
+              trailingNote: c.assuranceLevel == AssuranceLevel.verified
+                  ? 'verified'
+                  : null,
             ),
             body: Row(
               children: [
@@ -705,6 +697,13 @@ class _HomePageState extends State<HomePage> {
                         // able to appear alongside the safety-net bar and two
                         // SnackBars — is what "not thought through" looked
                         // like from outside.
+                        //
+                        // A decision is the one state that leaves the line:
+                        // it dims the canvas and takes the centre, because
+                        // the user may be looking at a screen that just went
+                        // black and a 36px row at the bottom is the wrong
+                        // place to ask them about it.
+                        DecisionCard(controller: c),
                       ],
                     ),
                   ),
