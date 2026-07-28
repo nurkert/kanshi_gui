@@ -13,6 +13,7 @@ import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
+import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
 
@@ -91,6 +92,47 @@ class KanshiController extends ChangeNotifier {
   /// model. While non-null, saving is refused by [ConfigService] because
   /// re-rendering the model would delete what was never read.
   String? _configUnparsedLoss;
+
+  /// Whether the last attempted config write reached disk. Null until the
+  /// first save of the session.
+  bool? _lastSaveOk;
+
+  /// Whether a kanshi daemon was seen running. Null until probed.
+  bool? _kanshiRunning;
+  bool? get kanshiRunning => _kanshiRunning;
+
+  /// Re-probes whether kanshi is running. Cheap, and the answer decides
+  /// whether the app may promise that the layout comes back after a reboot.
+  Future<void> refreshKanshiRunning() async {
+    try {
+      final r = await _processRunner.run('pgrep', ['-x', 'kanshi']);
+      _kanshiRunning = r.exitCode == 0;
+    } catch (_) {
+      // pgrep missing — unknowable rather than false.
+      _kanshiRunning = null;
+    }
+    if (!_isDisposed) notifyListeners();
+  }
+
+  /// How much of "these screens will come back exactly like this" the app has
+  /// actually earned right now.
+  ///
+  /// Deliberately conservative: every gate that cannot be checked downgrades
+  /// the sentence. The green check must never be a decoration.
+  AssuranceLevel get assuranceLevel {
+    if (_lastSaveOk == false) return AssuranceLevel.written;
+    if (saveBlockedReason != null) return AssuranceLevel.written;
+    if (_lastSaveOk == null && _profiles.isEmpty) {
+      return AssuranceLevel.unknown;
+    }
+    // No live backend: the file is all we can speak for.
+    if (!monitors.isLive) return AssuranceLevel.writtenOnly;
+    // Something else is driving the screens away from what we saved.
+    if (hasLayoutDrift) return AssuranceLevel.written;
+    // Nothing will re-apply the file at boot.
+    if (_kanshiRunning == false) return AssuranceLevel.written;
+    return AssuranceLevel.verified;
+  }
 
   /// Why saving is currently refused, or null when it is not.
   String? get saveBlockedReason {
@@ -425,6 +467,9 @@ class KanshiController extends ChangeNotifier {
     // backend that doesn't speak swaymsg returns an empty map and
     // this becomes a no-op.
     await _verifyAndFixWorkspacePlacement();
+    // The status line may only promise the layout comes back if something
+    // will actually re-apply it at boot.
+    await refreshKanshiRunning();
   }
 
   /// Reads the live `workspace_number → output_name` mapping from the
@@ -925,16 +970,20 @@ class KanshiController extends ChangeNotifier {
     }
     try {
       await config.saveProfiles(_profiles);
+      _lastSaveOk = true;
     } on ConfigHasIncludesException {
       // Race-safe fallback: if the user added an `include` directive
       // since `init()` ran (we cached the answer there), the
       // ConfigService throws this and we surface the same warning
       // path as the upfront block.
+      _lastSaveOk = false;
       _configHasIncludes = true;
       onConfigSaveBlocked?.call(_includeBlockedReason);
     } on ConfigNotFullyParsedException catch (e) {
+      _lastSaveOk = false;
       onConfigSaveBlocked?.call(_notFullyParsedReason(e));
     } on ConfigRoundTripException catch (e) {
+      _lastSaveOk = false;
       onConfigSaveBlocked?.call(e.toString());
     } catch (e) {
       // Read-only config, a full disk, a vanished directory. This used to be
@@ -2742,7 +2791,11 @@ class KanshiController extends ChangeNotifier {
       // Fire-and-forget by design — a debounced save's errors are
       // best-effort and the next mutation will re-trigger.
       // ignore: discarded_futures
-      config.saveProfiles(_profiles).catchError((Object e) {
+      config.saveProfiles(_profiles).then((_) {
+        _lastSaveOk = true;
+        if (!_isDisposed) notifyListeners();
+      }).catchError((Object e) {
+        _lastSaveOk = false;
         if (e is ConfigHasIncludesException) {
           _configHasIncludes = true;
           onConfigSaveBlocked?.call(_includeBlockedReason);
