@@ -13,25 +13,25 @@ void main() {
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
 
-  test('defaults firstRunDone to false when file does not exist', () async {
+  test('defaults coachHintShown to false when file does not exist', () async {
     final s = await AppSettings.load(path: '${tmp.path}/missing.json');
-    expect(s.firstRunDone, isFalse);
+    expect(s.coachHintShown, isFalse);
   });
 
-  test('round-trips firstRunDone through save/load', () async {
+  test('round-trips coachHintShown through save/load', () async {
     final p = '${tmp.path}/settings.json';
     final s = await AppSettings.load(path: p);
-    s.firstRunDone = true;
+    s.coachHintShown = true;
     await s.save();
     final loaded = await AppSettings.load(path: p);
-    expect(loaded.firstRunDone, isTrue);
+    expect(loaded.coachHintShown, isTrue);
   });
 
   test('falls back to defaults when JSON is malformed', () async {
     final p = '${tmp.path}/broken.json';
     await File(p).writeAsString('not-json');
     final s = await AppSettings.load(path: p);
-    expect(s.firstRunDone, isFalse);
+    expect(s.coachHintShown, isFalse);
   });
 
   group('workspaceManagement', () {
@@ -49,6 +49,9 @@ void main() {
       await File(p).writeAsString('{"firstRunDone": true}');
       final s = await AppSettings.load(path: p);
       expect(s.workspaceManagement, WorkspaceManagementMode.interleaved);
+      // The old flag also carries over under its new name, so an upgrade
+      // does not re-show a hint the user has already seen.
+      expect(s.coachHintShown, isTrue);
     });
 
     test('round-trips each mode through save/load', () async {
