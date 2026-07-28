@@ -6,6 +6,39 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/widgets/identify_overlay.dart';
 import 'package:collection/collection.dart';
 
+/// New tile size after the corner grip moved by [delta].
+///
+/// The grip changes the output's SCALE, which is uniform, so the tile has to
+/// keep its aspect ratio. Advancing width by dx and height by dy
+/// independently — what this used to do — let the rectangle stop representing
+/// the monitor's actual shape halfway through the gesture: a 16:9 screen
+/// could be dragged into a square while the scale it committed described
+/// something else entirely.
+///
+/// The pointer movement is projected onto the tile's own diagonal instead.
+/// Dragging along the diagonal tracks the cursor 1:1; dragging across it does
+/// nothing, because that is a shape change and a uniform scale cannot express
+/// one.
+Size resizeByGrip(Size current, Offset delta, {double minSide = 20}) {
+  final w = current.width;
+  final h = current.height;
+  if (w <= 0 || h <= 0) return current;
+  final k = (delta.dx * w + delta.dy * h) / (w * w + h * h);
+  var nw = w * (1 + k);
+  var nh = h * (1 + k);
+  // Clamp on whichever side hits the floor first, scaling the other with it
+  // so the aspect ratio survives the clamp too.
+  if (nw < minSide) {
+    nh *= minSide / nw;
+    nw = minSide;
+  }
+  if (nh < minSide) {
+    nw *= minSide / nh;
+    nh = minSide;
+  }
+  return Size(nw, nh);
+}
+
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
 /// Rechtsklick (onSecondaryTap) erhöht rotation um +90°.
 class MonitorTile extends StatefulWidget {
@@ -367,11 +400,24 @@ class _MonitorTileState extends State<MonitorTile> {
                 cursor: SystemMouseCursors.resizeUpLeftDownRight,
                 child: GestureDetector(
                   onPanUpdate: (details) {
+                    // Scale is UNIFORM, so the tile has to keep its aspect
+                    // ratio. Advancing width by dx and height by dy
+                    // independently let the rectangle stop representing the
+                    // monitor's actual shape halfway through the drag — a
+                    // 16:9 screen could be dragged into a square while the
+                    // scale it committed described something else entirely.
+                    //
+                    // Project the pointer movement onto the tile's own
+                    // diagonal instead: dragging along the diagonal tracks
+                    // the cursor 1:1, and dragging across it does nothing,
+                    // which is exactly what a uniform scale can express.
+                    final next = resizeByGrip(
+                      Size(tileWidth, tileHeight),
+                      details.delta,
+                    );
                     setState(() {
-                      tileWidth += details.delta.dx;
-                      tileHeight += details.delta.dy;
-                      if (tileWidth < 20) tileWidth = 20;
-                      if (tileHeight < 20) tileHeight = 20;
+                      tileWidth = next.width;
+                      tileHeight = next.height;
                     });
                     // Live update only — no snapping during the drag so
                     // the user never feels glued to integer scales.
@@ -395,8 +441,8 @@ class _MonitorTileState extends State<MonitorTile> {
                     decoration: BoxDecoration(
                       color: statusColor.withValues(alpha: 0.85),
                       borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(8),
-                        bottomRight: Radius.circular(12),
+                        topLeft: Radius.circular(R.chip),
+                        bottomRight: Radius.circular(R.screen),
                       ),
                     ),
                     child: const RotatedBox(
