@@ -575,10 +575,18 @@ SnackBar-Aufrufe. Setzt M4 voraus — der grüne Haken wird aus dem Verifikation
 gerendert und aus sonst nichts.
 
 ### M6 — Stores
-Track C, eine Extraktion pro Commit, Fassade bleibt stehen. Reihenfolge: `KanshiDaemon` →
-`Profile` immutable → `OutputMatcher` → `SaveCoordinator` → `LiveOutputs` → `ProfileStore` →
-`OperationQueue` → `MirrorCoordinator` → `WorkspacePlacement` → `DriftMonitor`/`HotplugPolicy`
-→ `DragController` → `PreferencesController`.
+Track C, eine Extraktion pro Commit, Fassade bleibt stehen.
+
+**Draußen:** `KanshiDaemon`, `OutputMatcher`, `SaveCoordinator`, `LiveOutputs`,
+`HistoryStack`, `WorkspacePlacement`, `DragSessions`, `DriftMonitor`.
+
+**Offen:** `ProfileStore` (inkl. `Profile` immutable), `OperationQueue`/`ApplyService`,
+`MirrorCoordinator`.
+
+**Verschoben nach M8 — `PreferencesController`.** Die elf gespiegelten Einstellungsfelder
+sind ein echtes Problem, aber M8 löscht `settings_page.dart` und zwölf der achtzehn
+Einstellungen. Jetzt eine Abstraktion über Werte zu bauen, die gleich darauf verschwinden,
+wäre Arbeit gegen den eigenen Plan. Der Umbau passiert dort, wo klar ist, was übrig bleibt.
 
 ### M7 — Leinwand, Kachel, Regal
 Tokens, `monitor_tile.dart` neu (704 → ~330 Zeilen), Drift als gestrichelter Umriss statt
