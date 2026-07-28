@@ -18,6 +18,7 @@ import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
+import 'package:kanshi_gui/state/mirror_coordinator.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/drag_sessions.dart';
 import 'package:kanshi_gui/state/drift_monitor.dart';
@@ -67,6 +68,8 @@ class KanshiController extends ChangeNotifier {
 
   List<Profile> _profiles = [];
   final DriftMonitor _drift = DriftMonitor();
+  late final MirrorCoordinator _mirrors =
+      MirrorCoordinator(monitors, mirrorRunner);
   late final DragSessions _drags = DragSessions()
     ..onChanged = notifyListeners;
   late final LiveOutputs _live = LiveOutputs(monitors);
@@ -99,7 +102,6 @@ class KanshiController extends ChangeNotifier {
   /// `_reconcileMirrors()` chains `_doReconcileMirrors` onto the previous
   /// future; failures are caught at the chain boundary so a poisoned run
   /// can't block subsequent reconciles.
-  Future<void> _reconcileChain = Future.value();
   /// Set in [dispose] before `super.dispose()`. Async paths that survive
   /// past dispose (the hotplug listener body, fire-and-forget reconciles,
   /// callbacks the controller fires after awaiting work) check this and
@@ -1643,15 +1645,7 @@ class KanshiController extends ChangeNotifier {
           .map((m) => _resolveOutputName(m.id))
           .where(connectedIds.contains)
           .toList(growable: false);
-      final liveDest = _resolveOutputName(destId);
-      if (targets.isNotEmpty) {
-        try {
-          await monitors.evacuateOutputWorkspaces(liveDest, targets);
-          await monitors.waitForOutputClear(liveDest);
-        } catch (e) {
-          debugPrint('setMirror: evacuate failed: $e');
-        }
-      }
+      await _mirrors.evacuate(_resolveOutputName(destId), targets);
     }
     // Re-run the standard ws→output distribution: covers the un-mirror
     // case (destination is back in the ranking and needs workspaces
@@ -1684,109 +1678,16 @@ class KanshiController extends ChangeNotifier {
   /// the chain a hotplug-driven reconcile racing a profile-switch reconcile
   /// could read each other's half-installed `_entries[dst]` and kill a
   /// process the other had just spawned.
-  Future<void> _reconcileMirrors({bool evacuateNewMirrors = true}) {
-    final next = _reconcileChain
-        .then((_) => _doReconcileMirrors(evacuate: evacuateNewMirrors));
-    // The chain must NOT be poisoned by one reconcile's exception — a
-    // `pgrep` IO error or a `kill` on a vanished pid would otherwise
-    // block every later reconcile via the unhandled error. The inner
-    // body in `_doReconcileMirrors` also catches and logs, so this
-    // outer `catchError` is a defence-in-depth: if a future refactor
-    // ever lets an exception escape, the chain still survives.
-    _reconcileChain = next.catchError((_) {});
-    return next;
-  }
-
-  Future<void> _doReconcileMirrors({bool evacuate = true}) async {
-    try {
-      if (!supportsMirror) {
-        // Backend cannot mirror — make sure no leftovers are running.
-        if (mirrorRunner.activeDestinations.isNotEmpty) {
-          await mirrorRunner.stopAll();
-        }
-        return;
-      }
-      final connectedIds =
-          _currentMonitors.map((m) => m.id).toSet();
-      final desired = <String, String>{}; // destId -> srcId
-      if (_activeProfileIndex != null) {
-        for (final m in _profiles[_activeProfileIndex!].monitors) {
-          final src = m.mirrorOf;
-          if (src == null || !m.enabled) continue;
-          // Only spin up wl-mirror when both endpoints are physically
-          // present — otherwise wl-mirror would just exit, burn the retry
-          // budget and mark the destination failed.
-          if (!connectedIds.contains(m.id)) continue;
-          if (!connectedIds.contains(src)) continue;
-          desired[m.id] = src;
-        }
-      }
-      final running = mirrorRunner.activeDestinations;
-
-      // Stop mirrors no longer in the desired set, or whose source changed.
-      for (final dst in running) {
-        final wantSrc = desired[dst];
-        if (wantSrc == null) {
-          await mirrorRunner.stop(dst);
-        }
-      }
-      // Start / rebind desired mirrors. Evacuate the destination output
-      // FIRST when we're about to bring a brand-new mirror up — without
-      // this, any workspace that lived on the destination before reconcile
-      // (typical at GUI launch when kanshi has already activated the
-      // profile, or after a stale session reaped wl-mirror but left the
-      // dest enabled) ends up buried under wl-mirror's fullscreen layer
-      // and the user can't reach those windows. Mirror `setMirror`'s
-      // pipeline: evacuate, settle, then spawn.
-      final connectedSet = connectedIds;
-      for (final entry in desired.entries) {
-        final dst = entry.key;
-        final isNewMirror = !mirrorRunner.activeDestinations.contains(dst);
-        if (isNewMirror && evacuate) {
-          final liveDst = _resolveOutputName(dst);
-          // Targets: any other connected non-mirror output the workspaces
-          // can land on. Filter through the live id set so we don't ask
-          // the backend to move things to a port name sway has never
-          // heard of.
-          final targets = (_activeProfileIndex == null
-                  ? <MonitorTileData>[]
-                  : _profiles[_activeProfileIndex!].monitors)
-              .where((m) =>
-                  m.enabled && m.mirrorOf == null && m.id != dst)
-              .map((m) => _resolveOutputName(m.id))
-              .where(connectedSet.contains)
-              .toList(growable: false);
-          if (targets.isNotEmpty) {
-            try {
-              await monitors.evacuateOutputWorkspaces(liveDst, targets);
-              await monitors.waitForOutputClear(liveDst);
-            } catch (e) {
-              // Don't block the mirror startup — the worst case is a
-              // window stuck under wl-mirror, which the user can recover
-              // from manually. Far worse would be failing to spawn the
-              // mirror at all because the evacuate path threw.
-              debugPrint('reconcile: evacuate of $liveDst failed: $e');
-            }
-          }
-        }
-        await mirrorRunner.start(entry.value, dst);
-      }
-      // Final sweep: kill any wl-mirror process the OS is running that
-      // doesn't belong to the desired set. Catches orphans left behind
-      // by an older `exec wl-mirror` kanshi config or a previous GUI
-      // session that crashed before its `dispose` could fire.
-      await mirrorRunner.purgeExternalNotMatching(desired);
-    } catch (e, st) {
-      // `mirrorRunner.start`/`purgeExternalNotMatching` shell out to
-      // `pgrep` and `kill`; either can fail if the system is starved
-      // for fds, the binaries are missing from PATH, or a pid races
-      // with our scan. Logging instead of rethrowing keeps the call
-      // sites' fire-and-forget semantics safe under any backend
-      // weather, and the `_reconcileChain` outer guard is a separate
-      // safety net.
-      debugPrint('reconcileMirrors failed: $e\n$st');
-    }
-  }
+  Future<void> _reconcileMirrors({bool evacuateNewMirrors = true}) =>
+      _mirrors.reconcile(
+        supportsMirror: supportsMirror,
+        profileMonitors: _activeProfileIndex == null
+            ? const []
+            : _profiles[_activeProfileIndex!].monitors,
+        liveOutputs: _currentMonitors,
+        resolveConnector: _resolveOutputName,
+        evacuate: evacuateNewMirrors,
+      );
 
   // ── Compositor-driven actions ──────────────────────────────────────────
   Future<OpResult> toggleEnabled(String id, bool enabled) async {
