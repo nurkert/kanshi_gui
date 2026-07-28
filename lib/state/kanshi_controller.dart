@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:kanshi_gui/domain/output_matcher.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -793,53 +794,29 @@ class KanshiController extends ChangeNotifier {
   /// first in the list, silently swapping mode lists between the two
   /// physical screens.
   void _rehydrateProfilesAgainst(List<MonitorTileData> live) {
-    // Ordered strongest-identity-first. Each pass only considers profile
-    // entries that no earlier pass matched and live outputs no earlier pass
-    // claimed, so a weaker signal can never steal a display from a stronger
-    // one. Running the descriptor pass first is what makes a profile survive
-    // a reboot or a redock that renumbers the connectors: the EDID is the
-    // same, only the port changed.
-    bool byDescriptor(MonitorTileData l, MonitorTileData p) =>
-        l.edidDescriptor.isNotEmpty &&
-        p.edidDescriptor.isNotEmpty &&
-        _matchesOutput(l.edidDescriptor, p.edidDescriptor);
-    bool byId(MonitorTileData l, MonitorTileData p) =>
-        p.id.isNotEmpty && _matchesOutput(l.id, p.id);
-    bool byManufacturer(MonitorTileData l, MonitorTileData p) =>
-        p.manufacturer.isNotEmpty &&
-        _matchesOutput(l.manufacturer, p.manufacturer);
-
+    // The pass ordering lives in OutputMatcher.pair: descriptor, then
+    // connector, then label, with each pass blind to what earlier passes
+    // claimed. Running descriptor first is what lets a profile find its
+    // monitor again after a reboot renumbered the ports.
     for (final profile in _profiles) {
-      final claimedLive = <int>{};
-      final matchedEntries = <int>{};
-
-      for (final matches in [byDescriptor, byId, byManufacturer]) {
-        for (var i = 0; i < profile.monitors.length; i++) {
-          if (matchedEntries.contains(i)) continue;
-          final pe = profile.monitors[i];
-          for (var j = 0; j < live.length; j++) {
-            if (claimedLive.contains(j)) continue;
-            if (!matches(live[j], pe)) continue;
-            claimedLive.add(j);
-            matchedEntries.add(i);
-            profile.monitors[i] = pe.copyWith(
-              id: live[j].id,
-              manufacturer: live[j].manufacturer,
-              // Record the stable identity the moment we observe it. This is
-              // the whole migration path for existing configs: nothing is
-              // ever guessed from the stored label — which drops "Unknown"
-              // and so would produce criteria kanshi never matches — only
-              // what a live backend actually reported gets written back.
-              edidDescriptor: live[j].edidDescriptor.isNotEmpty
-                  ? live[j].edidDescriptor
-                  : pe.edidDescriptor,
-              refresh: live[j].refresh,
-              modes: live[j].modes,
-            );
-            break;
-          }
-        }
-      }
+      final pairs = OutputMatcher.pair(profile.monitors, live);
+      pairs.forEach((entryIdx, liveIdx) {
+        final pe = profile.monitors[entryIdx];
+        final l = live[liveIdx];
+        profile.monitors[entryIdx] = pe.copyWith(
+          id: l.id,
+          manufacturer: l.manufacturer,
+          // Record the stable identity the moment we observe it. This is the
+          // whole migration path for existing configs: nothing is ever
+          // guessed from the stored label — which drops "Unknown" and so
+          // would produce criteria kanshi never matches — only what a live
+          // backend actually reported gets written back.
+          edidDescriptor:
+              l.edidDescriptor.isNotEmpty ? l.edidDescriptor : pe.edidDescriptor,
+          refresh: l.refresh,
+          modes: l.modes,
+        );
+      });
     }
   }
 
@@ -2848,27 +2825,14 @@ class KanshiController extends ChangeNotifier {
     });
   }
 
-  String _normalizeOutputId(String value) =>
-      value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+  // Thin aliases onto the domain module. Kept so the ~40 existing call sites
+  // read the same as before while the logic itself lives somewhere testable.
+  String _normalizeOutputId(String value) => OutputMatcher.normalize(value);
 
-  bool _matchesOutput(String a, String b) =>
-      _normalizeOutputId(a) == _normalizeOutputId(b);
+  bool _matchesOutput(String a, String b) => OutputMatcher.same(a, b);
 
-  String _resolveOutputName(String idOrManufacturer) {
-    final norm = _normalizeOutputId(idOrManufacturer);
-    for (final m in _currentMonitors) {
-      if (_normalizeOutputId(m.id) == norm ||
-          _normalizeOutputId(m.manufacturer) == norm ||
-          // A profile loaded from a config that addresses outputs by their
-          // EDID description carries that description as its id until the
-          // first rehydration, so it has to resolve too.
-          (m.edidDescriptor.isNotEmpty &&
-              _normalizeOutputId(m.edidDescriptor) == norm)) {
-        return m.id;
-      }
-    }
-    return idOrManufacturer;
-  }
+  String _resolveOutputName(String idOrManufacturer) =>
+      OutputMatcher.resolveConnector(idOrManufacturer, _currentMonitors);
 
   /// Score every profile against the currently connected outputs and
   /// return the best non-active fit, but only when it strictly beats
