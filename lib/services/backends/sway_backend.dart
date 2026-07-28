@@ -224,6 +224,18 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  ProcessStream? spawnSafetyPrompt(String output, String message) {
+    // Normal reading size, unlike the identify banner's 200pt digit: this one
+    // is meant to be read, not spotted from across the room.
+    return _runner.stream('swaynag', [
+      '-o', output,
+      '-m', message,
+      '-f', 'Sans Bold 16',
+      '-t', 'warning',
+    ]);
+  }
+
+  @override
   Future<Map<int, String>> getWorkspaceOutputs() async {
     final bin = await _binary();
     final result = await _runner.run(bin, ['-t', 'get_workspaces']);
