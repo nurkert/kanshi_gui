@@ -21,6 +21,23 @@ class SafetyNet {
   final Map<String, _Guard> _guards = {};
   void Function(SafetyNetPrompt? prompt)? _listener;
 
+  /// Reverts whose inverse threw. The user is by definition sitting in the
+  /// state the revert was supposed to undo — possibly looking at a black
+  /// screen — so a failure here must never be swallowed.
+  final List<_Guard> _failedReverts = [];
+
+  /// Invoked when a revert throws. Wired to the UI so the failure is
+  /// surfaced instead of vanishing into an unhandled async error inside a
+  /// [Timer] callback.
+  void Function(String key, String label, Object error)? onRevertFailed;
+
+  /// True when at least one revert failed and can still be retried.
+  bool get hasFailedRevert => _failedReverts.isNotEmpty;
+
+  /// Labels of the reverts that failed, oldest first.
+  List<String> get failedRevertLabels =>
+      List.unmodifiable(_failedReverts.map((g) => g.label));
+
   SafetyNetPrompt? get activePrompt {
     if (_guards.isEmpty) return null;
     final g = _guards.values.first;
@@ -49,6 +66,21 @@ class SafetyNet {
     required Future<T> Function() doIt,
     required Future<void> Function() revert,
   }) async {
+    // A zero (or negative) window means the user switched the safety net
+    // off in Settings, where the slider is labelled "Off" and the subtitle
+    // reads "0 disables the safety net". Arming `Timer(Duration.zero, …)`
+    // instead made every guarded operation — every mode change, every
+    // disable — undo itself within a frame, silently. Run the operation and
+    // do not arm anything.
+    //
+    // An already-armed guard is deliberately left alone: [window] is
+    // documented to affect only guards armed after the change, and
+    // cancelling one here would silently behave like [confirm].
+    if (window <= Duration.zero) {
+      await doIt();
+      return;
+    }
+
     final existing = _guards[key];
     final keptRevert = existing?.revert ?? revert;
     existing?.timer.cancel();
@@ -73,9 +105,38 @@ class SafetyNet {
     g.timer.cancel();
     try {
       await g.revert();
+      _failedReverts.removeWhere((f) => f.key == key);
+    } catch (e) {
+      // Keep the guard so [retryFailedReverts] can run it again, and tell
+      // whoever is listening. Previously this threw out of a Timer callback
+      // and became an unhandled async error nobody ever saw.
+      if (!_failedReverts.any((f) => f.key == key)) {
+        _failedReverts.add(g);
+      }
+      onRevertFailed?.call(g.key, g.label, e);
     } finally {
       _notify();
     }
+  }
+
+  /// Re-runs every revert that previously threw. Returns the labels that
+  /// failed again, so the caller can keep the user informed rather than
+  /// pretending the retry worked.
+  Future<List<String>> retryFailedReverts() async {
+    final pending = List<_Guard>.from(_failedReverts);
+    _failedReverts.clear();
+    final stillFailing = <String>[];
+    for (final g in pending) {
+      try {
+        await g.revert();
+      } catch (e) {
+        _failedReverts.add(g);
+        stillFailing.add(g.label);
+        onRevertFailed?.call(g.key, g.label, e);
+      }
+    }
+    _notify();
+    return stillFailing;
   }
 
   void confirm(String key) {
@@ -93,6 +154,7 @@ class SafetyNet {
       g.timer.cancel();
     }
     _guards.clear();
+    _failedReverts.clear();
     _notify();
   }
 

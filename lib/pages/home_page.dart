@@ -124,6 +124,29 @@ class _HomePageState extends State<HomePage> {
         ),
       );
     };
+    c.onSafetyNetRevertFailed = (label, error) {
+      if (!mounted) return;
+      // The worst moment the app has: the risky change is still in effect —
+      // the user may be looking at a black screen — and the automatic way
+      // out just failed. Persistent, with a retry; never auto-dismissed.
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            duration: const Duration(days: 1),
+            backgroundColor: Theme.of(context).colorScheme.errorContainer,
+            content: Text(
+              "Could not undo '$label' automatically: $error",
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer),
+            ),
+            action: SnackBarAction(
+              label: 'Try again',
+              onPressed: () async => _toast(await c.retrySafetyNetReverts()),
+            ),
+          ),
+        );
+    };
     c.onAutoSwitchedProfile = (name) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -185,6 +208,7 @@ class _HomePageState extends State<HomePage> {
     c.onProfileSuggestion = null;
     c.onAutoSwitchedProfile = null;
     c.onConfigSaveBlocked = null;
+    c.onSafetyNetRevertFailed = null;
     c.autoSwitchProfileEnabled = null;
     super.dispose();
   }

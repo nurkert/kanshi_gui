@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -271,7 +272,47 @@ class AppSettings {
     }
   }
 
-  Future<void> save() async {
+  /// Serialises writes. Dragging a slider in the settings page calls [save]
+  /// on every frame; each call used to race the others through one shared
+  /// `<path>.tmp`, so renames landed out of order (the value written last
+  /// was not necessarily the value the user let go of) and every rename that
+  /// lost the race threw `PathNotFoundException` into an unhandled async
+  /// error — around sixty of them per drag.
+  Future<void> _chain = Future.value();
+
+  /// A write that is queued but has not started yet. Because [_writeOnce]
+  /// serialises the *current* field values at the moment it runs, one queued
+  /// write is always enough: it will pick up whatever the newest values are.
+  /// A burst of sixty therefore collapses into at most two writes.
+  Completer<void>? _queued;
+
+  /// Distinguishes concurrent temp files. Writes are serialised, so this is
+  /// belt and braces — but two AppSettings instances pointing at the same
+  /// path (tests, a second window) would otherwise share one temp name.
+  static int _writeSeq = 0;
+
+  Future<void> save() {
+    final queued = _queued;
+    if (queued != null) return queued.future;
+
+    final completer = Completer<void>();
+    _queued = completer;
+    _chain = _chain.then((_) async {
+      // Cleared before the write, not after: a save requested *during* the
+      // write must queue a fresh one, because this write has already
+      // serialised its values.
+      _queued = null;
+      try {
+        await _writeOnce();
+        completer.complete();
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _writeOnce() async {
     final json = jsonEncode({
       'firstRunDone': firstRunDone,
       'autoSwitchProfile': autoSwitchProfile,
@@ -299,8 +340,17 @@ class AppSettings {
     // reset every setting on the next launch.
     final live = File(filePath);
     await live.create(recursive: true);
-    final tmp = File('$filePath.tmp');
-    await tmp.writeAsString(json, flush: true);
-    await tmp.rename(filePath);
+    final tmp = File('$filePath.tmp.${pid}_${_writeSeq++}');
+    try {
+      await tmp.writeAsString(json, flush: true);
+      await tmp.rename(filePath);
+    } catch (_) {
+      // Never leave a stray temp file behind — the settings directory is
+      // one the user may well look into.
+      try {
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {/* best effort */}
+      rethrow;
+    }
   }
 }
