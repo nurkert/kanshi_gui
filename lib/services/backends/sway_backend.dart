@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -70,6 +71,14 @@ class SwayBackend implements MonitorService {
     final fullName =
         [make, model, serial].where((s) => s.isNotEmpty).join(' ').trim();
     final outputName = (output['name'] ?? fullName).toString().trim();
+    // The criteria kanshi matches on, built from the RAW fields — `clean`
+    // above strips "Unknown" for the display label, but kanshi(5) requires
+    // the missing field to be present as the literal string "Unknown".
+    final descriptor = composeKanshiDescriptor(
+      make: (output['make'] ?? '').toString(),
+      model: (output['model'] ?? '').toString(),
+      serial: (output['serial'] ?? '').toString(),
+    );
 
     final modeMaps = (output['modes'] as List).cast<Map<String, dynamic>>();
     final modes = modeMaps
@@ -114,6 +123,7 @@ class SwayBackend implements MonitorService {
     return MonitorTileData(
       id: outputName,
       manufacturer: fullName,
+      edidDescriptor: descriptor ?? '',
       x: (output['rect']['x'] as num).toDouble(),
       y: (output['rect']['y'] as num).toDouble(),
       width: width,

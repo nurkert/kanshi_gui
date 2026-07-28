@@ -529,9 +529,51 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
+  /// How long the output set must stay unchanged before the hotplug pipeline
+  /// re-runs against it.
+  ///
+  /// Docking does not produce one event, it produces a salvo: outputs appear
+  /// one at a time as the dock enumerates them, and EDID can settle late.
+  /// Every one of those events used to run the full pipeline — rehydrate,
+  /// auto-switch, mirror reconcile, drift — against a half-connected set.
+  ///
+  /// The barrier is leading-edge WITH a trailing re-run: the first event is
+  /// handled at once so screens appear immediately, further events inside the
+  /// window are coalesced, and once the set holds still the pipeline runs once
+  /// more against the complete set. Responsiveness is kept; the final state is
+  /// computed from the whole picture.
+  Duration hotplugSettleWindow = const Duration(milliseconds: 400);
+  Timer? _hotplugSettleTimer;
+  List<MonitorTileData>? _latestOutputs;
+
   void _subscribeHotplug() {
     if (!monitors.isLive) return;
     _outputSubscription = monitors.watchOutputs().listen((newOutputs) {
+      if (_isDisposed) return;
+      _latestOutputs = newOutputs;
+      final midBurst = _hotplugSettleTimer?.isActive ?? false;
+      if (!midBurst) _handleOutputsChanged(newOutputs);
+      _hotplugSettleTimer?.cancel();
+      if (hotplugSettleWindow > Duration.zero) {
+        _hotplugSettleTimer = Timer(hotplugSettleWindow, () {
+          final settled = _latestOutputs;
+          _latestOutputs = null;
+          if (settled == null || _isDisposed) return;
+          // Nothing moved on from what the leading edge already handled.
+          final settledIds = settled.map((m) => m.id).toSet();
+          final handledIds = _currentMonitors.map((m) => m.id).toSet();
+          if (settledIds.length == handledIds.length &&
+              settledIds.containsAll(handledIds)) {
+            return;
+          }
+          _handleOutputsChanged(settled);
+        });
+      }
+    });
+  }
+
+  void _handleOutputsChanged(List<MonitorTileData> newOutputs) {
+    {
       // Cancelling the subscription does NOT abort an in-flight handler;
       // the body must self-guard so a hotplug event delivered between
       // `dispose()` setting the flag and the runtime tearing the
@@ -582,7 +624,7 @@ class KanshiController extends ChangeNotifier {
       for (final id in removed) {
         onHotplugToast?.call('$id disconnected');
       }
-    });
+    }
   }
 
   /// Returns true when the listener actually switched profiles. The
@@ -612,6 +654,7 @@ class KanshiController extends ChangeNotifier {
     // before touching the post-dispose controller.
     _isDisposed = true;
     _saveTimer?.cancel();
+    _hotplugSettleTimer?.cancel();
     _driftAutoReapplyTimer?.cancel();
     _liveApplyRefreshTimer?.cancel();
     _revertScheduler.cancelAll();
@@ -663,47 +706,46 @@ class KanshiController extends ChangeNotifier {
   /// first in the list, silently swapping mode lists between the two
   /// physical screens.
   void _rehydrateProfilesAgainst(List<MonitorTileData> live) {
+    // Ordered strongest-identity-first. Each pass only considers profile
+    // entries that no earlier pass matched and live outputs no earlier pass
+    // claimed, so a weaker signal can never steal a display from a stronger
+    // one. Running the descriptor pass first is what makes a profile survive
+    // a reboot or a redock that renumbers the connectors: the EDID is the
+    // same, only the port changed.
+    bool byDescriptor(MonitorTileData l, MonitorTileData p) =>
+        l.edidDescriptor.isNotEmpty &&
+        p.edidDescriptor.isNotEmpty &&
+        _matchesOutput(l.edidDescriptor, p.edidDescriptor);
+    bool byId(MonitorTileData l, MonitorTileData p) =>
+        p.id.isNotEmpty && _matchesOutput(l.id, p.id);
+    bool byManufacturer(MonitorTileData l, MonitorTileData p) =>
+        p.manufacturer.isNotEmpty &&
+        _matchesOutput(l.manufacturer, p.manufacturer);
+
     for (final profile in _profiles) {
-      final claimed = <int>{};
-      // Pass 1: exact id matches.
-      for (var i = 0; i < profile.monitors.length; i++) {
-        final pe = profile.monitors[i];
-        if (pe.id.isEmpty) continue;
-        for (var j = 0; j < live.length; j++) {
-          if (claimed.contains(j)) continue;
-          if (_matchesOutput(live[j].id, pe.id)) {
-            claimed.add(j);
+      final claimedLive = <int>{};
+      final matchedEntries = <int>{};
+
+      for (final matches in [byDescriptor, byId, byManufacturer]) {
+        for (var i = 0; i < profile.monitors.length; i++) {
+          if (matchedEntries.contains(i)) continue;
+          final pe = profile.monitors[i];
+          for (var j = 0; j < live.length; j++) {
+            if (claimedLive.contains(j)) continue;
+            if (!matches(live[j], pe)) continue;
+            claimedLive.add(j);
+            matchedEntries.add(i);
             profile.monitors[i] = pe.copyWith(
               id: live[j].id,
               manufacturer: live[j].manufacturer,
-              refresh: live[j].refresh,
-              modes: live[j].modes,
-            );
-            break;
-          }
-        }
-      }
-      // Pass 2: manufacturer fallback for entries that did not get an id
-      // hit. We have to rescan because pass 1 may have updated `id` fields
-      // we now want to skip.
-      for (var i = 0; i < profile.monitors.length; i++) {
-        final pe = profile.monitors[i];
-        // Skip entries that were already matched in pass 1 by checking
-        // whether their id is currently claimed.
-        final alreadyClaimed = live.indexWhere(
-                (m) => _matchesOutput(m.id, pe.id)) !=
-            -1 &&
-            claimed.contains(
-                live.indexWhere((m) => _matchesOutput(m.id, pe.id)));
-        if (alreadyClaimed) continue;
-        if (pe.manufacturer.isEmpty) continue;
-        for (var j = 0; j < live.length; j++) {
-          if (claimed.contains(j)) continue;
-          if (_matchesOutput(live[j].manufacturer, pe.manufacturer)) {
-            claimed.add(j);
-            profile.monitors[i] = pe.copyWith(
-              id: live[j].id,
-              manufacturer: live[j].manufacturer,
+              // Record the stable identity the moment we observe it. This is
+              // the whole migration path for existing configs: nothing is
+              // ever guessed from the stored label — which drops "Unknown"
+              // and so would produce criteria kanshi never matches — only
+              // what a live backend actually reported gets written back.
+              edidDescriptor: live[j].edidDescriptor.isNotEmpty
+                  ? live[j].edidDescriptor
+                  : pe.edidDescriptor,
               refresh: live[j].refresh,
               modes: live[j].modes,
             );
@@ -2348,15 +2390,23 @@ class KanshiController extends ChangeNotifier {
       return const OpResult.err(
           'Re-apply only available with a live compositor.');
     }
+    // Go through the backend's reload chain (kanshictl → systemd user unit →
+    // pkill + setsid restart) instead of shelling out to a bare
+    // `kanshictl reload`. On a machine where kanshi is started straight from
+    // the sway config — `exec_always … /usr/bin/kanshi -c …`, which is the
+    // documented way to run it — there is no kanshictl socket to talk to and
+    // the bare call simply fails, so the one-click "put my layout back"
+    // button did nothing at all. Verified non-functional on the maintainer's
+    // own machine.
     try {
-      final r = await _processRunner.run('kanshictl', ['reload']);
+      final r = await monitors.restartCompositorProfileApply();
       if (r.exitCode != 0) {
         final err = r.stderr.toString().trim();
         return OpResult.err(
-            'kanshictl reload failed${err.isEmpty ? '' : ': $err'}.');
+            'Could not ask kanshi to re-apply${err.isEmpty ? '' : ': $err'}.');
       }
     } catch (e) {
-      return OpResult.err('kanshictl reload failed: $e');
+      return OpResult.err('Could not ask kanshi to re-apply: $e');
     }
     await refreshConnectedMonitors();
     _driftDismissed = false;
@@ -2634,7 +2684,12 @@ class KanshiController extends ChangeNotifier {
     final norm = _normalizeOutputId(idOrManufacturer);
     for (final m in _currentMonitors) {
       if (_normalizeOutputId(m.id) == norm ||
-          _normalizeOutputId(m.manufacturer) == norm) {
+          _normalizeOutputId(m.manufacturer) == norm ||
+          // A profile loaded from a config that addresses outputs by their
+          // EDID description carries that description as its id until the
+          // first rehydration, so it has to resolve too.
+          (m.edidDescriptor.isNotEmpty &&
+              _normalizeOutputId(m.edidDescriptor) == norm)) {
         return m.id;
       }
     }
