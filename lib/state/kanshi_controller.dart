@@ -62,7 +62,7 @@ class KanshiController extends ChangeNotifier {
   /// default was 500, which was effectively "always snap" because for
   /// a 1920-wide monitor 500 px is more than a quarter of the screen.
   ///
-  /// Mutable at runtime via [setSnapDistance] (settings UI). Stored
+  /// Derived from the canvas size rather than configured. Stored
   /// privately; widgets read it through the [snapThreshold] getter and
   /// rebuild on the change's `notifyListeners`.
   double _snapThreshold;
@@ -229,7 +229,7 @@ class KanshiController extends ChangeNotifier {
   WorkspaceDistribution? _workspaceDistribution;
 
   /// Whether scale-slider release rasters onto the common HiDPI snap
-  /// values. Mutable via [setScaleSnapping] (settings UI).
+  /// values. Always on; Alt suppresses it during a drag.
   bool scaleSnapping = true;
 
   /// Whether an explicit Apply arms the auto-revert countdown. Off by
@@ -1359,16 +1359,8 @@ class KanshiController extends ChangeNotifier {
   /// reload (init handles the initial apply). The settings UI uses the
   /// individual `set*` methods below for live changes instead.
   void applyStartupSettings(AppSettings s) {
-    _snapThreshold = s.snapDistance;
-    scaleSnapping = s.scaleSnapping;
-    autoRevertOnApply = s.autoRevertOnApply;
     liveApply = s.liveApply;
     autoReapplyOnDrift = s.autoReapplyOnDrift;
-    safetyNet.window = Duration(seconds: s.safetyNetSeconds);
-    _revertScheduler.defaultDelay =
-        Duration(seconds: s.customModeRevertSeconds);
-    identifyBannerDuration = Duration(seconds: s.identifyBannerSeconds);
-    config.maxBackups = s.maxBackups;
     _mirrorScaling = s.mirrorScaling.arg;
     _workspaceDistribution = s.workspaceManagement.distribution;
     mirrorRunner.scaling = _mirrorScaling;

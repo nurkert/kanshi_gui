@@ -78,79 +78,58 @@ void main() {
     });
   });
 
-  group('extended preferences', () {
-    test('all new fields default sensibly on a fresh install', () async {
+  group('the surviving preferences', () {
+    // Ten preferences were removed in M8: snap distance, scale snapping, the
+    // two countdown lengths, both toast toggles, the apply-revert flag, the
+    // identify duration, the backup count and the accent override. Each was a
+    // question the app should answer itself, and each is now derived, fixed,
+    // or read from sway. What is left is what the app genuinely cannot decide
+    // for the user.
+    test('a fresh install starts on the defaults', () async {
       final s = await AppSettings.load(path: '${tmp.path}/fresh.json');
-      expect(s.safetyNetSeconds, 15);
-      expect(s.customModeRevertSeconds, 10);
-      expect(s.hotplugToasts, isTrue);
-      expect(s.profileSuggestionToasts, isTrue);
-      expect(s.snapDistance, 60.0);
-      expect(s.scaleSnapping, isTrue);
       expect(s.themeChoice, AppThemeChoice.dark);
-      expect(s.accentArgb, isNull);
-      expect(s.identifyBannerSeconds, 3);
       expect(s.mirrorScaling, MirrorScaling.fit);
-      expect(s.maxBackups, 10);
       expect(s.kanshiConfigPath, isNull);
       expect(s.autoReapplyOnDrift, isFalse);
+      expect(s.liveApply, isTrue);
     });
 
-    test('round-trips all new fields through save/load', () async {
+    test('they round-trip through save and load', () async {
       final p = '${tmp.path}/full.json';
       final s = await AppSettings.load(path: p);
-      s.safetyNetSeconds = 0;
-      s.customModeRevertSeconds = 25;
-      s.hotplugToasts = false;
-      s.profileSuggestionToasts = false;
-      s.snapDistance = 120.5;
-      s.scaleSnapping = false;
       s.themeChoice = AppThemeChoice.system;
-      s.accentArgb = 0xFF42A5F5;
-      s.identifyBannerSeconds = 7;
       s.mirrorScaling = MirrorScaling.cover;
-      s.maxBackups = 42;
       s.kanshiConfigPath = '/tmp/custom/kanshi';
       s.autoReapplyOnDrift = true;
+      s.liveApply = false;
       await s.save();
 
       final loaded = await AppSettings.load(path: p);
-      expect(loaded.safetyNetSeconds, 0);
-      expect(loaded.customModeRevertSeconds, 25);
-      expect(loaded.hotplugToasts, isFalse);
-      expect(loaded.profileSuggestionToasts, isFalse);
-      expect(loaded.snapDistance, 120.5);
-      expect(loaded.scaleSnapping, isFalse);
       expect(loaded.themeChoice, AppThemeChoice.system);
-      expect(loaded.accentArgb, 0xFF42A5F5);
-      expect(loaded.identifyBannerSeconds, 7);
       expect(loaded.mirrorScaling, MirrorScaling.cover);
-      expect(loaded.maxBackups, 42);
       expect(loaded.kanshiConfigPath, '/tmp/custom/kanshi');
       expect(loaded.autoReapplyOnDrift, isTrue);
+      expect(loaded.liveApply, isFalse);
     });
 
-    test('resetToDefaults restores everything but keeps firstRunDone',
-        () async {
-      final p = '${tmp.path}/reset.json';
-      final s = await AppSettings.load(path: p);
-      s.firstRunDone = true;
-      s.themeChoice = AppThemeChoice.light;
-      s.snapDistance = 5;
-      s.workspaceManagement = WorkspaceManagementMode.grouped;
-      s.resetToDefaults();
-      expect(s.firstRunDone, isTrue, reason: 'must not re-trigger the wizard');
-      expect(s.themeChoice, AppThemeChoice.dark);
-      expect(s.snapDistance, 60.0);
-      expect(s.workspaceManagement, WorkspaceManagementMode.off);
+    test('keys from the old schema are ignored, not fatal', () async {
+      // Every existing install has them. Reading such a file must not throw
+      // and must not reset the preferences that DID survive.
+      final p = '${tmp.path}/legacy.json';
+      File(p).writeAsStringSync(
+        '{"themeChoice":"light","snapDistance":120.5,"maxBackups":42,'
+        '"accentArgb":4282549748,"hotplugToasts":false}',
+      );
+      final loaded = await AppSettings.load(path: p);
+      expect(loaded.themeChoice, AppThemeChoice.light);
     });
 
-    test('empty kanshiConfigPath string loads as null (default path)',
-        () async {
-      final p = '${tmp.path}/emptypath.json';
-      await File(p).writeAsString('{"kanshiConfigPath": ""}');
-      final s = await AppSettings.load(path: p);
-      expect(s.kanshiConfigPath, isNull);
+    test('the next save drops the keys that no longer exist', () async {
+      final p = '${tmp.path}/legacy2.json';
+      File(p).writeAsStringSync('{"themeChoice":"light","maxBackups":42}');
+      final loaded = await AppSettings.load(path: p);
+      await loaded.save();
+      expect(File(p).readAsStringSync(), isNot(contains('maxBackups')));
     });
   });
 }
