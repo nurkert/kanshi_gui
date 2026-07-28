@@ -624,6 +624,11 @@ wäre Arbeit gegen den eigenen Plan. Der Umbau passiert dort, wo klar ist, was �
 Tokens, `monitor_tile.dart` neu (704 → ~330 Zeilen), Drift als gestrichelter Umriss statt
 Banner, Regal für abgeschaltete Bildschirme, Resize-Deform-Fehler behoben.
 
+**Verschoben nach M8 — das Regal.** Abgeschaltete Bildschirme stapeln sich heute nicht mehr
+auf (0,0); `LayoutMath` parkt sie bereits in einer eigenen Spur rechts neben dem aktiven
+Cluster. Sie in ein Band *unter* die Leinwand zu verlegen ist eine Änderung an genau der
+Bandstruktur, die M8 ohnehin neu baut — jetzt gebaut, wäre es zweimal gebaut.
+
 ### M8 — Streifen, Titelleiste, Erweitert-Sheet
 Der 300-px-Inspektor und die 248-px-Leiste verschwinden, `settings_page.dart` und
 `first_run_wizard.dart` werden gelöscht. Zwölf Einstellungen hören auf zu existieren.

@@ -12,7 +12,9 @@ import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
 import 'package:kanshi_gui/widgets/assurance_line.dart';
 import 'package:kanshi_gui/widgets/decision_card.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
+import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
 import 'package:kanshi_gui/widgets/editor_header.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
@@ -514,6 +516,26 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               ),
                             ),
+                            // Where the screens ACTUALLY are, when that
+                            // disagrees with the setup. The canvas already
+                            // shows positions, so the honest way to say a
+                            // screen moved is to show it moved — the solid
+                            // tile stays where the setup wants it and the
+                            // dashed ghost marks where it went. This replaces
+                            // a banner that described the difference in
+                            // sentences over the top of the picture.
+                            if (c.hasLayoutDrift)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: DriftGhostPainter(
+                                      drifted: c.driftedLiveOutputs,
+                                      layout: layout,
+                                      color: context.colors.attention,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ...layout.displayMonitors.map((tile) {
                               final original = c.activeMonitors
                                   .firstWhere((m) => m.id == tile.id);
