@@ -48,7 +48,6 @@ Future<void> main() async {
       // Null = the standard ~/.config/kanshi/config (advanced override).
       configPath: settings.kanshiConfigPath,
       writeOptions: monitors.writeOptions,
-      maxBackups: settings.maxBackups,
     ),
   );
   // Push the user's preferences in BEFORE init() so the first config save
@@ -104,11 +103,10 @@ class _KanshiAppState extends State<KanshiApp> {
     }
   }
 
-  /// Effective accent: an explicit settings override wins, otherwise the
-  /// Sway-config-derived colour detected at startup.
-  Color? get _accent => widget.settings.accentArgb != null
-      ? Color(widget.settings.accentArgb!)
-      : widget.accent;
+  /// The accent, read from sway at startup. There is no override any more:
+  /// the point of deriving it is that the app agrees with the window manager
+  /// it sits beside, and a second source of truth defeats that.
+  Color? get _accent => widget.accent;
 
   /// The accent every surface is tinted from. Sway's `client.focused` when it
   /// could be read, so the app agrees with the window manager it sits beside.

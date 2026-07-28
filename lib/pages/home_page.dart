@@ -71,9 +71,6 @@ class _HomePageState extends State<HomePage> {
     c.addListener(_onControllerChanged);
     c.onHotplugToast = (msg) {
       if (!mounted) return;
-      // Read the toggle at fire-time so the settings page takes effect
-      // without re-wiring the callback.
-      if (!widget.settings.hotplugToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
@@ -89,7 +86,6 @@ class _HomePageState extends State<HomePage> {
     };
     c.onProfileSuggestion = (s) {
       if (!mounted) return;
-      if (!widget.settings.profileSuggestionToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
