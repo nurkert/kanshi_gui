@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 
@@ -16,6 +17,78 @@ import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 /// skip is the acceptance criterion for that milestone — not a chore.
 void main() {
   group('golden corpus', () {
+    group('a config the parser did not fully read is never overwritten', () {
+      // M2's guarantee. It is weaker than "round-trips losslessly" (that is
+      // M9) but it is the one that matters: the user's file survives.
+      late Directory tmp;
+      setUp(() => tmp = Directory.systemTemp.createTempSync('kanshi_golden_'));
+      tearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+
+      for (final fixture in const [
+        'handwritten_minimal.conf',
+        'manpage_output_defaults.conf',
+        'manpage_exec.conf',
+        'directives_full.conf',
+      ]) {
+        test('refuses to save over $fixture', () async {
+          final source = _read(fixture);
+          final path = '${tmp.path}/config';
+          File(path).writeAsStringSync(source);
+          final cfg = ConfigService(
+            configPath: path,
+            backupPrefix: '${tmp.path}/backups/config.bak',
+            writeOptions: KanshiWriteOptions.neutral,
+          );
+
+          expect(
+            () => cfg.saveProfiles(KanshiConfigParser.parse(source)),
+            throwsA(isA<ConfigNotFullyParsedException>()),
+          );
+          // The decisive assertion: the file on disk is untouched.
+          expect(File(path).readAsStringSync(), source);
+        });
+      }
+
+      test('a config written in the app\'s own dialect still saves', () async {
+        final source = _read('writer_dialect.conf');
+        final path = '${tmp.path}/config';
+        File(path).writeAsStringSync(source);
+        final cfg = ConfigService(
+          configPath: path,
+          backupPrefix: '${tmp.path}/backups/config.bak',
+          writeOptions: KanshiWriteOptions.neutral,
+        );
+        final profiles = KanshiConfigParser.parse(source);
+        await cfg.saveProfiles(profiles);
+        expect(KanshiConfigParser.parse(File(path).readAsStringSync()),
+            hasLength(profiles.length));
+      });
+    });
+
+    group('diagnose() reports what the parser could not read', () {
+      test('the app\'s own dialect is lossless', () {
+        expect(KanshiConfigParser.diagnose(_read('writer_dialect.conf'))
+            .isLossless, isTrue);
+      });
+
+      test('an omitted `enable` keyword loses every output', () {
+        final d = KanshiConfigParser.diagnose(_read('handwritten_minimal.conf'));
+        expect(d.isLossless, isFalse);
+        expect(d.outputsInFile, 3);
+        expect(d.outputsParsed, 0);
+        expect(d.lossDescription, contains('3 of 3 output lines'));
+      });
+
+      test('global output defaults are counted separately', () {
+        final d =
+            KanshiConfigParser.diagnose(_read('manpage_output_defaults.conf'));
+        expect(d.globalOutputDefaults, 1);
+        expect(d.isLossless, isFalse);
+      });
+    });
+
     group('saving never empties a config kanshi accepts', () {
       test('hand-written config without the optional `enable` keyword', () {
         // kanshi's DSL makes `enable` optional. The parser requires it
@@ -23,11 +96,11 @@ void main() {
         // monitors, and render() skips empty profiles
         // (kanshi_config_writer.dart:87) — the file renders to "".
         expectSurvivesSave('handwritten_minimal.conf');
-      }, skip: 'M2 — round-trip refusal gate; M9 — scfg AST');
+      }, skip: 'M9 — scfg AST (M2 refuses the save instead, see above)');
 
       test('global output defaults (kanshi(5) example)', () {
         expectSurvivesSave('manpage_output_defaults.conf');
-      }, skip: 'M2 — round-trip refusal gate; M9 — scfg AST');
+      }, skip: 'M9 — scfg AST (M2 refuses the save instead, see above)');
     });
 
     group('no profile disappears', () {

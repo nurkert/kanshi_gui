@@ -21,6 +21,39 @@ class ConfigHasIncludesException implements Exception {
       're-enable saving from the GUI.';
 }
 
+/// Thrown by [ConfigService.saveProfiles] when the live kanshi config holds
+/// constructs the parser did not understand.
+///
+/// The GUI re-renders the entire config from its in-memory model, so saving a
+/// file it only partially read deletes whatever it never saw. A hand-written
+/// config using kanshi's optional-`enable` form used to parse as zero
+/// monitors per profile; the writer skips empty profiles; the first save
+/// therefore replaced the user's file with an empty one.
+class ConfigNotFullyParsedException implements Exception {
+  final String configPath;
+
+  /// What would be lost, e.g. "2 of 3 output lines".
+  final String loss;
+
+  const ConfigNotFullyParsedException(this.configPath, this.loss);
+
+  @override
+  String toString() =>
+      'kanshi config at $configPath uses syntax kanshi_gui does not model yet '
+      '($loss would be dropped). Refusing to save rather than delete it.';
+}
+
+/// Thrown when the freshly rendered config does not read back as the model
+/// that produced it. A writer bug must not reach the user's disk.
+class ConfigRoundTripException implements Exception {
+  final String detail;
+  const ConfigRoundTripException(this.detail);
+  @override
+  String toString() =>
+      'refusing to save: the rendered config does not read back as written '
+      '($detail). This is a bug in kanshi_gui, not in your config.';
+}
+
 /// Thin filesystem layer around the kanshi config file. Parsing and rendering
 /// live in [KanshiConfigParser] / [KanshiConfigWriter] respectively so they
 /// can be unit-tested without touching disk.
@@ -110,6 +143,63 @@ class ConfigService {
     return result;
   }
 
+  /// Describes what the parser could not read out of the live config, or null
+  /// when it understood all of it (including when there is no file yet).
+  ///
+  /// Cached like [hasIncludeDirectives], and for the same reason: it is
+  /// consulted on the save hot path and the file's shape is treated as stable
+  /// for the lifetime of the controller. [invalidateInspectionCache] clears
+  /// it after the GUI itself rewrites the file.
+  String? _unparsedCache;
+  bool _unparsedCacheValid = false;
+  Future<String?> unparsedContentDescription() async {
+    if (_unparsedCacheValid) return _unparsedCache;
+    final file = File(configPath);
+    if (!await file.exists()) {
+      _unparsedCache = null;
+      _unparsedCacheValid = true;
+      return null;
+    }
+    final content = await file.readAsString();
+    _unparsedCache = KanshiConfigParser.diagnose(content).lossDescription;
+    _unparsedCacheValid = true;
+    return _unparsedCache;
+  }
+
+  /// Drops the cached inspection results. Called after the GUI writes the
+  /// file, since it just replaced the content the cache described.
+  void invalidateInspectionCache() {
+    _unparsedCacheValid = false;
+    _unparsedCache = null;
+    _hasIncludesCache = null;
+  }
+
+  /// Verifies that [rendered] reads back as [profiles].
+  static void _assertRoundTrips(List<Profile> profiles, String rendered) {
+    // Empty profiles are intentionally not rendered, so they are excluded
+    // from the comparison rather than counted as a loss.
+    final expected = profiles.where((p) => p.monitors.isNotEmpty).toList();
+    final actual = KanshiConfigParser.parse(rendered);
+
+    if (actual.length != expected.length) {
+      throw ConfigRoundTripException(
+          'wrote ${expected.length} profiles, read back ${actual.length}');
+    }
+    for (var i = 0; i < expected.length; i++) {
+      if (actual[i].name != expected[i].name) {
+        throw ConfigRoundTripException(
+            'profile ${i + 1} came back as "${actual[i].name}" instead of '
+            '"${expected[i].name}"');
+      }
+      if (actual[i].monitors.length != expected[i].monitors.length) {
+        throw ConfigRoundTripException(
+            'profile "${expected[i].name}" wrote '
+            '${expected[i].monitors.length} outputs, read back '
+            '${actual[i].monitors.length}');
+      }
+    }
+  }
+
   Future<void> saveProfiles(List<Profile> profiles) async {
     // Refuse to save when the user's main config pulls in other files
     // via `include`. We only parse the main file, so a render-and-
@@ -119,8 +209,23 @@ class ConfigService {
     if (await hasIncludeDirectives()) {
       throw ConfigHasIncludesException(configPath);
     }
+
+    // Gate 1 — do not overwrite a file we only partially understood.
+    // Anything the parser could not read is not in the model, so rendering
+    // the model back would delete it.
+    final loss = await unparsedContentDescription();
+    if (loss != null) {
+      throw ConfigNotFullyParsedException(configPath, loss);
+    }
+
     final rendered =
         KanshiConfigWriter.render(profiles, options: writeOptions);
+
+    // Gate 2 — the rendered text must read back as the model that produced
+    // it. This catches writer bugs before they reach the user's disk rather
+    // than after, which is how the transposed-mode oscillation survived so
+    // long.
+    _assertRoundTrips(profiles, rendered);
 
     final file = File(configPath);
     await Directory(file.parent.path).create(recursive: true);
@@ -178,6 +283,11 @@ class ConfigService {
       }
       rethrow;
     }
+
+    // The file the inspection cache described has just been replaced by our
+    // own output, which is lossless by construction (gate 2 above).
+    _unparsedCache = null;
+    _unparsedCacheValid = true;
 
     // Pruning happens after a successful write so a failed save never
     // walks the backup ring forward.
