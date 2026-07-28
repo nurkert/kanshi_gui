@@ -19,6 +19,7 @@ import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/mirror_coordinator.dart';
+import 'package:kanshi_gui/state/operation_queue.dart';
 import 'package:kanshi_gui/state/profile_store.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/drag_sessions.dart';
@@ -75,6 +76,10 @@ class KanshiController extends ChangeNotifier {
 
   int? get _activeProfileIndex => _store.activeIndex;
   set _activeProfileIndex(int? v) => _store.activeIndex = v;
+  /// Serialises everything that reaches the compositor. See [OperationQueue]
+  /// for why: these operations are multi-step, and interleaving two of them
+  /// leaves the compositor with half of each.
+  final OperationQueue _ops = OperationQueue();
   final DriftMonitor _drift = DriftMonitor();
   late final MirrorCoordinator _mirrors =
       MirrorCoordinator(monitors, mirrorRunner);
@@ -1533,7 +1538,10 @@ class KanshiController extends ChangeNotifier {
   /// `OpResult.err`). The runner is asked to spawn / kill wl-mirror
   /// immediately; the kanshi config write is scheduled and a
   /// `kanshictl reload` is fired so kanshi knows about the change.
-  Future<OpResult> setMirror(String destId, String? srcId) async {
+  Future<OpResult> setMirror(String destId, String? srcId) =>
+      _ops.run(() => _setMirrorImpl(destId, srcId));
+
+  Future<OpResult> _setMirrorImpl(String destId, String? srcId) async {
     if (!supportsMirror) {
       return const OpResult.err(
           'Mirror is only supported on the Sway backend.');
@@ -1662,7 +1670,10 @@ class KanshiController extends ChangeNotifier {
       );
 
   // ── Compositor-driven actions ──────────────────────────────────────────
-  Future<OpResult> toggleEnabled(String id, bool enabled) async {
+  Future<OpResult> toggleEnabled(String id, bool enabled) =>
+      _ops.run(() => _toggleEnabledImpl(id, enabled));
+
+  Future<OpResult> _toggleEnabledImpl(String id, bool enabled) async {
     if (_activeProfileIndex == null) return const OpResult.err('No profile.');
     final mons = _profiles[_activeProfileIndex!].monitors;
     final idx = mons.indexWhere((m) => m.id == id);
@@ -1761,7 +1772,10 @@ class KanshiController extends ChangeNotifier {
   /// requiring an explicit "Save & restart" click. No SafetyNet guard —
   /// the user sees the result immediately and can adjust by hand if it
   /// looks wrong.
-  Future<OpResult> pushLiveApply(MonitorTileData target) async {
+  Future<OpResult> pushLiveApply(MonitorTileData target) =>
+      _ops.run(() => _pushLiveApplyImpl(target));
+
+  Future<OpResult> _pushLiveApplyImpl(MonitorTileData target) async {
     if (!monitors.isLive) return const OpResult.ok();
     // Staged mode: hold the change in memory (+ config) until Apply.
     if (!liveApply) return const OpResult.ok();
@@ -1824,7 +1838,10 @@ class KanshiController extends ChangeNotifier {
     return visibleLeft == 0;
   }
 
-  Future<OpResult> applyMode(String id, MonitorMode mode) async {
+  Future<OpResult> applyMode(String id, MonitorMode mode) =>
+      _ops.run(() => _applyModeImpl(id, mode));
+
+  Future<OpResult> _applyModeImpl(String id, MonitorMode mode) async {
     if (_activeProfileIndex == null) return const OpResult.err('No profile.');
     final mons = _profiles[_activeProfileIndex!].monitors;
     final idx = mons.indexWhere((m) => m.id == id);
@@ -2121,7 +2138,9 @@ class KanshiController extends ChangeNotifier {
     return true;
   }
 
-  Future<OpResult> reloadAndApply() async {
+  Future<OpResult> reloadAndApply() => _ops.run(_reloadAndApplyImpl);
+
+  Future<OpResult> _reloadAndApplyImpl() async {
     // Lockout guard: never apply a layout that would leave the user with no
     // visible output. The "last enabled output" rule already protects the
     // toggle path; this catches a profile that arrived disabled-only via
