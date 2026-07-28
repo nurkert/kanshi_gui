@@ -592,6 +592,16 @@ Der 300-px-Inspektor und die 248-px-Leiste verschwinden, `settings_page.dart` un
 Track D1, danach die pro-Setup gelernte Workspace-Karte mit Nummern-Badges auf den Kacheln.
 Hängt hart an M3 — ein Editor über einem ungelösten Boot-Rennen sähe grundlos kaputt aus.
 
+### M10 — UI-Polish: erst Review, dann eckigere Formsprache
+Zweistufig, und die Reihenfolge ist der Punkt. Zuerst ein **Design-Review** des Zustands
+nach M7/M8 — was trägt, was wirkt weiterhin generisch, wo bricht die Formsprache. Erst
+danach, auf Basis dieses Reviews, eine bewusst **eckigere** Design-Sprache. Das revidiert
+die Radien-Skala aus 7.3 (chip 6 · screen 10 · control 8 · card 14 · sheet 20) nach unten
+und zieht Kanten-, Raster- und Trennlinien-Sprache nach. Zum Schluss der Feinschliff an
+Abständen, Typo und Motion.
+
+Hängt an M7 und M8: ein Review vor dem Umbau würde nur den alten Zustand bewerten.
+
 ---
 
 ## 9. Test- und CI-Strategie
