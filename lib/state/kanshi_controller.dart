@@ -109,6 +109,10 @@ class KanshiController extends ChangeNotifier {
       'to avoid orphaning profiles in the included files. Move those profiles '
       'into the main config to re-enable saving.';
 
+  static String _writeFailedReason(Object e) =>
+      'Could not write your kanshi config: $e. Your changes are being kept '
+      'in memory only and will be lost when you close the app.';
+
   static String _notFullyParsedReason(ConfigNotFullyParsedException e) =>
       'Your kanshi config uses syntax kanshi_gui does not understand yet, and '
       '${e.loss} would be deleted if it saved. Your changes are being kept in '
@@ -932,7 +936,13 @@ class KanshiController extends ChangeNotifier {
       onConfigSaveBlocked?.call(_notFullyParsedReason(e));
     } on ConfigRoundTripException catch (e) {
       onConfigSaveBlocked?.call(e.toString());
-    } catch (_) {/* best effort */}
+    } catch (e) {
+      // Read-only config, a full disk, a vanished directory. This used to be
+      // swallowed as "best effort", so undo/redo/setMirror reported success
+      // while nothing had been written and the layout silently reverted on
+      // the next launch.
+      onConfigSaveBlocked?.call(_writeFailedReason(e));
+    }
     try {
       await monitors.restartCompositorProfileApply();
     } catch (_) {/* best effort */}
@@ -1379,7 +1389,7 @@ class KanshiController extends ChangeNotifier {
     return raw;
   }
 
-  void rearrangeActiveLayout() {
+  Future<void> rearrangeActiveLayout() async {
     if (_activeProfileIndex == null) return;
     final profile = _profiles[_activeProfileIndex!];
     final active = profile.monitors.where((m) => m.enabled).toList()
@@ -1406,6 +1416,7 @@ class KanshiController extends ChangeNotifier {
         Profile(name: profile.name, monitors: rearranged);
     _scheduleSave();
     notifyListeners();
+    await _applyActiveProfileLive();
   }
 
   // ── Health checks ──────────────────────────────────────────────────────
@@ -1459,7 +1470,45 @@ class KanshiController extends ChangeNotifier {
 
   /// Lay every enabled output side-by-side, left-to-right, flush at y=0, and
   /// drop any mirroring — the classic "extend my desktop across all screens".
-  OpResult extendOutputs() {
+
+  /// Pushes the active profile's layout into the running compositor.
+  ///
+  /// The quick-layout presets and the rearrange action used to mutate the
+  /// profile and call [_scheduleSave] only — and unlike [_flushSaveAndReload],
+  /// _scheduleSave never asks kanshi to re-apply. So the tiles jumped, a green
+  /// "Extended across all outputs." toast appeared, and the physical screens
+  /// did not move until the next hotplug or reload. The one hint that could
+  /// have explained it is suppressed in the default configuration, because
+  /// `hasUnappliedEdits` is `!liveApply && _hasUnappliedEdits` and liveApply
+  /// defaults to true.
+  ///
+  /// Best-effort by design: a failure is reported to the caller so it can say
+  /// so, rather than being swallowed behind a success toast.
+  Future<String?> _applyActiveProfileLive() async {
+    if (!liveApply || !monitors.isLive) return null;
+    final idx = _activeProfileIndex;
+    if (idx == null) return null;
+    final failures = <String>[];
+    for (final m in List.of(_profiles[idx].monitors)) {
+      final target = _resolveOutputName(m.id);
+      if (!_currentMonitors.any((c) => _matchesOutput(c.id, target))) continue;
+      try {
+        final r = m.enabled
+            ? await monitors.apply(m.copyWith(id: target))
+            : await monitors.disable(target);
+        if (r.exitCode != 0) {
+          failures.add('$target: ${r.stderr.toString().trim()}');
+        }
+      } catch (e) {
+        failures.add('$target: $e');
+      }
+      if (_isDisposed) return null;
+    }
+    if (failures.isEmpty) return null;
+    return failures.join('; ');
+  }
+
+  Future<OpResult> extendOutputs() async {
     final idx = _activeProfileIndex;
     if (idx == null) return const OpResult.err('No active profile.');
     final profile = _profiles[idx];
@@ -1482,12 +1531,16 @@ class KanshiController extends ChangeNotifier {
     );
     _scheduleSave();
     notifyListeners();
+    final failed = await _applyActiveProfileLive();
+    if (failed != null) {
+      return OpResult.err('Saved, but the compositor refused part of it: $failed');
+    }
     return const OpResult.ok('Extended across all outputs.');
   }
 
   /// Mirror every other enabled output onto the leftmost one (the primary).
   /// Sway-only — wl-mirror drives the actual duplication on apply/reconcile.
-  OpResult mirrorAll() {
+  Future<OpResult> mirrorAll() async {
     if (!supportsMirror) {
       return const OpResult.err('Mirroring needs the Sway backend.');
     }
@@ -1515,13 +1568,18 @@ class KanshiController extends ChangeNotifier {
     );
     _scheduleSave();
     notifyListeners();
+    await _reconcileMirrors();
+    final failed = await _applyActiveProfileLive();
+    if (failed != null) {
+      return OpResult.err('Saved, but the compositor refused part of it: $failed');
+    }
     return OpResult.ok('Mirroring all outputs onto $primary.');
   }
 
   /// Enable only [keepId] and disable every other output — "laptop only" /
   /// "external only". Clears mirroring on the kept output. Refuses if
   /// [keepId] isn't a known output (would otherwise black everything out).
-  OpResult useOnlyOutput(String keepId) {
+  Future<OpResult> useOnlyOutput(String keepId) async {
     final idx = _activeProfileIndex;
     if (idx == null) return const OpResult.err('No active profile.');
     final profile = _profiles[idx];
@@ -1540,6 +1598,11 @@ class KanshiController extends ChangeNotifier {
     );
     _scheduleSave();
     notifyListeners();
+    await _reconcileMirrors();
+    final failed = await _applyActiveProfileLive();
+    if (failed != null) {
+      return OpResult.err('Saved, but the compositor refused part of it: $failed');
+    }
     return OpResult.ok('Using only $keepId.');
   }
 
@@ -2588,10 +2651,28 @@ class KanshiController extends ChangeNotifier {
         return const OpResult.err('No backup found.');
       }
       await backup.copy(config.configPath);
-      final r = await reloadAndApply();
-      return r.success
-          ? const OpResult.ok('Backup restored.')
-          : r;
+      // Adopt the restored file. Previously this called reloadAndApply(),
+      // whose first act is `config.saveProfiles(_profiles)` — so the restored
+      // backup was immediately overwritten by the in-memory profiles the user
+      // was trying to get away from, and "Restore backup" restored nothing.
+      config.invalidateInspectionCache();
+      await _loadConfig();
+      await refreshConnectedMonitors();
+      _configHasIncludes = await config.hasIncludeDirectives();
+      _configUnparsedLoss = await config.unparsedContentDescription();
+      await ensureCurrentSetupMatches(persist: false);
+      // Ask kanshi to apply the file we just put back, without rendering
+      // anything over it.
+      final r = await monitors.restartCompositorProfileApply();
+      if (r.exitCode != 0) {
+        final err = r.stderr.toString().trim();
+        return OpResult.err(
+            'Backup restored, but kanshi could not apply it'
+            '${err.isEmpty ? '' : ': $err'}.');
+      }
+      await refreshConnectedMonitors();
+      notifyListeners();
+      return const OpResult.ok('Backup restored.');
     } catch (e) {
       return OpResult.err('Backup restore failed: $e');
     }
@@ -2669,6 +2750,8 @@ class KanshiController extends ChangeNotifier {
           onConfigSaveBlocked?.call(_notFullyParsedReason(e));
         } else if (e is ConfigRoundTripException) {
           onConfigSaveBlocked?.call(e.toString());
+        } else {
+          onConfigSaveBlocked?.call(_writeFailedReason(e));
         }
       });
     });

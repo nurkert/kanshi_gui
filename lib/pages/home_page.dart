@@ -604,15 +604,16 @@ class _HomePageState extends State<HomePage> {
                           bottom: 18,
                           child: Center(
                             child: PresetsBar(
-                              onExtend: () => _toast(c.extendOutputs()),
+                              onExtend: () async =>
+                                  _toast(await c.extendOutputs()),
                               onMirror: c.supportsMirror
-                                  ? () => _toast(c.mirrorAll())
+                                  ? () async => _toast(await c.mirrorAll())
                                   : null,
                               outputIds: c.activeMonitors
                                   .map((m) => m.id)
                                   .toList(),
-                              onUseOnly: (id) =>
-                                  _toast(c.useOnlyOutput(id)),
+                              onUseOnly: (id) async =>
+                                  _toast(await c.useOnlyOutput(id)),
                             ),
                           ),
                         ),
