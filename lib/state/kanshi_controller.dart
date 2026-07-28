@@ -294,7 +294,10 @@ class KanshiController extends ChangeNotifier {
         _workspaceDistribution = workspaceDistribution,
         _processRunner = processRunner ?? const DefaultProcessRunner() {
     config.writeOptions = _effectiveWriteOptions();
-    safetyNet.onChange((_) => notifyListeners());
+    safetyNet.onChange((prompt) {
+      _syncSafetyPrompts(prompt);
+      notifyListeners();
+    });
     safetyNet.onRevertFailed = (key, label, error) {
       debugPrint('safety-net revert failed for $key: $error');
       onSafetyNetRevertFailed?.call(label, error);
@@ -420,6 +423,45 @@ class KanshiController extends ChangeNotifier {
       notifyListeners();
     });
     notifyListeners();
+  }
+
+  /// Per-output prompts shown while a risky change is on trial.
+  final List<ProcessStream> _safetyPrompts = [];
+
+  /// Mirrors the armed guard onto every connected output.
+  ///
+  /// The in-window countdown is not enough on its own: the window may be
+  /// sitting on the screen the change just blacked out, in which case the
+  /// user sees nothing at all and simply waits for the revert without knowing
+  /// one is coming. A prompt on every output means the message survives its
+  /// own worst case.
+  void _syncSafetyPrompts(SafetyNetPrompt? prompt) {
+    if (prompt == null) {
+      _killSafetyPrompts();
+      return;
+    }
+    if (_safetyPrompts.isNotEmpty) return; // already showing for this guard
+    if (!monitors.isLive) return;
+    final seconds = safetyNet.window.inSeconds;
+    final message = 'Can you read this? ${prompt.label}. '
+        'It undoes itself in ${seconds}s unless you keep it in kanshi_gui.';
+    for (final m in _currentMonitors.where((m) => m.enabled)) {
+      try {
+        final stream = monitors.spawnSafetyPrompt(m.id, message);
+        if (stream != null) _safetyPrompts.add(stream);
+      } catch (e) {
+        debugPrint('safety prompt on ${m.id} failed: $e');
+      }
+    }
+  }
+
+  void _killSafetyPrompts() {
+    for (final s in _safetyPrompts) {
+      try {
+        s.kill();
+      } catch (_) {/* best effort */}
+    }
+    _safetyPrompts.clear();
   }
 
   void _killIdentifyBanners() {
@@ -711,6 +753,7 @@ class KanshiController extends ChangeNotifier {
     _outputSubscription?.cancel();
     _identifyTimer?.cancel();
     _killIdentifyBanners();
+    _killSafetyPrompts();
     mirrorRunner.removeListener(notifyListeners);
     // ignore: discarded_futures
     mirrorRunner.stopAll();

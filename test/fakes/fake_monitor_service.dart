@@ -126,6 +126,14 @@ class FakeMonitorService implements MonitorService {
   bool identifyBannerSupported = false;
   final List<List<String>> identifyBannerCalls = [];
 
+  final List<String> safetyPrompts = [];
+
+  @override
+  ProcessStream? spawnSafetyPrompt(String output, String message) {
+    safetyPrompts.add('$output: $message');
+    return null;
+  }
+
   @override
   ProcessStream? spawnIdentifyBanner(String output, String label) {
     identifyBannerCalls.add([output, label]);

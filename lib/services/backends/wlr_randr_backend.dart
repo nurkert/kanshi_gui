@@ -262,6 +262,12 @@ class WlrRandrBackend implements MonitorService {
   }
 
   @override
+  /// wlr-randr backends have no per-output notification mechanism, so the
+  /// in-window card is the only prompt.
+  @override
+  ProcessStream? spawnSafetyPrompt(String output, String message) => null;
+
+  @override
   ProcessStream? spawnIdentifyBanner(String output, String label) {
     // No portable on-screen-banner-on-output primitive on the wlr-randr
     // CLI surface — leave the GUI's in-canvas number overlay as the only
