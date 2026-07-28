@@ -41,21 +41,28 @@ void main() {
     // A drag calls schedule() on every frame. Without the debounce that is a
     // config rewrite, a backup and a round-trip verification per frame.
     final c = cfg();
-    final s = SaveCoordinator(c, debounce: const Duration(milliseconds: 40));
+    // Generous debounce relative to the burst: 20 synchronous schedule()
+    // calls cannot straddle it unless the machine stalls for a fifth of a
+    // second mid-loop. A 40ms window turned out to be tight enough to fail
+    // occasionally under the loaded parallel suite while passing in
+    // isolation — a flaky test is worse than no test.
+    final s = SaveCoordinator(c, debounce: const Duration(milliseconds: 200));
     for (var i = 0; i < 20; i++) {
       s.schedule(profiles(i.toDouble()));
     }
-    await Future<void>.delayed(const Duration(milliseconds: 160));
+    await Future<void>.delayed(const Duration(milliseconds: 700));
 
     expect(s.lastSaveOk, isTrue);
     final onDisk =
         KanshiConfigParser.parse(File('${tmp.path}/config').readAsStringSync());
     expect(onDisk.single.monitors.single.x, 19,
         reason: 'the last edit of the burst is the one persisted');
-    // Exactly one backup would mean one write; there was no prior file here,
-    // so the count is zero and the assertion is on the directory not filling.
+    // ConfigService backs up the previous file before every write, so a
+    // second write would leave exactly one backup behind. None means the
+    // burst produced a single write.
     final backups = Directory('${tmp.path}/backups');
-    expect(backups.existsSync() ? backups.listSync().length : 0, lessThan(2));
+    expect(backups.existsSync() ? backups.listSync().length : 0, 0,
+        reason: 'a burst must produce one write, not one per frame');
     s.dispose();
   });
 

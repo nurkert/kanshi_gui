@@ -16,6 +16,7 @@ import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/state/app_status.dart';
+import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
 import 'package:kanshi_gui/state/custom_mode_revert_scheduler.dart';
 import 'package:kanshi_gui/state/safety_net.dart';
@@ -184,9 +185,7 @@ class KanshiController extends ChangeNotifier {
   /// the active index taken just before a mutation. The stacks are LIFO;
   /// pushing onto undo clears redo, undoing pops onto redo, redoing pops
   /// onto undo. Capped at [_historyCap] entries to keep memory bounded.
-  final List<_HistoryEntry> _undoStack = [];
-  final List<_HistoryEntry> _redoStack = [];
-  static const int _historyCap = 30;
+  final HistoryStack _history = HistoryStack();
   Map<String, int> _identifyNumbers = const {};
   Timer? _identifyTimer;
   final List<ProcessStream> _identifyBanners = [];
@@ -308,16 +307,14 @@ class KanshiController extends ChangeNotifier {
   bool get hasUnappliedEdits => !liveApply && _hasUnappliedEdits;
   bool get supportsLiveApply => monitors.isLive;
   /// True when there's a snapshot to roll back to via [undo].
-  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canUndo => _history.canUndo;
   /// True when [redo] has a snapshot to replay.
-  bool get canRedo => _redoStack.isNotEmpty;
+  bool get canRedo => _history.canRedo;
   /// Human-readable label of the most recent undoable mutation, or null
   /// when the stack is empty. Used by the UI for tooltips like
   /// "Undo: toggle DP-1".
-  String? get nextUndoLabel =>
-      _undoStack.isEmpty ? null : _undoStack.last.label;
-  String? get nextRedoLabel =>
-      _redoStack.isEmpty ? null : _redoStack.last.label;
+  String? get nextUndoLabel => _history.nextUndoLabel;
+  String? get nextRedoLabel => _history.nextRedoLabel;
   bool get supportsMirror => monitors.supportsMirror;
   List<SnapLine> get activeSnapLines => List.unmodifiable(_activeSnapLines);
 
@@ -817,66 +814,32 @@ class KanshiController extends ChangeNotifier {
   void _pushHistory(
     String label, {
     Map<String, MonitorTileData>? overrides,
-  }) {
-    final snap = <Profile>[];
-    for (var i = 0; i < _profiles.length; i++) {
-      final p = _profiles[i];
-      final mons = [...p.monitors];
-      if (i == _activeProfileIndex && overrides != null) {
-        for (var j = 0; j < mons.length; j++) {
-          final ov = overrides[mons[j].id];
-          if (ov != null) mons[j] = ov;
-        }
-      }
-      snap.add(Profile(name: p.name, monitors: mons));
-    }
-    _undoStack.add(_HistoryEntry(
-      profiles: snap,
-      activeIndex: _activeProfileIndex,
-      label: label,
-    ));
-    while (_undoStack.length > _historyCap) {
-      _undoStack.removeAt(0);
-    }
-    _redoStack.clear();
-  }
+  }) =>
+      _history.push(_profiles, _activeProfileIndex, label,
+          overrides: overrides);
 
   /// Reverts the most recent mutation by replacing `_profiles` and the
   /// active index with the top of the undo stack, pushing the current
   /// state onto the redo stack so it can be replayed via [redo].
   /// Schedules a save and reload so the compositor catches up.
   Future<OpResult> undo() async {
-    if (_undoStack.isEmpty) return const OpResult.err('Nothing to undo.');
-    final entry = _undoStack.removeLast();
-    _redoStack.add(_currentSnapshot(entry.label));
-    while (_redoStack.length > _historyCap) {
-      _redoStack.removeAt(0);
-    }
+    final entry = _history.undo(_currentSnapshot(''));
+    if (entry == null) return const OpResult.err('Nothing to undo.');
     await _restoreSnapshot(entry);
     return OpResult.ok('Undone: ${entry.label}');
   }
 
   Future<OpResult> redo() async {
-    if (_redoStack.isEmpty) return const OpResult.err('Nothing to redo.');
-    final entry = _redoStack.removeLast();
-    _undoStack.add(_currentSnapshot(entry.label));
-    while (_undoStack.length > _historyCap) {
-      _undoStack.removeAt(0);
-    }
+    final entry = _history.redo(_currentSnapshot(''));
+    if (entry == null) return const OpResult.err('Nothing to redo.');
     await _restoreSnapshot(entry);
     return OpResult.ok('Redone: ${entry.label}');
   }
 
-  _HistoryEntry _currentSnapshot(String label) => _HistoryEntry(
-        profiles: [
-          for (final p in _profiles)
-            Profile(name: p.name, monitors: [...p.monitors]),
-        ],
-        activeIndex: _activeProfileIndex,
-        label: label,
-      );
+  HistoryEntry _currentSnapshot(String label) =>
+      HistoryStack.snapshot(_profiles, _activeProfileIndex, label);
 
-  Future<void> _restoreSnapshot(_HistoryEntry entry) async {
+  Future<void> _restoreSnapshot(HistoryEntry entry) async {
     final activeChanged = _activeProfileIndex != entry.activeIndex;
     _profiles = [
       for (final p in entry.profiles)
@@ -3023,17 +2986,6 @@ class ProfileMatchInfo {
     required this.profileEnabled,
     required this.currentEnabled,
     required this.missing,
-  });
-}
-
-class _HistoryEntry {
-  final List<Profile> profiles;
-  final int? activeIndex;
-  final String label;
-  const _HistoryEntry({
-    required this.profiles,
-    required this.activeIndex,
-    required this.label,
   });
 }
 
