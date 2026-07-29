@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.0.2
+
+### Added
+
+- **Setups can be renamed.** `renameProfile` had existed on the controller
+  with no caller since M8 deleted the profile rail that used to reach it, so a
+  setup the app captured for you stayed called `Setup 1` forever. The setups
+  popover now offers **Rename** and **Forget** as words rather than as two
+  unlabelled icons — a name you cannot change is not a default, it is a
+  constraint, and guessing which pictogram means "rename" is the same problem
+  one step later. Duplicate and unusable names are refused with the reason,
+  and a rename is undoable.
+
+### Changed
+
+- **Clicking empty canvas closes the screen settings.** Selecting a screen
+  opens the settings strip at the foot of the window; dismissing it required
+  finding its ✕. Clicking away from a thing is what dismisses it everywhere
+  else. Clicking a *different* screen still just moves the selection.
+
+### Notes
+
+- A profile literally named `Current Setup` — written by versions before
+  2.0.1, which reused that one name for every captured setup and so
+  overwrote the previous desk — is treated as an ordinary profile of yours.
+  Nothing re-points it, and new captures take their own number beside it.
+  There is now a test for exactly that, because the old behaviour is the
+  reason those profiles are in people's configs at all.
+
 ## 2.0.1
 
 A repair release. 2.0.0 shipped with a canvas that did not draw, which made

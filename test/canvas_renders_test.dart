@@ -10,6 +10,7 @@ import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
+import 'package:kanshi_gui/widgets/screen_strip.dart';
 
 import 'fakes/fake_mirror_runner.dart';
 import 'fakes/fake_monitor_service.dart';
@@ -180,5 +181,77 @@ void main() {
     final box = tester.renderObject<RenderBox>(find.byType(MonitorTile));
     expect(box.size.width, greaterThan(100));
     expect(box.size.height, greaterThan(50));
+  });
+
+  testWidgets('clicking empty canvas closes the screen settings', (tester) async {
+    // Clicking a screen opens the settings strip at the foot of the window.
+    // Closing it used to require finding and hitting its ✕ — but clicking
+    // away from a thing is what dismisses it everywhere else, so the strip
+    // has to answer to that too.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (c, settings) = await boot(tester, desk());
+    addTearDown(c.dispose);
+    await pumpHome(tester, c, settings);
+
+    double stripHeight() =>
+        tester.renderObject<RenderBox>(find.byType(ScreenStrip)).size.height;
+    expect(stripHeight(), 0, reason: 'nothing selected, nothing to show');
+
+    await tester.tap(find.byType(MonitorTile).first);
+    await tester.pumpAndSettle();
+    expect(stripHeight(), greaterThan(0),
+        reason: 'selecting a screen must open its settings');
+
+    // A corner of the canvas no tile occupies.
+    final canvas = tester.renderObject<RenderBox>(find.byType(LayoutBuilder).last);
+    final origin = canvas.localToGlobal(Offset.zero);
+    await tester.tapAt(origin + const Offset(6, 6));
+    await tester.pumpAndSettle();
+    expect(stripHeight(), 0,
+        reason: 'clicking empty canvas must close the settings again');
+  });
+
+  testWidgets('clicking another screen keeps the settings open', (tester) async {
+    // The dismissal must not fire between two screens: switching selection is
+    // one gesture, not close-then-open.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (c, settings) = await boot(tester, desk());
+    addTearDown(c.dispose);
+    await pumpHome(tester, c, settings);
+
+    await tester.tap(find.byType(MonitorTile).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(MonitorTile).at(1));
+    await tester.pumpAndSettle();
+
+    expect(tester.renderObject<RenderBox>(find.byType(ScreenStrip)).size.height,
+        greaterThan(0));
+  });
+
+  testWidgets('renaming a setup is offered in words', (tester) async {
+    // A capture is called "Setup 1" until the user says otherwise. Between M8
+    // and 2.0.1 there was no way to say otherwise at all — `renameProfile`
+    // had no caller — and an unlabelled pencil would only have moved the
+    // problem. The word has to be on screen.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (c, settings) = await boot(tester, desk());
+    addTearDown(c.dispose);
+    await pumpHome(tester, c, settings);
+
+    await tester.tap(find.text('Desk'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rename'), findsWidgets,
+        reason: 'the way to rename a setup must be readable, not guessable');
+    expect(find.text('Forget'), findsWidgets);
   });
 }
