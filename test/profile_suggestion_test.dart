@@ -51,7 +51,7 @@ void main() {
   /// throw-away config and the given outputs reported as live. The
   /// caller should ensure the connected set exactly matches one of the
   /// profiles so `ensureCurrentSetupMatches` doesn't auto-add a phantom
-  /// "Current Setup" profile that would muddy the suggestion math.
+  /// captured setup profile that would muddy the suggestion math.
   Future<KanshiController> buildController({
     required List<MonitorTileData> connected,
     required List<Profile> profiles,
@@ -214,12 +214,12 @@ void main() {
           Profile(name: 'mobile', monitors: [_mon(id: 'A')]),
         ],
       );
-      // Init injects a "Current Setup" profile (active, conf 1.0)
+      // Init injects a captured setup profile (active, conf 1.0)
       // since neither stored profile is a full match. Pin the
       // unrelated one so the candidate path has room to fire.
       c.setActiveProfile(0);
       expect(c.findBestProfileSuggestion(confidenceFloor: 0.5), isNotNull,
-          reason: "Current Setup beats both the floor and the active 0/3 "
+          reason: "the captured setup beats both the floor and the active 0/3 "
               "score, so a suggestion is in order.");
       expect(c.findBestProfileSuggestion(confidenceFloor: 1.01), isNull,
           reason: 'No candidate can clear an above-1.0 floor.');
