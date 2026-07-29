@@ -175,11 +175,13 @@ void main() {
     expect(c.hasLayoutDrift, isFalse);
     expect(c.layoutDriftIssues, isNotEmpty,
         reason: 'dismiss only hides the banner; the issue list is unchanged');
-    expect(runner.calls, isEmpty,
-        reason: 'dismiss must not run kanshictl');
+    expect(runner.calls.where((inv) => inv.isNotEmpty && inv[0] != 'pgrep'),
+        isEmpty,
+        reason: 'dismiss must not run kanshictl '
+            '(pgrep is the harmless is-kanshi-running probe)');
   });
 
-  test('reapplyActiveProfile runs `kanshictl reload` and refreshes outputs',
+  test('reapplyActiveProfile asks the backend to reload and refreshes outputs',
       () async {
     final profileMons = [_mon(id: 'A'), _mon(id: 'B', x: 1920)];
     final liveDrifted = [_mon(id: 'A'), _mon(id: 'B', x: 6560)];
@@ -194,32 +196,35 @@ void main() {
     (c.monitors as FakeMonitorService).outputs = profileMons;
     final res = await c.reapplyActiveProfile();
     expect(res.success, isTrue);
+    // Goes through the backend's reload chain (kanshictl -> systemd user
+    // unit -> pkill + restart) rather than shelling out to a bare
+    // `kanshictl reload`, which does nothing on a machine that starts kanshi
+    // straight from the sway config and so has no kanshictl socket.
+    expect((c.monitors as FakeMonitorService).calls, contains('restart'),
+        reason: 'reapply must go through the backend reload chain');
     expect(
-      runner.calls.any(
-          (inv) => inv.length >= 2 && inv[0] == 'kanshictl' && inv[1] == 'reload'),
-      isTrue,
-      reason: 'reapply must invoke `kanshictl reload`',
+      runner.calls.any((inv) => inv.isNotEmpty && inv[0] == 'kanshictl'),
+      isFalse,
+      reason: 'no bare kanshictl invocation may bypass the chain',
     );
     expect(c.hasLayoutDrift, isFalse,
         reason:
             'after the live layout matches the profile again, the banner is gone');
   });
 
-  test('reapplyActiveProfile reports kanshictl failure', () async {
-    final runner = FakeProcessRunner(
-      responses: {
-        'kanshictl reload': ProcessResult(0, 1, '', 'kanshictl: not running'),
-      },
-    );
+  test('reapplyActiveProfile reports a failed reload', () async {
+    final runner = FakeProcessRunner();
     final mons = [_mon(id: 'A')];
     final c = await build(
       profiles: [Profile(name: 'p', monitors: mons)],
       live: mons,
       runner: runner,
     );
+    (c.monitors as FakeMonitorService).restartResult =
+        ProcessResult(0, 1, '', 'kanshi: not running');
     final res = await c.reapplyActiveProfile();
     expect(res.success, isFalse);
-    expect(res.message, contains('kanshictl reload failed'));
+    expect(res.message, contains('kanshi: not running'));
   });
 
   test('reapplyActiveProfile refuses to run on a non-live backend',
@@ -234,7 +239,8 @@ void main() {
     await c.init();
     final res = await c.reapplyActiveProfile();
     expect(res.success, isFalse);
-    expect(runner.calls, isEmpty);
+    expect(runner.calls.where((inv) => inv.isNotEmpty && inv[0] != 'pgrep'),
+        isEmpty);
   });
 
   test('editing the active profile does not flap the drift banner',

@@ -1,8 +1,43 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/tokens.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/widgets/identify_overlay.dart';
 import 'package:collection/collection.dart';
+
+/// New tile size after the corner grip moved by [delta].
+///
+/// The grip changes the output's SCALE, which is uniform, so the tile has to
+/// keep its aspect ratio. Advancing width by dx and height by dy
+/// independently — what this used to do — let the rectangle stop representing
+/// the monitor's actual shape halfway through the gesture: a 16:9 screen
+/// could be dragged into a square while the scale it committed described
+/// something else entirely.
+///
+/// The pointer movement is projected onto the tile's own diagonal instead.
+/// Dragging along the diagonal tracks the cursor 1:1; dragging across it does
+/// nothing, because that is a shape change and a uniform scale cannot express
+/// one.
+Size resizeByGrip(Size current, Offset delta, {double minSide = 20}) {
+  final w = current.width;
+  final h = current.height;
+  if (w <= 0 || h <= 0) return current;
+  final k = (delta.dx * w + delta.dy * h) / (w * w + h * h);
+  var nw = w * (1 + k);
+  var nh = h * (1 + k);
+  // Clamp on whichever side hits the floor first, scaling the other with it
+  // so the aspect ratio survives the clamp too.
+  if (nw < minSide) {
+    nh *= minSide / nw;
+    nw = minSide;
+  }
+  if (nh < minSide) {
+    nw *= minSide / nh;
+    nh = minSide;
+  }
+  return Size(nw, nh);
+}
 
 /// Ein visuelles Rechteck, das man per Drag verschieben kann.
 /// Rechtsklick (onSecondaryTap) erhöht rotation um +90°.
@@ -173,19 +208,17 @@ class _MonitorTileState extends State<MonitorTile> {
     final isMirrorSource = widget.mirroredBy.isNotEmpty;
     final isMirrorDestination = widget.data.mirrorOf != null;
     final hasMirrorAccent = isMirrorSource || isMirrorDestination;
-    // Status colour drives the border, glow and status dot. Kept meaningful
-    // (green = connected, red = missing, grey = disabled, cyan = mirror) but
-    // the fill is now a translucent dark glass merely *tinted* with it, so
-    // the canvas reads calm instead of a wall of saturated blocks.
-    const mirrorColor = Color(0xFF4FC3F7);
+    // Status reads from the border and the dot, not from the fill: colouring
+    // the whole rectangle by state made every screen shout its state at the
+    // same volume and left nothing louder for the state that matters.
+    final c = context.colors;
+    final mirrorColor = c.mirror;
     final statusColor = !isEnabled
-        ? const Color(0xFF8A8F98)
+        ? c.textTertiary
         : hasMirrorAccent
             ? mirrorColor
-            : (widget.exists
-                ? const Color(0xFF34D399)
-                : const Color(0xFFF87171));
-    final textColor = isEnabled ? Colors.white : Colors.white70;
+            : (widget.exists ? c.ok : c.danger);
+    final textColor = isEnabled ? c.textPrimary : c.textSecondary;
     final canDrag = isEnabled && !isMirrorDestination;
     final canResize = canDrag;
     final canChangeMode = canDrag;
@@ -242,31 +275,28 @@ class _MonitorTileState extends State<MonitorTile> {
                   }
                 : null,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: R.screenR,
               child: Container(
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        statusColor.withValues(alpha: isEnabled ? 0.22 : 0.14),
-                        statusColor.withValues(alpha: 0.06),
-                      ],
-                    ),
+                    borderRadius: R.screenR,
+                    // A flat surface, not a saturated status wall. The tile
+                    // represents a screen; colouring the whole rectangle by
+                    // state made every screen shout its state at the same
+                    // volume and left nothing for the state that matters.
+                    // State reads from the border and the dot instead.
+                    color: !isEnabled
+                        ? c.screenFillOff
+                        : (widget.isSelected
+                            ? c.screenFillSelected
+                            : c.screenFill),
                     border: Border.all(
-                      color: statusColor.withValues(
-                          alpha: widget.isSelected ? 1.0 : 0.9),
-                      width: widget.isSelected ? 2.5 : 1.5,
+                      color: widget.isSelected
+                          ? c.accent
+                          : (isEnabled ? c.hairlineStrong : c.hairline),
+                      width: widget.isSelected
+                          ? Borders.ring
+                          : Borders.hairline,
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: statusColor.withValues(
-                            alpha: widget.isSelected ? 0.5 : 0.28),
-                        blurRadius: widget.isSelected ? 26 : 18,
-                        spreadRadius: widget.isSelected ? 0 : -4,
-                      ),
-                    ],
                   ),
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 10),
@@ -287,10 +317,7 @@ class _MonitorTileState extends State<MonitorTile> {
                                 color: statusColor,
                                 shape: BoxShape.circle,
                                 boxShadow: [
-                                  BoxShadow(
-                                    color: statusColor.withValues(alpha: 0.6),
-                                    blurRadius: 6,
-                                  ),
+                                  BoxShadow(color: statusColor, blurRadius: 6),
                                 ],
                               ),
                             ),
@@ -304,11 +331,9 @@ class _MonitorTileState extends State<MonitorTile> {
                                   ? '⇄ Mirrors to ${widget.mirroredBy.join(", ")}'
                                   : '⇄ Mirror of ${widget.data.mirrorOf}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: mirrorColor,
-                              ),
+                              style: T.micro.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: mirrorColor),
                             ),
                           ),
                         const SizedBox(height: 8),
@@ -316,12 +341,9 @@ class _MonitorTileState extends State<MonitorTile> {
                           child: Text(
                             displayName,
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              height: 1.15,
-                              color: textColor,
-                            ),
+                            style: T.body
+                                .copyWith(fontWeight: FontWeight.w600,
+                                    color: textColor),
                             softWrap: true,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
@@ -331,11 +353,7 @@ class _MonitorTileState extends State<MonitorTile> {
                         Text(
                           widget.data.resolution.replaceAll('x', ' × '),
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                            color: textColor.withValues(alpha: 0.75),
-                          ),
+                          style: T.mono.copyWith(color: c.textSecondary),
                         ),
                         const SizedBox(height: 8),
                         Wrap(
@@ -366,11 +384,24 @@ class _MonitorTileState extends State<MonitorTile> {
                 cursor: SystemMouseCursors.resizeUpLeftDownRight,
                 child: GestureDetector(
                   onPanUpdate: (details) {
+                    // Scale is UNIFORM, so the tile has to keep its aspect
+                    // ratio. Advancing width by dx and height by dy
+                    // independently let the rectangle stop representing the
+                    // monitor's actual shape halfway through the drag — a
+                    // 16:9 screen could be dragged into a square while the
+                    // scale it committed described something else entirely.
+                    //
+                    // Project the pointer movement onto the tile's own
+                    // diagonal instead: dragging along the diagonal tracks
+                    // the cursor 1:1, and dragging across it does nothing,
+                    // which is exactly what a uniform scale can express.
+                    final next = resizeByGrip(
+                      Size(tileWidth, tileHeight),
+                      details.delta,
+                    );
                     setState(() {
-                      tileWidth += details.delta.dx;
-                      tileHeight += details.delta.dy;
-                      if (tileWidth < 20) tileWidth = 20;
-                      if (tileHeight < 20) tileHeight = 20;
+                      tileWidth = next.width;
+                      tileHeight = next.height;
                     });
                     // Live update only — no snapping during the drag so
                     // the user never feels glued to integer scales.
@@ -392,10 +423,10 @@ class _MonitorTileState extends State<MonitorTile> {
                     height: 20,
                     margin: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
-                      color: statusColor.withValues(alpha: 0.85),
+                      color: statusColor,
                       borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(8),
-                        bottomRight: Radius.circular(12),
+                        topLeft: Radius.circular(R.chip),
+                        bottomRight: Radius.circular(R.screen),
                       ),
                     ),
                     child: const RotatedBox(
@@ -565,16 +596,14 @@ class _MonitorTileState extends State<MonitorTile> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF4FC3F7).withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(6),
+                        color: c.mirror,
+                        borderRadius: R.chipR,
                       ),
                       child: Text(
                         '+$n',
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+                        style: T.micro.copyWith(
+                            color: Colors.black,
+                            fontWeight: FontWeight.w700),
                       ),
                     ),
                 ],
@@ -603,16 +632,12 @@ class _MonitorTileState extends State<MonitorTile> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: accent.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: R.chipR,
         border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: textColor.withValues(alpha: 0.9),
-        ),
+        style: T.micro.copyWith(fontWeight: FontWeight.w600, color: textColor),
       ),
     );
   }
