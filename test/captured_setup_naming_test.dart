@@ -191,4 +191,59 @@ void main() {
         KanshiConfigParser.parse(File('${tmp.path}/config').readAsStringSync());
     expect(onDisk.map((p) => p.name), contains('Setup 1'));
   });
+
+  test('a rotation survives a hotplug that follows it', () async {
+    // The capture is released by CONTENT, not by name, because rotating a
+    // screen in the strip goes through `updateMonitor` — which mutates the
+    // active profile and saves without touching the undo stack. A name-keyed
+    // marker stayed armed through that, so the next unknown hotplug
+    // re-pointed the profile at the raw live snapshot and the rotation was
+    // gone, with nothing on the undo stack to get it back.
+    final config = cfg();
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = await boot(fake, config);
+    addTearDown(c.dispose);
+    c.hotplugSettleWindow = const Duration(milliseconds: 20);
+    expect(c.activeProfile!.name, 'Setup 1');
+
+    c.updateMonitor(c.activeMonitors.single.copyWith(rotation: 90));
+    expect(c.activeMonitors.single.rotation, 90);
+
+    fake.emitOutputs([_mon(id: 'A'), _mon(id: 'B', x: 1920)]);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    expect(c.profiles.firstWhere((p) => p.name == 'Setup 1')
+        .monitors.firstWhere((m) => m.id == 'A').rotation, 90,
+        reason: 'the hotplug threw away an edit the user had committed');
+  });
+
+  test('a profile restored by undo is not treated as a capture', () async {
+    // A name is not unique over time. Delete "Setup 1", let a capture take
+    // the freed name, then undo the delete: the restored profile answered to
+    // a marker that was never about it, and the next hotplug overwrote the
+    // arrangement the user had just recovered.
+    final config = cfg();
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A'), _mon(id: 'A2', x: 1920)]);
+    final c = await boot(fake, config);
+    addTearDown(c.dispose);
+    c.hotplugSettleWindow = const Duration(milliseconds: 20);
+
+    final a2 = c.activeMonitors.firstWhere((m) => m.id == 'A2');
+    c.snapAndCommit(a2.copyWith(x: 0, y: 1080), a2); // now theirs
+    final arranged = {
+      for (final m in c.activeProfile!.monitors) m.id: m.x + m.y * 100000,
+    };
+
+    c.deleteProfile(c.profiles.indexWhere((p) => p.name == 'Setup 1'));
+    await c.undo();
+    expect(c.profiles.map((p) => p.name), contains('Setup 1'));
+
+    fake.emitOutputs([_mon(id: 'B'), _mon(id: 'C', x: 1920)]);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    final restored = c.profiles.firstWhere((p) => p.name == 'Setup 1');
+    expect({for (final m in restored.monitors) m.id: m.x + m.y * 100000},
+        arranged,
+        reason: 'the recovered arrangement was overwritten by a capture');
+  });
 }

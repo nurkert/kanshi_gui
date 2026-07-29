@@ -106,6 +106,14 @@ static void my_application_activate(GApplication* application) {
   }
 
   gtk_window_set_default_size(window, 1280, 720);
+  // A floor, not just a starting size. The window chrome is a title bar, a
+  // screen strip and a status line stacked around the canvas; below roughly
+  // this height the compositor can hand the canvas zero pixels and the
+  // arrangement disappears with no error and nothing in the log — which is
+  // exactly how 2.0.0 reached users. Under a tiling compositor the window
+  // does not get to pick its own size, so this is a request rather than a
+  // guarantee, but it stops the case the user can cause by dragging.
+  gtk_widget_set_size_request(GTK_WIDGET(window), 720, 480);
   gtk_widget_show(GTK_WIDGET(window));
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();

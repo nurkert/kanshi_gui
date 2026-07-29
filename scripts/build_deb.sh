@@ -147,7 +147,7 @@ Priority: optional
 Section: utils
 Homepage: https://github.com/nurkert/kanshi_gui
 Depends: kanshi, libc6, libstdc++6, libgcc-s1, libgtk-3-0, libglib2.0-0, libgdk-pixbuf-2.0-0, libpango-1.0-0, libpangocairo-1.0-0, libatk1.0-0, libatk-bridge2.0-0, libharfbuzz0b, libcairo2, libepoxy0, libdbus-1-3, zlib1g
-Recommends: wl-mirror
+Recommends: wl-mirror, wlr-randr
 Description: A simple GUI for kanshi.
  A Flutter-based GUI to create, edit and switch kanshi monitor profiles.
 EOS

@@ -31,6 +31,34 @@ into it turned up.
 - **Docking into an unknown arrangement re-points the captured setup** instead
   of leaving you editing a layout that is not in front of you. A profile you
   chose or edited yourself is never taken away from you.
+- **A screen you switch off stays on the canvas.** Disabled screens are parked
+  in a lane beside the arrangement, and that lane was projected outside the
+  visible area — so "use only this screen" made the others vanish, taking
+  their "Enable display" menu with them and leaving no way back. The fit now
+  includes them: a little smaller, but there.
+- **The canvas can no longer be scaled to nothing.** A zero-height viewport or
+  a `scale 0` typo in the config made the projection factor zero, which draws
+  every screen at 0x0 — visually identical to the 2.0.0 bug, and reachable
+  from a file this app does not own. The projection has a floor, a
+  non-positive scale is treated as 1, and the window now requests a minimum
+  size instead of only a default one.
+- **The presets pill no longer sits on top of your screens.** It is painted
+  above the tiles and takes clicks, so on a short window it covered them and
+  swallowed drags, resize grips and the three-dot menu. The arrangement is
+  fitted above it now.
+- **The title bar's buttons reach the right edge.** A `Flexible` and a
+  `Spacer` were splitting the free space between them, so Identify and
+  Advanced were stranded near the middle of the bar with a few hundred pixels
+  dead to their right — on every launch, at every window size.
+
+### Packaging
+
+- The release page carries the changelog section for its version instead of an
+  empty body.
+- A build whose package glob matches nothing now fails instead of publishing an
+  empty release marked "latest" under a tag that cannot be reused.
+- `wlr-randr` is recommended, so the app finds a backend on wlroots
+  compositors other than sway rather than falling back to doing nothing.
 
 ## 2.0.0
 

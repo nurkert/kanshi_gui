@@ -145,6 +145,29 @@ void main() {
         reason: 'the tiles are stacked on the same point');
   });
 
+  testWidgets('the title bar controls sit at the right edge', (tester) async {
+    // A Row splits free space BY FLEX. The setup name was a loose `Flexible`
+    // (flex 1) that shrink-wraps to a short name, next to a `Spacer` (also
+    // flex 1) — and a loose child that under-uses its share does not hand the
+    // remainder back. The trailing controls could therefore only ever reach
+    // the middle of the bar, leaving hundreds of pixels dead at the right on
+    // every launch. Nothing overflows and nothing is logged, so only a
+    // measured position catches it.
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (c, settings) = await boot(tester, desk());
+    addTearDown(c.dispose);
+    await pumpHome(tester, c, settings);
+
+    final advanced = tester.renderObject<RenderBox>(
+        find.byTooltip('Advanced').first);
+    final right = advanced.localToGlobal(Offset.zero).dx + advanced.size.width;
+    expect(right, greaterThan(1400 * 0.9),
+        reason: 'the trailing controls are stranded mid-bar, not at the edge');
+  });
+
   testWidgets('a single monitor still fills the canvas', (tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;

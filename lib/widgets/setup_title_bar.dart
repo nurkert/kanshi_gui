@@ -54,8 +54,17 @@ class SetupTitleBar extends StatelessWidget {
           children: [
             // Name plus chevron as ONE button with a real hit target — a bare
             // chevron is a 16px target for the most-used control in the bar.
-            Flexible(
-              child: InkWell(
+            //
+            // Expanded + Align rather than Flexible + Spacer: a Row splits its
+            // free space BY FLEX, and a loose Flexible that shrink-wraps to a
+            // short setup name does not hand its unused share back. With a
+            // Spacer also claiming flex 1 the trailing controls could only ever
+            // reach the middle of the bar, leaving a few hundred pixels dead at
+            // the right edge on every launch.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
                 borderRadius: R.controlR,
                 onTap: onOpenSetups,
                 child: Padding(
@@ -90,9 +99,9 @@ class SetupTitleBar extends StatelessWidget {
                     ],
                   ),
                 ),
+                ),
               ),
             ),
-            const Spacer(),
             if (showApply) ...[
               FilledButton.icon(
                 onPressed: onApply,

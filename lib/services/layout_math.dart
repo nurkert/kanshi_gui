@@ -438,20 +438,21 @@ class LayoutMath {
       maxX = pinnedBounds.right;
       maxY = pinnedBounds.bottom;
     } else {
-      // Fit to the ACTIVE cluster only. Parked tiles are shown beside it, but
-      // including them in the bounding box meant a single disabled screen
-      // shrank the real arrangement to make room for something the user
-      // cannot interact with — the more screens they switched off, the
-      // smaller the ones they were actually using became. Parked tiles simply
-      // extend into the margin the fit already leaves (it uses 80% of the
-      // viewport), and fall back to the full set when everything is off.
-      final fitted =
-          laidOut.where((m) => m.enabled).toList(growable: false);
-      final basis = fitted.isEmpty ? laidOut : fitted;
-      minX = basis.map((m) => m.x).reduce(min);
-      minY = basis.map((m) => m.y).reduce(min);
-      maxX = basis.map((m) => m.x + m.width / m.scale).reduce(max);
-      maxY = basis.map((m) => m.y + m.height / m.scale).reduce(max);
+      // Fit to EVERY tile that will be drawn, parked ones included.
+      //
+      // M8 fitted the active cluster alone, on the theory that parked tiles
+      // would extend into the margin the fit already leaves (it uses 80% of
+      // the viewport). That premise does not hold: the margin is a tenth of
+      // the viewport per side, while a parked 1080p tile plus its gap is
+      // 2120 monitor-units wide — it only fits when the active cluster is
+      // over eight times that. In practice it never is, so switching a
+      // screen off pushed it off the canvas entirely, taking the "Enable
+      // display" menu with it. A screen you cannot see is not a smaller
+      // problem than a screen that is drawn slightly smaller.
+      minX = laidOut.map((m) => m.x).reduce(min);
+      minY = laidOut.map((m) => m.y).reduce(min);
+      maxX = laidOut.map((m) => m.x + _spanX(m)).reduce(max);
+      maxY = laidOut.map((m) => m.y + _spanY(m)).reduce(max);
     }
 
     final boundingWidth = maxX - minX;
@@ -460,10 +461,18 @@ class LayoutMath {
     final allowedW = viewport.width * 0.8;
     final allowedH = viewport.height * 0.8;
 
-    final scaleX = boundingWidth == 0 ? 1.0 : allowedW / boundingWidth;
-    final scaleY = boundingHeight == 0 ? 1.0 : allowedH / boundingHeight;
+    final scaleX = boundingWidth <= 0 ? 1.0 : allowedW / boundingWidth;
+    final scaleY = boundingHeight <= 0 ? 1.0 : allowedH / boundingHeight;
     var scaleFactor = min(scaleX, scaleY);
     if (scaleFactor > 1.0) scaleFactor = 1.0;
+    // A zero or non-finite factor is what an empty canvas looks like from the
+    // inside: it survives every widget test because the tiles are still there,
+    // just projected to nothing. It arises from a zero-height viewport (the
+    // 2.0.0 bug) and from a bounding box that came back infinite. Neither is
+    // recoverable here, but neither may silently blank the arrangement, so
+    // the projection stays at a floor and the tiles overflow the too-small
+    // canvas instead of vanishing inside it.
+    if (!scaleFactor.isFinite || scaleFactor <= 0) scaleFactor = _minScale;
 
     final scaledBW = boundingWidth * scaleFactor;
     final scaledBH = boundingHeight * scaleFactor;
@@ -473,8 +482,8 @@ class LayoutMath {
     final displayMonitors = laidOut.map((m) {
       final dx = (m.x - minX) * scaleFactor + offsetX;
       final dy = (m.y - minY) * scaleFactor + offsetY;
-      final dw = (m.width / m.scale) * scaleFactor;
-      final dh = (m.height / m.scale) * scaleFactor;
+      final dw = _spanX(m) * scaleFactor;
+      final dh = _spanY(m) * scaleFactor;
       return m.copyWith(x: dx, y: dy, width: dw, height: dh);
     }).toList();
 
@@ -488,6 +497,27 @@ class LayoutMath {
       mirroredBy: mirroredBy,
     );
   }
+
+  /// The logical width a monitor occupies on the canvas.
+  ///
+  /// `scale` is a divisor, and a scale of 0 — which a hand-edited config can
+  /// contain and which the parser stores verbatim — turns that division into
+  /// infinity. One such output makes the bounding box infinite, drives the
+  /// projection factor to zero and blanks the ENTIRE canvas, not just that
+  /// tile: the same silent, unlogged blankness as the 2.0.0 bug, from a
+  /// single typo in a file the app does not own. Treating a non-positive
+  /// scale as 1.0 draws that output at its native size, which is wrong but
+  /// visible and correctable.
+  static double _spanX(MonitorTileData m) =>
+      m.scale > 0 ? m.width / m.scale : m.width;
+
+  /// Vertical counterpart of [_spanX].
+  static double _spanY(MonitorTileData m) =>
+      m.scale > 0 ? m.height / m.scale : m.height;
+
+  /// Floor for the projection factor. Small enough never to interfere with a
+  /// real fit, large enough that a tile is a visible mark rather than nothing.
+  static const double _minScale = 0.01;
 
   /// Returns a copy of [mons] where each disabled tile's position has
   /// been replaced with a virtual park position to the right of the
@@ -507,14 +537,13 @@ class LayoutMath {
     final disabled = mons.where((m) => !m.enabled).toList(growable: false);
     if (active.isEmpty || disabled.isEmpty) return mons;
 
-    final activeMaxX =
-        active.map((m) => m.x + m.width / m.scale).reduce(max);
+    final activeMaxX = active.map((m) => m.x + _spanX(m)).reduce(max);
     final activeMinY = active.map((m) => m.y).reduce(min);
 
     final parked = <String, MonitorTileData>{};
     var lane = activeMinY;
     for (final m in disabled) {
-      final h = m.height / m.scale;
+      final h = _spanY(m);
       parked[m.id] = m.copyWith(
         x: activeMaxX + _parkSpacing,
         y: lane,
