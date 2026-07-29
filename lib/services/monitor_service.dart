@@ -71,6 +71,16 @@ abstract class MonitorService {
   /// notification primitive across compositors).
   ProcessStream? spawnIdentifyBanner(String output, String label) => null;
 
+  /// Shows a safety prompt on [output] while a risky change is on trial.
+  ///
+  /// The point is survivability: the countdown that offers to undo a mode
+  /// change lives in the app's own window, and that window may be sitting on
+  /// the screen the change just blacked out. A prompt on every OTHER output
+  /// means the user still learns what is happening and that it will undo
+  /// itself. Backends without a way to draw on a specific output return null
+  /// and the in-window card is all there is.
+  ProcessStream? spawnSafetyPrompt(String output, String message) => null;
+
   /// Returns the live `workspace_number → output_name` mapping. Used by
   /// the controller's verify-and-fix path to compare the actual sway
   /// state against the desired ranks computed from the active profile.

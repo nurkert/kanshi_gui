@@ -1,16 +1,132 @@
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 
+/// What [KanshiConfigParser.diagnose] found in a config file, compared with
+/// what the parser was able to turn into [Profile]s.
+///
+/// The parser models the subset of kanshi's DSL that the GUI writes. Anything
+/// outside that subset is not an error — kanshi accepts it happily — but the
+/// GUI must know it did not understand the file, because [KanshiConfigWriter]
+/// re-renders the whole config from the model and would drop whatever the
+/// parser never saw.
+class KanshiConfigDiagnostics {
+  /// `profile` headers present in the file, named or not.
+  final int profilesInFile;
+
+  /// Profiles the parser produced.
+  final int profilesParsed;
+
+  /// `output` / `...output` directives inside profile blocks.
+  final int outputsInFile;
+
+  /// Monitors the parser produced across all profiles.
+  final int outputsParsed;
+
+  /// Global-scope `output <criteria> …` default lines. The model has no place
+  /// for them, so they do not appear in the GUI — but they are preserved.
+  final int globalOutputDefaults;
+
+  const KanshiConfigDiagnostics({
+    required this.profilesInFile,
+    required this.profilesParsed,
+    required this.outputsInFile,
+    required this.outputsParsed,
+    required this.globalOutputDefaults,
+  });
+
+  /// True when everything in the file made it into the model, so rendering
+  /// the model back cannot lose a profile or an output.
+  bool get isLossless =>
+      profilesInFile == profilesParsed &&
+      outputsInFile == outputsParsed &&
+      globalOutputDefaults == 0;
+
+  /// Human-readable summary of what would be lost, or null when nothing is.
+  String? get lossDescription {
+    if (isLossless) return null;
+    final parts = <String>[];
+    if (profilesInFile != profilesParsed) {
+      parts.add('${profilesInFile - profilesParsed} of $profilesInFile '
+          'profiles');
+    }
+    if (outputsInFile != outputsParsed) {
+      parts.add('${outputsInFile - outputsParsed} of $outputsInFile '
+          'output lines');
+    }
+    if (globalOutputDefaults > 0) {
+      parts.add('$globalOutputDefaults global output default'
+          '${globalOutputDefaults == 1 ? '' : 's'}');
+    }
+    return parts.join(' and ');
+  }
+
+  @override
+  String toString() => 'KanshiConfigDiagnostics(profiles '
+      '$profilesParsed/$profilesInFile, outputs $outputsParsed/$outputsInFile, '
+      'globalDefaults $globalOutputDefaults)';
+}
+
 /// Tokenises and parses the subset of kanshi config files this app produces
 /// and reads. It is more permissive than the previous regex-only approach:
 ///
-/// - profile names may be quoted ('…') or bare
+/// - profile names may be quoted ('…') or bare, with `\'` escapes
+/// - output criteria may be 'single-quoted', "double-quoted" or bare
 /// - inline `#` and `//` comments are stripped
 /// - braces are matched by counting (so per-profile blocks may contain inner
 ///   braces in `exec` lines, etc.)
 /// - whitespace is normalised between tokens
+///
+/// It does NOT model all of kanshi's DSL. That is no longer dangerous: since
+/// M9 the save edits the document in place through [KanshiDocument] and only
+/// replaces the directives this app owns, so what the parser cannot read is
+/// preserved rather than deleted. [diagnose] still reports the gap, because
+/// the app should be able to say what it cannot show.
 class KanshiConfigParser {
   KanshiConfigParser._();
+
+  /// Counts what the file contains and what [parse] managed to read from it.
+  ///
+  /// Reports what the app cannot show the user. It was once the basis of a
+  /// save-refusal gate — a hand-written config using kanshi's optional-`enable`
+  /// form parsed as zero monitors per profile, the writer skipped every empty
+  /// profile, and the first save replaced the file with an empty one. Since M9
+  /// the save preserves what it cannot read, so this is informational.
+  static KanshiConfigDiagnostics diagnose(String content) {
+    final stripped = _stripComments(content).split('\n');
+    final profileHeader = RegExp(r'^\s*profile\b');
+    final outputLine = RegExp(r'^\s*(?:\.\.\.)?output\s+\S');
+
+    var profilesInFile = 0;
+    var outputsInFile = 0;
+    var globalOutputDefaults = 0;
+    var depth = 0;
+
+    for (final line in stripped) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      if (depth == 0 && profileHeader.hasMatch(trimmed)) {
+        profilesInFile++;
+      } else if (outputLine.hasMatch(trimmed)) {
+        if (depth > 0) {
+          outputsInFile++;
+        } else {
+          globalOutputDefaults++;
+        }
+      }
+      depth += _countChar(line, '{') - _countChar(line, '}');
+      if (depth < 0) depth = 0;
+    }
+
+    final parsed = parse(content);
+    return KanshiConfigDiagnostics(
+      profilesInFile: profilesInFile,
+      profilesParsed: parsed.length,
+      outputsInFile: outputsInFile,
+      outputsParsed:
+          parsed.fold<int>(0, (n, p) => n + p.monitors.length),
+      globalOutputDefaults: globalOutputDefaults,
+    );
+  }
 
   static List<Profile> parse(String content) {
     final profiles = <Profile>[];
@@ -20,6 +136,8 @@ class KanshiConfigParser {
     final rankByProfile = _extractRankComments(content);
     final mirrorByProfile = _extractMirrorComments(content);
     final edidByProfile = _extractEdidComments(content);
+    final portByProfile = _extractPortComments(content);
+    final wsByProfile = _extractWorkspaceComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -68,8 +186,11 @@ class KanshiConfigParser {
       final ranks = rankByProfile[header] ?? const <String, int>{};
       final mirrors = mirrorByProfile[header] ?? const <String, String>{};
       final edids = edidByProfile[header] ?? const <String, String>{};
+      final ports = portByProfile[header] ?? const <String, String>{};
+      final ws = wsByProfile[header];
       profiles.add(Profile(
         name: header,
+        workspaceMap: ws == null || ws.isEmpty ? null : ws,
         monitors: _applyEdids(
           _applyRanks(
             // Mirror annotations override the legacy `exec wl-mirror`
@@ -77,7 +198,8 @@ class KanshiConfigParser {
             // since older GUI versions wrote both and the annotation is
             // canonical now.
             _applyMirrors(
-              _applyMirrorExecs(_parseOutputs(blockText), blockText),
+              _applyMirrorExecs(
+                  _parseOutputs(blockText, ports), blockText),
               mirrors,
             ),
             ranks,
@@ -166,6 +288,93 @@ class KanshiConfigParser {
         if (m != null) {
           (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
               m.group(2)!;
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:ws '<number>'='<output>'` annotations out of each profile.
+  ///
+  /// This is where a setup's observed workspace layout lives. It is written
+  /// as a comment because kanshi has no field for it: the placement itself is
+  /// carried out by the `exec swaymsg` chain, and this records what that
+  /// chain should say next time.
+  static Map<String, Map<int, String>> _extractWorkspaceComments(
+    String content,
+  ) {
+    final out = <String, Map<int, String>>{};
+    final wsLine = RegExp(
+      r"^\s*#\s*kanshi_gui:ws\s+'(\d+)'\s*=\s*'([^']*)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = wsLine.firstMatch(raw);
+        if (m != null) {
+          final n = int.tryParse(m.group(1)!);
+          if (n != null) {
+            (out[currentProfile] ??= <int, String>{})[n] = m.group(2)!;
+          }
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:port '<descriptor>'='<connector>'` annotations out of
+  /// each profile body. Returned map is profile-name → EDID descriptor →
+  /// connector name.
+  ///
+  /// The writer emits these whenever it addresses an output by its stable
+  /// EDID description, which is the whole point of M3: kanshi matches on
+  /// something that survives a reboot and a redock, while the GUI still gets
+  /// to know which port that was last time. A stale entry costs nothing —
+  /// rehydration against the live output set corrects the connector anyway.
+  static Map<String, Map<String, String>> _extractPortComments(
+    String content,
+  ) {
+    final out = <String, Map<String, String>>{};
+    final portLine = RegExp(
+      r"^\s*#\s*kanshi_gui:port\s+'((?:[^'\\]|\\')*)'\s*=\s*'([^']*)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = portLine.firstMatch(raw);
+        if (m != null) {
+          (out[currentProfile] ??= <String, String>{})[
+              m.group(1)!.replaceAll(r"\'", "'")] = m.group(2)!;
         }
         depth += _countChar(raw, '{') - _countChar(raw, '}');
         if (depth <= 0) {
@@ -369,27 +578,77 @@ class KanshiConfigParser {
   /// next line). Returns the (un-quoted) name or `null` when the line is not
   /// a profile header.
   static String? _matchProfileHeader(String line) {
+    // `(?:[^'\\]|\\.)*` so an escaped apostrophe does not terminate the
+    // name — the inverse of [KanshiConfigWriter.escapeProfileName].
     final quoted =
-        RegExp(r"^profile\s+'([^']+)'\s*\{?\s*$").firstMatch(line);
-    if (quoted != null) return quoted.group(1)!.trim();
+        RegExp(r"^profile\s+'((?:[^'\\]|\\.)*)'\s*\{?\s*$").firstMatch(line);
+    if (quoted != null) return _unescapeProfileName(quoted.group(1)!).trim();
     final bare = RegExp(r'^profile\s+([^\s{]+)\s*\{?\s*$').firstMatch(line);
     if (bare != null) return bare.group(1)!.trim();
     return null;
   }
 
-  static List<MonitorTileData> _parseOutputs(String block) {
+  /// Inverse of [KanshiConfigWriter.escapeProfileName]: turns `\'` back into
+  /// `'` and `\\` back into `\`. A backslash before anything else is kept
+  /// verbatim, so a hand-written name is never mangled by this.
+  static String _unescapeProfileName(String raw) {
+    if (!raw.contains(r'\')) return raw;
+    final out = StringBuffer();
+    for (var i = 0; i < raw.length; i++) {
+      final ch = raw[i];
+      if (ch == r'\' && i + 1 < raw.length) {
+        final next = raw[i + 1];
+        if (next == r'\' || next == "'") {
+          out.write(next);
+          i++;
+          continue;
+        }
+      }
+      out.write(ch);
+    }
+    return out.toString();
+  }
+
+  static List<MonitorTileData> _parseOutputs(
+    String block, [
+    Map<String, String> portByDescriptor = const {},
+  ]) {
     final outputs = <MonitorTileData>[];
+    // Three criteria spellings: 'single-quoted' (what this app has always
+    // written for connectors), "double-quoted" (kanshi(5)'s documented form,
+    // and what a stable EDID description needs because it contains spaces),
+    // and bare.
+    // Anchored at the start of a line. Without the anchor the pattern also
+    // matched INSIDE `...output "X" enable`, so the ellipsis form — which
+    // this app cannot express — was read as an ordinary output and written
+    // back as a second, duplicate directive next to the original.
     final outputRE = RegExp(
-      r"output\s+(?:'([^']+)'|(\S+))\s+(enable|disable)([^\n]*)",
+      "^[ \\t]*output\\s+(?:'([^']+)'|\"([^\"]+)\"|(\\S+))"
+      r"\s+(enable|disable)([^\n]*)",
       caseSensitive: false,
+      multiLine: true,
     );
 
     for (final m in outputRE.allMatches(block)) {
-      final name = (m.group(1) ?? m.group(2) ?? '').trim();
-      if (name.isEmpty) continue;
-      final state = m.group(3)!.toLowerCase();
-      final rest = m.group(4) ?? '';
+      final quoted = m.group(1);
+      final doubleQuoted = m.group(2);
+      final criteria = (quoted ?? doubleQuoted ?? m.group(3) ?? '').trim();
+      if (criteria.isEmpty) continue;
+      final state = m.group(4)!.toLowerCase();
+      final rest = m.group(5) ?? '';
       final isEnabled = state == 'enable';
+
+      // A criteria containing spaces is an EDID description, not a
+      // connector. Keep it as the stable identity and resolve the connector
+      // through the `# kanshi_gui:port` annotation when one was recorded —
+      // a stale annotation is harmless, since rehydration against the live
+      // output set corrects the id anyway.
+      final looksLikeDescriptor =
+          doubleQuoted != null || criteria.contains(' ');
+      final descriptor = looksLikeDescriptor ? criteria : '';
+      final name = looksLikeDescriptor
+          ? (portByDescriptor[criteria] ?? criteria)
+          : criteria;
 
       final scaleMatch = RegExp(r'scale\s+([\d.]+)').firstMatch(rest);
       final modeMatch =
@@ -437,6 +696,7 @@ class KanshiConfigParser {
       outputs.add(MonitorTileData(
         id: name,
         manufacturer: name,
+        edidDescriptor: descriptor,
         x: posX,
         y: posY,
         width: width,

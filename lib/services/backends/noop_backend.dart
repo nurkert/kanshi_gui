@@ -65,6 +65,11 @@ class NoopBackend implements MonitorService {
   @override
   ProcessStream? spawnIdentifyBanner(String output, String label) => null;
 
+  /// No compositor to draw on, so the in-window card is the only prompt.
+  @override
+  ProcessStream? spawnSafetyPrompt(String output, String message) => null;
+
+
   @override
   Future<Map<int, String>> getWorkspaceOutputs() async => const {};
 

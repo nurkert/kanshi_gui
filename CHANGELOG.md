@@ -1,5 +1,100 @@
 # Changelog
 
+## 2.0.0 — unreleased
+
+A major version. The short version: it no longer loses your layout, it no
+longer loses your config, and it stopped asking you questions it can answer
+itself.
+
+### Fixed — the reported bug
+
+- **Your arrangement and your workspaces survive a reboot and a redock.**
+  Profiles were addressed by connector name (`DP-1`), which `kanshi(5)`
+  explicitly warns "may change across reboots … or creation order (typically
+  for USB-C docks)". The stable EDID identity was already in the file, but in
+  a comment only this app could read. Profiles are now written as
+  `output "Make Model Serial"`, which kanshi matches natively, and the sway
+  workspace chain uses the same identity. Migration is evidence-based: a
+  descriptor is only ever written after a backend actually reported it, never
+  guessed.
+- The hotplug path had no debounce at all. Docking is a salvo of events, and
+  every one of them ran the full pipeline against a half-connected set.
+- `reapplyActiveProfile` shelled out to a bare `kanshictl reload`, which does
+  nothing on a machine that starts kanshi from the sway config and so has no
+  socket. It goes through the full reload chain now.
+
+### Fixed — data loss
+
+- **Saving no longer rewrites your config file.** It used to re-render the
+  whole file from the model, so anything the model could not express was
+  deleted on the first save: `include`, `alias`, global `output` defaults,
+  hand-written `exec` lines, braced `output { … }` blocks, `adaptive_sync`,
+  and every comment. A hand-written config could be emptied outright. There
+  is a real scfg parser now, and the save edits the document in place.
+- Configs using `include`, and configs with syntax the model cannot read, are
+  editable again — they were blocked only because rewriting them was unsafe.
+- The mode of a rotated output oscillated between `1920x1080` and
+  `1080x1920` on every save, so every second save asked the panel for a
+  resolution it does not have.
+- Two concurrent saves could clobber each other and roll the file back to the
+  state before the edit.
+- "Restore backup" restored the file and then immediately overwrote it with
+  the in-memory profiles.
+- A profile name containing an apostrophe produced a config kanshi refuses to
+  parse, which stops display management entirely.
+
+### Fixed — the safety net
+
+- Setting the countdown to 0, labelled "Off", made every mode change and
+  every disable revert *instantly* instead of not at all.
+- Revert closures wrote into a detached list, so the compositor turned a
+  screen back on while the model and the config kept saying `disable`.
+- A revert could restore into the wrong profile if you switched during the
+  countdown, and a failing revert was silent and unretryable.
+- The lockout guard counted disconnected outputs, so on the train you could
+  switch off the only screen you actually had.
+
+### Changed — the interface
+
+- One status line replaces the health banner, the drift banner, the
+  safety-net bar and seven toasts, which could all appear at once. Its green
+  check is rendered from a comparison that actually ran; when something could
+  not be verified, the sentence gets weaker rather than quieter.
+- The safety-net countdown is a card over a dimmed canvas, mirrored onto
+  every screen via swaynag — the window asking the question may itself be on
+  the screen that just went black. Enter keeps, Escape reverts, and nothing
+  else does either.
+- Drift is drawn instead of described: your screen stays where the setup
+  wants it and a dashed outline shows where it actually is.
+- A title bar and a setups list replace the 248px rail; a bottom strip that
+  is zero-height at rest replaces the 300px inspector. The canvas gets both
+  back.
+- A design-token layer, applied centrally — including to menus, dropdowns and
+  dialogs, which render in their own overlay and had been left on Material
+  defaults. The light theme now reaches the whole app instead of a third of
+  it.
+- The corner grip no longer deforms the screen it represents.
+- Switching a screen off no longer shrinks the ones you are still using.
+
+### Removed
+
+- Twelve preferences, the settings screen and the first-run wizard. Snap
+  distance, countdown lengths, toast toggles, backup count and the accent
+  override are derived, fixed, or read from sway. Where the workspaces go is
+  learned from where you put them, per setup, rather than chosen from
+  "interleaved or grouped".
+
+### Internal
+
+- CI now runs `flutter analyze --fatal-infos` and the test suite on every
+  push and pull request; releases are cut from tags rather than from every
+  commit to main. Neither was true before.
+- 358 → 558 tests, including the project's first widget tests and a golden
+  corpus of real kanshi configs.
+- `KanshiController` lost eleven collaborators (2,793 → ~2,650 lines despite
+  everything added), and the config, geometry and identity logic moved into a
+  Flutter-free `lib/domain/`.
+
 ## 1.6.2 — 2026-05-29
 
 ### Fixed

@@ -1,0 +1,55 @@
+name: CI
+
+# Runs on every push and every pull request. Until v2.0 this repository had
+# no CI gate at all: `release.yml` built and published a .deb on every push
+# to main without ever running `flutter analyze` or `flutter test`, so the
+# 358-test suite that guards the refactor was never actually executed.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # `flutter test` runs on the Dart VM, so this job needs no GTK/clang
+      # toolchain — that is only required by the packaging job in release.yml.
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # --fatal-infos: the analyzer is currently clean, and the point of a
+      # gate is to keep it that way. An info-level regression is exactly the
+      # kind of thing that otherwise accumulates unnoticed.
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test --coverage
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: warn

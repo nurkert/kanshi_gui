@@ -1,26 +1,20 @@
+import 'package:kanshi_gui/domain/output_identity.dart';
+import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+
+// Workspace distribution moved to lib/domain/workspace_layout.dart — it is
+// pure geometry over ranked outputs and has nothing to do with rendering a
+// config file. Re-exported so the existing importers are untouched.
+export 'package:kanshi_gui/domain/workspace_layout.dart';
 
 /// Knobs that influence what the [KanshiConfigWriter] emits in addition to
 /// the bare per-output lines. These reflect the historically Sway-specific
 /// behaviours of the app — they default to *off* so the writer is
 /// compositor-neutral by default and only enables the Sway extras when the
 /// caller (typically the SwayBackend) explicitly asks for them.
-/// How the numeric workspaces 1..N are spread across the ranked outputs
-/// when [KanshiWriteOptions.injectSwayWorkspaceExec] is on. See
-/// [workspaceSlotRank] for the exact assignment each mode produces.
-enum WorkspaceDistribution {
-  /// Round-robin by left-to-right position: ws `w` → rank `(w-1) mod N`.
-  /// Two screens give the left one 1/3/5/7/9 and the right one 2/4/6/8.
-  interleaved,
-
-  /// Contiguous blocks: the workspace range is split into N near-equal
-  /// runs, so each monitor owns a consecutive band. Two screens give the
-  /// left one 1..5 and the right one 6..9.
-  grouped,
-}
 
 class KanshiWriteOptions {
   final bool injectSwayWorkspaceExec;
@@ -78,6 +72,16 @@ class KanshiWriteOptions {
 class KanshiConfigWriter {
   KanshiConfigWriter._();
 
+  /// Escapes a profile name for the single-quoted `profile '<name>' {` form.
+  ///
+  /// Before this, the name went in raw: a profile called "Nico's Desk"
+  /// produced `profile 'Nico's Desk' {`, which kanshi refuses to parse. The
+  /// daemon then stops managing displays altogether and the GUI can no
+  /// longer read its own profiles back — from one apostrophe in a rename
+  /// box. [KanshiConfigParser] performs the inverse.
+  static String escapeProfileName(String name) =>
+      name.replaceAll('\\', r'\\').replaceAll("'", r"\'");
+
   static String render(
     List<Profile> profiles, {
     KanshiWriteOptions options = KanshiWriteOptions.neutral,
@@ -121,11 +125,24 @@ class KanshiConfigWriter {
     // layout passes through untouched.
     final mons = LayoutMath.resolveOverlaps(sanitized);
 
-    buffer.writeln("profile '${profile.name}' {");
+    // How kanshi should address each output. Descriptions win wherever the
+    // display supplied one and it is unique inside this profile; see
+    // [chooseOutputCriteria]. Outputs whose EDID we have never observed keep
+    // the connector name — the descriptor is never guessed, only recorded.
+    final criteria = chooseOutputCriteria(
+      mons.map((m) => m.id),
+      (connector) {
+        final m = mons.firstWhere((e) => e.id == connector);
+        return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
+      },
+    );
+
+    buffer.writeln("profile '${escapeProfileName(profile.name)}' {");
 
     for (final m in mons) {
+      final crit = criteria[m.id] ?? OutputCriteria.connector(m.id);
       if (!m.enabled) {
-        buffer.writeln("    output '${m.id}' disable");
+        buffer.writeln("    output ${crit.configForm} disable");
         continue;
       }
       // mode line is always landscape-oriented, transform handles rotation.
@@ -152,9 +169,23 @@ class KanshiConfigWriter {
       final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
 
       buffer.writeln(
-        "    output '${m.id}' enable scale ${m.scale.toStringAsFixed(2)} "
+        "    output ${crit.configForm} enable "
+        "scale ${m.scale.toStringAsFixed(2)} "
         "mode ${baseW.toInt()}x${baseH.toInt()}@${formatHz(refresh)}Hz "
         "transform $transform position $posX,$posY",
+      );
+    }
+
+    // Record which connector each stable criteria resolved to when the file
+    // was written. Purely informational for the GUI (it shows the port and
+    // can re-key its annotations); kanshi ignores it, and a stale entry is
+    // harmless because the live output set is what actually resolves names.
+    for (final m in mons) {
+      final crit = criteria[m.id];
+      if (crit == null || !crit.isDescription) continue;
+      buffer.writeln(
+        "    # kanshi_gui:port '${crit.value.replaceAll("'", r"\'")}'"
+        "='${m.id}'",
       );
     }
 
@@ -238,6 +269,19 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
+      // A setup that has been observed carries its own map; the distribution
+      // rule only seeds one that never has. See [Profile.workspaceMap].
+      final learned = profile.workspaceMap;
+      if (learned != null && learned.isNotEmpty) {
+        for (final entry in (learned.keys.toList()..sort())) {
+          buffer.writeln(
+              "    # kanshi_gui:ws '$entry'='${learned[entry]}'");
+        }
+        final chain = buildLearnedWorkspaceChain(learned, criteria: criteria);
+        if (chain != null) {
+          buffer.writeln('    exec swaymsg "$chain"');
+        }
+      } else {
       final ranked = resolveWorkspaceRanks(
         mons.where((m) => m.enabled && m.mirrorOf == null).toList(),
       );
@@ -251,6 +295,7 @@ class KanshiConfigWriter {
       final chain = buildSwayWorkspaceChain(
         ranked,
         distribution: options.workspaceDistribution,
+        criteria: criteria,
       );
       if (chain != null) {
         // Earlier (1.5.12) we tried to claim a named workspace per
@@ -264,6 +309,7 @@ class KanshiConfigWriter {
         // workspace 1..N which displaces any visible orphan, and
         // sway garbage-collects empty non-visible workspaces.
         buffer.writeln("    exec swaymsg \"$chain\"");
+      }
       }
     }
 
@@ -310,9 +356,23 @@ class KanshiConfigWriter {
     List<MonitorMode> modes,
   ) {
     if (modes.isEmpty) {
+      // MonitorTileData.width/height carry the ROTATED extent — both the
+      // parser (kanshi_config_parser.dart) and the backends swap them for a
+      // 90/270 transform. A MonitorMode is a PHYSICAL panel mode, so the
+      // fallback has to swap back.
+      //
+      // Without this, a rotated output whose modes list is empty — which is
+      // every output loaded from the config file, since the config carries
+      // no mode list — had its rotated extent returned as if it were a
+      // physical mode. _sanitizeMonitor then transposed it once and the
+      // render line transposed it a second time, so `transform 270` with
+      // `mode 1920x1080` was written back as `mode 1080x1920`, and the save
+      // after that flipped it again. The mode oscillated on every save and
+      // every second save asked the panel for a resolution it does not have.
+      final landscape = monitor.rotation % 180 == 0;
       return MonitorMode(
-        width: monitor.width,
-        height: monitor.height,
+        width: landscape ? monitor.width : monitor.height,
+        height: landscape ? monitor.height : monitor.width,
         refresh: monitor.refresh > 0 ? monitor.refresh : 60,
       );
     }
@@ -348,175 +408,3 @@ class KanshiConfigWriter {
   }
 }
 
-/// Builds the semicolon-joined `swaymsg` command that distributes the
-/// numeric workspaces 1..[maxWorkspaces] across the ranked outputs.
-///
-/// Workspaces are distributed **interleaved** by left-to-right
-/// position. With N ranked outputs (0..N-1 left-to-right), workspace
-/// `w` (1-indexed) lands on the rank `(w - 1) mod N`. Two screens give
-/// the left one workspaces 1/3/5/7/9 and the right one 2/4/6/8;
-/// three screens give 1/4/7, 2/5/8, 3/6/9 — the number-keys 1..9
-/// walk left-to-right across the displays, looping back as you press
-/// higher numbers.
-///
-/// Caller supplies a pre-computed ranked list (typically via
-/// [resolveWorkspaceRanks]) so the controller-side verify-and-fix path
-/// (which also wants to know the desired ws→output mapping for
-/// comparison) doesn't have to re-derive it.
-///
-/// Returns `null` when [ranked] is empty — there's no workspace
-/// distribution to express.
-///
-/// Why a single chained invocation instead of N separate `exec swaymsg`
-/// lines:
-///
-///  1. Race elimination — kanshi spawns each `exec` in its own
-///     fork/exec. Multiple parallel invocations land in sway
-///     out-of-order; workspace 5 could be processed before workspace 2
-///     and leak windows onto the wrong output. A single compound
-///     command is processed in declared order by sway's IPC.
-///
-///  2. Sway's `workspace N output X` is *passive* — it only specifies
-///     where workspace N is created at runtime; it does NOT move
-///     existing workspaces. To relocate workspaces that already exist
-///     with windows (e.g. ws 1 opened before docking), we focus each
-///     in turn and run `move workspace to output X`. This forces the
-///     move for existing workspaces and is a no-op for empty ones.
-///
-/// The chain first declares every output target up front (so the later
-/// `workspace N` focus picks the right home AND so any *future*
-/// workspace creation during the session lands on the assigned
-/// monitor without help from kanshi_gui), then walks the workspaces
-/// and moves each one into place, and ends on `workspace number 1`
-/// so focus lands on the leftmost-rank monitor — typically the
-/// user's primary attention area after docking, and stable across
-/// runs.
-///
-/// Phase-1 (the output binding) deliberately uses `workspace N output X`
-/// rather than `workspace number N output X`. Sway stores the binding
-/// in its `workspace_outputs` list keyed by workspace name; the
-/// `number` variant produces a `success:true` IPC reply but the stored
-/// key does not match what sway looks up when a workspace is later
-/// created with `workspace number N`, so the binding never takes
-/// effect on workspace destruction + recreation. Without the binding,
-/// a $mod+5 from a different output creates ws 5 on the focused
-/// output instead of its assigned home — the long-standing complaint
-/// that workspaces above 3 (or above N for N monitors) "open wherever
-/// the cursor is". This binding persists for the whole sway session.
-///
-/// Phase-2 keeps `workspace number N` for the focus + force-move
-/// because the rename concern (`1: code`) is real: a user who renamed
-/// their numeric workspaces needs the numeric-slot selector here,
-/// otherwise the unsuffixed form would create an empty "1" alongside
-/// the live "1: code" and silently fragment their setup.
-String? buildSwayWorkspaceChain(
-  List<WorkspaceRankEntry> ranked, {
-  int maxWorkspaces = 9,
-  WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
-}) {
-  final n = ranked.length;
-  if (n == 0) return null;
-  final parts = <String>[];
-  for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = workspaceSlotRank(ws, n, distribution,
-        maxWorkspaces: maxWorkspaces);
-    // Phase 1: persistent output binding. NO `number` keyword — see
-    // the docstring above for why.
-    parts.add("workspace $ws output '${ranked[rank].id}'");
-  }
-  for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = workspaceSlotRank(ws, n, distribution,
-        maxWorkspaces: maxWorkspaces);
-    // Phase 2: focus the numeric slot (renamed-workspace safe) and
-    // force-move any pre-existing workspace to its new home output.
-    parts.add("workspace number $ws");
-    parts.add("move workspace to output '${ranked[rank].id}'");
-  }
-  parts.add('workspace number 1');
-  return parts.join('; ');
-}
-
-/// Maps a 1-indexed workspace number [ws] to the 0..N-1 output rank that
-/// owns it, for [n] ranked outputs under the chosen [distribution]. Shared
-/// by [buildSwayWorkspaceChain] (which builds the swaymsg command) and the
-/// controller's verify-and-fix path (which computes the *expected* live
-/// mapping to diff against), so the two never drift apart.
-///
-///  * [WorkspaceDistribution.interleaved] → `(ws-1) mod n` (round-robin).
-///  * [WorkspaceDistribution.grouped] → `((ws-1) * n) ~/ maxWorkspaces`,
-///    which carves 1..[maxWorkspaces] into N near-equal contiguous bands
-///    (e.g. N=2 → 1..5 / 6..9; N=3 → 1..3 / 4..6 / 7..9). Every monitor
-///    gets at least one slot as long as `n <= maxWorkspaces`.
-int workspaceSlotRank(
-  int ws,
-  int n,
-  WorkspaceDistribution distribution, {
-  int maxWorkspaces = 9,
-}) {
-  switch (distribution) {
-    case WorkspaceDistribution.interleaved:
-      return (ws - 1) % n;
-    case WorkspaceDistribution.grouped:
-      final rank = ((ws - 1) * n) ~/ maxWorkspaces;
-      return rank >= n ? n - 1 : rank;
-  }
-}
-
-class WorkspaceRankEntry {
-  final String id;
-  final int rank;
-  final bool explicit;
-  const WorkspaceRankEntry(this.id, this.rank, this.explicit);
-}
-
-/// Resolves each enabled monitor to a unique 0..N-1 rank used for the
-/// interleaved workspace distribution. Explicit `workspaceRank` overrides
-/// win first (in X-ascending order on collision); remaining slots are
-/// filled by the still-unranked monitors in X-ascending order.
-///
-/// Returned list is ordered **by effective rank** — element at index `i`
-/// owns workspace `i+1`, `i+1+N`, `i+1+2N`, …
-List<WorkspaceRankEntry> resolveWorkspaceRanks(List<MonitorTileData> mons) {
-  if (mons.isEmpty) return const [];
-  final n = mons.length;
-  final byX = mons.toList()
-    ..sort((a, b) {
-      final byXCmp = a.x.compareTo(b.x);
-      if (byXCmp != 0) return byXCmp;
-      return a.id.compareTo(b.id);
-    });
-
-  final byRank = <int, MonitorTileData>{};
-  final explicit = <String>{};
-  // Pass 1: claim explicit ranks in X-order so collisions are resolved
-  // deterministically (leftmost wins).
-  final unranked = <MonitorTileData>[];
-  for (final m in byX) {
-    final r = m.workspaceRank;
-    if (r == null) {
-      unranked.add(m);
-      continue;
-    }
-    final clamped = r < 0 ? 0 : (r >= n ? n - 1 : r);
-    if (byRank.containsKey(clamped)) {
-      unranked.add(m);
-      continue;
-    }
-    byRank[clamped] = m;
-    explicit.add(m.id);
-  }
-  // Pass 2: fill the remaining ranks with the still-unranked monitors,
-  // taking the lowest free rank for the leftmost monitor.
-  var nextRank = 0;
-  for (final m in unranked) {
-    while (byRank.containsKey(nextRank)) {
-      nextRank++;
-    }
-    byRank[nextRank] = m;
-    nextRank++;
-  }
-  return [
-    for (var i = 0; i < n; i++)
-      WorkspaceRankEntry(byRank[i]!.id, i, explicit.contains(byRank[i]!.id)),
-  ];
-}

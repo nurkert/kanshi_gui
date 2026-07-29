@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 
 /// 3-second pulsing overlay that draws a large numeric identifier on top
 /// of a [MonitorTile]. Used by the "Identify Displays" affordance — the
@@ -11,7 +12,7 @@ class IdentifyOverlay extends StatefulWidget {
   const IdentifyOverlay({
     super.key,
     required this.number,
-    this.accent = const Color(0xFF4FC3F7),
+    this.accent = AppColors.fallbackAccent,
     this.onFinished,
   });
 
@@ -59,7 +60,8 @@ class _IdentifyOverlayState extends State<IdentifyOverlay>
             child: Center(
               child: Text(
                 '${widget.number}',
-                style: TextStyle(
+                // The alpha is animated, not a token: it is the pulse.
+                style: T.display.copyWith(
                   color: Colors.white.withValues(alpha: 0.85 + 0.15 * t),
                   fontSize: 96,
                   fontWeight: FontWeight.w800,

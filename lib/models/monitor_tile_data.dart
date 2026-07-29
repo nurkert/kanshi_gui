@@ -12,15 +12,38 @@ import 'monitor_mode.dart';
 ///   `output … position X Y` IPC, so a 4K display at scale 2.0 placed
 ///   flush to the right of a 1080p panel sits at `x = 1920` (the logical
 ///   extent of the 1080p neighbour), not `x = 3840`.
-/// - [width] / [height] are **physical** pixels — the raw mode dimensions
-///   of the panel. The kanshi config and `swaymsg output mode` both want
-///   the physical mode here. To get the logical extent at a given scale
-///   use `width / scale`, which is what the snap math, the bounding box
-///   helper and the destination filter all do.
+/// - [width] / [height] are unscaled pixels of the **rotated** extent — the
+///   space the output actually occupies once [rotation] is applied. Both
+///   backends produce them that way (`sway_backend.dart:110`,
+///   `wlr_randr_backend.dart:90`) and so does the config parser, so a
+///   2560x1440 panel at `transform 90` is stored as `1440 x 2560`.
+///   To get the logical extent at a given scale use `width / scale`, which
+///   is what the snap math, the bounding box helper and the destination
+///   filter all do.
+///
+///   The kanshi config and `swaymsg output mode` want the **physical** mode
+///   instead, so the write paths swap back with `rotation % 180 == 0`.
+///   Swapping in the wrong direction is not a rounding detail: it used to
+///   make the mode of a rotated output oscillate on every save. If you are
+///   converting between the two, convert exactly once.
 /// - [scale] is the per-output HiDPI scale factor (1.0 = 1×, 2.0 = 2×).
 class MonitorTileData {
   final String id;
-  final String manufacturer; // Neuer Herstellerstring
+
+  /// Human-readable label built from EDID, with missing fields dropped so a
+  /// laptop panel is not called "… Unknown" in the UI. Display only — see
+  /// [edidDescriptor] for the string kanshi matches on.
+  final String manufacturer;
+
+  /// The exact `make model serial` triple kanshi(5) matches description
+  /// criteria against, with missing fields filled in as the literal
+  /// "Unknown". Empty when the display supplies no usable EDID.
+  ///
+  /// Kept apart from [manufacturer] because the two genuinely differ: sway
+  /// reports the laptop panel as `InfoVision … 0x057D Unknown`, while the
+  /// label the user should see stops at `0x057D`. Writing the label into the
+  /// config as criteria would simply never match.
+  final String edidDescriptor;
   final double x;
   final double y;
   final double width;
@@ -47,6 +70,7 @@ class MonitorTileData {
   MonitorTileData({
     required this.id,
     required this.manufacturer,
+    this.edidDescriptor = '',
     required this.x,
     required this.y,
     required this.width,
@@ -65,6 +89,7 @@ class MonitorTileData {
   MonitorTileData copyWith({
     String? id,
     String? manufacturer,
+    String? edidDescriptor,
     double? x,
     double? y,
     double? width,
@@ -82,6 +107,7 @@ class MonitorTileData {
     return MonitorTileData(
       id: id ?? this.id,
       manufacturer: manufacturer ?? this.manufacturer,
+      edidDescriptor: edidDescriptor ?? this.edidDescriptor,
       x: x ?? this.x,
       y: y ?? this.y,
       width: width ?? this.width,
