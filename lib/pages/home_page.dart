@@ -15,10 +15,9 @@ import 'package:kanshi_gui/widgets/decision_card.dart';
 import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
 import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
-import 'package:kanshi_gui/widgets/editor_header.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
-import 'package:kanshi_gui/widgets/profile_rail.dart';
+import 'package:kanshi_gui/widgets/setup_title_bar.dart';
 import 'package:kanshi_gui/widgets/properties_inspector.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
@@ -467,15 +466,32 @@ class _HomePageState extends State<HomePage> {
                   ? 'verified'
                   : null,
             ),
+            // The title bar replaces the 248px rail: the setup in play is
+            // whichever screens are attached, decided by the hardware and by
+            // kanshi, so a permanent browser for it was a quarter of the
+            // window spent on something nobody browses.
+            appBar: PreferredSize(
+              preferredSize: const Size.fromHeight(SetupTitleBar.height),
+              child: SetupTitleBar(
+                controller: c,
+                showApply: c.supportsLiveApply && !c.liveApply,
+                onApply: () async => _toast(await c.reloadAndApply()),
+                onIdentify: c.identifyDisplays,
+                onOpenSetups: () => SetupsPopover.show(
+                  context,
+                  controller: c,
+                  onCreateFromCurrent: c.createProfileFromCurrentSetup,
+                ),
+                onAdvanced: () => AdvancedSheet.show(
+                  context,
+                  controller: c,
+                  settings: widget.settings,
+                  onAppearanceChanged: widget.onAppearanceChanged,
+                ),
+              ),
+            ),
             body: Row(
               children: [
-                RepaintBoundary(
-                  child: ProfileRail(
-                    controller: c,
-                    activeAccent: widget.activeAccent,
-                    onCreateCurrentSetup: c.createProfileFromCurrentSetup,
-                  ),
-                ),
                 Expanded(
                   child: Stack(
                     children: [
@@ -487,9 +503,11 @@ class _HomePageState extends State<HomePage> {
                         ),
                       ),
                       Positioned.fill(
+                        // No top inset any more: the title bar is a real
+                        // app bar above the canvas rather than a panel
+                        // floating over it, so the canvas starts at the top.
                         child: Padding(
-                          padding:
-                              const EdgeInsets.only(top: EditorHeader.height),
+                          padding: EdgeInsets.zero,
                           child: RepaintBoundary(
                             child: LayoutBuilder(
                       builder: (context, constraints) {
@@ -658,32 +676,6 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                       ),
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: RepaintBoundary(
-                          child: EditorHeader(
-                            profileName: c.activeProfile?.name,
-                            accent: widget.activeAccent ??
-                                Theme.of(context).colorScheme.primary,
-                            hasUnappliedEdits: c.hasUnappliedEdits,
-                            showApply: c.supportsLiveApply && !c.liveApply,
-                            onApply: () async =>
-                                _toast(await c.reloadAndApply()),
-                            onIdentify: c.identifyDisplays,
-                            // A sheet, not a page: settings are a detour, and
-                            // a detour that replaces the whole window makes
-                            // the user find their way back.
-                            onSettings: () => AdvancedSheet.show(
-                              context,
-                              controller: c,
-                              settings: widget.settings,
-                              onAppearanceChanged: widget.onAppearanceChanged,
-                            ),
-                          ),
-                          ),
-                        ),
                         // One-click layout presets, floating at the bottom.
                         Positioned(
                           left: 0,
