@@ -534,9 +534,26 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       // Static backdrop in its own layer — never repaints
                       // while monitors are dragged.
+                      //
+                      // It is also the canvas's "nothing here" hit target.
+                      // Clicking a screen opens the settings strip; clicking
+                      // empty space closes it again, because that is what
+                      // clicking away from a thing means everywhere else.
+                      // Requiring the strip's own ✕ made dismissal a control
+                      // to find rather than a gesture to make. The tiles sit
+                      // above this layer in the Stack, so their taps and
+                      // drags are theirs and never reach here.
                       Positioned.fill(
-                        child: const RepaintBoundary(
-                          child: DotGridBackground(),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (_selectedId != null) {
+                              setState(() => _selectedId = null);
+                            }
+                          },
+                          child: const RepaintBoundary(
+                            child: DotGridBackground(),
+                          ),
                         ),
                       ),
                       Positioned.fill(
