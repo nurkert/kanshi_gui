@@ -264,7 +264,12 @@ class ConfigService {
     // when it finally runs, not what the caller asked to persist.
     final snapshot = [
       for (final p in profiles)
-        Profile(name: p.name, monitors: List.of(p.monitors)),
+        Profile(
+          name: p.name,
+          monitors: List.of(p.monitors),
+          workspaceMap:
+              p.workspaceMap == null ? null : Map.of(p.workspaceMap!),
+        ),
     ];
     final completer = Completer<void>();
     _writeChain = _writeChain.then((_) async {

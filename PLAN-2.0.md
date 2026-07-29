@@ -638,8 +638,20 @@ Der 300-px-Inspektor und die 248-px-Leiste verschwinden, `settings_page.dart` un
 `first_run_wizard.dart` werden gelöscht. Zwölf Einstellungen hören auf zu existieren.
 
 ### M9 — scfg-AST und gelernte Workspaces
-Track D1, danach die pro-Setup gelernte Workspace-Karte mit Nummern-Badges auf den Kacheln.
+Track D1, danach die pro-Setup gelernte Workspace-Karte.
 Hängt hart an M3 — ein Editor über einem ungelösten Boot-Rennen sähe grundlos kaputt aus.
+
+**Die Nummern-Badges auf den Kacheln gehören nach M10.** Die Karte ist da, wird gelernt und
+angewandt; sie *auf den Kacheln* anzuzeigen ist eine Gestaltungsentscheidung über dasselbe
+Rechteck, das M10 gerade neu formt — Badge-Form, -Position und -Zustand vor dem Review
+festzulegen hieße, sie zweimal zu entwerfen.
+
+**Was die App weiterhin nicht lesen kann**, benannt statt verschwiegen: unbenannte Profile,
+`output`-Blöcke in geschweiften Klammern, Kriterien per Beschreibung ohne `enable`, die
+`...output`-Form und Flip-Transforms. Nichts davon geht beim Speichern mehr verloren — es
+erscheint nur nicht in der Oberfläche. Ebenso `mode --custom`: `mode` ist ein Feld, das die
+App besitzt und ersetzt, und ihr Modell kennt kein Custom-Flag. Das zu schließen ist der
+Domänen-Umbau aus Track D2.
 
 ### M10 — UI-Polish: erst Review, dann eckigere Formsprache
 Zweistufig, und die Reihenfolge ist der Punkt. Zuerst ein **Design-Review** des Zustands

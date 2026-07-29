@@ -107,6 +107,31 @@ String? buildSwayWorkspaceChain(
   return parts.join('; ');
 }
 
+/// Builds the swaymsg chain from an observed workspace map.
+///
+/// Same two phases as [buildSwayWorkspaceChain] and for the same reason: the
+/// declarations tell sway where each workspace belongs, and the force-moves
+/// relocate any that already exist somewhere else. The difference is only
+/// where the mapping comes from — here it is what the user actually had,
+/// rather than what a distribution rule computed for them.
+String? buildLearnedWorkspaceChain(
+  Map<int, String> map, {
+  Map<String, OutputCriteria> criteria = const {},
+}) {
+  if (map.isEmpty) return null;
+  final numbers = map.keys.toList()..sort();
+  final parts = <String>[];
+  for (final ws in numbers) {
+    parts.add('workspace $ws output ${_execCriteria(map[ws]!, criteria)}');
+  }
+  for (final ws in numbers) {
+    parts.add('workspace number $ws');
+    parts.add('move workspace to output ${_execCriteria(map[ws]!, criteria)}');
+  }
+  parts.add('workspace number ${numbers.first}');
+  return parts.join('; ');
+}
+
 /// How an output is spelled inside the `exec swaymsg \"…\"` chain.
 ///
 /// The chain is already inside a double-quoted shell string, so kanshi(5)

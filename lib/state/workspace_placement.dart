@@ -42,6 +42,7 @@ class WorkspacePlacement {
     required List<MonitorTileData> liveOutputs,
     required WorkspaceDistribution distribution,
     required String Function(String) resolveConnector,
+    Map<int, String>? learnedMap,
     bool force = false,
     bool Function()? isCancelled,
   }) async {
@@ -71,7 +72,11 @@ class WorkspacePlacement {
       final ranked = resolveWorkspaceRanks(resolved);
       if (ranked.isEmpty) return;
 
-      final want = expectedMapping(ranked, distribution);
+      // An observed map is the truth for this setup; the distribution rule
+      // only fills in for one that has never been observed.
+      final want = learnedMap != null && learnedMap.isNotEmpty
+          ? learnedMap
+          : expectedMapping(ranked, distribution);
 
       Map<int, String> actual;
       try {
@@ -89,11 +94,13 @@ class WorkspacePlacement {
           if (m.edidDescriptor.isNotEmpty)
             m.id: OutputCriteria.description(m.edidDescriptor),
       };
-      final chain = buildSwayWorkspaceChain(
-        ranked,
-        distribution: distribution,
-        criteria: criteria,
-      );
+      final chain = learnedMap != null && learnedMap.isNotEmpty
+          ? buildLearnedWorkspaceChain(learnedMap, criteria: criteria)
+          : buildSwayWorkspaceChain(
+              ranked,
+              distribution: distribution,
+              criteria: criteria,
+            );
       if (chain == null) return;
       try {
         await monitors.applyWorkspaceChain(chain);
