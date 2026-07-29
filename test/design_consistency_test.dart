@@ -24,7 +24,6 @@ const Map<String, int> _allowedInlineStyling = {
   // the accent comes from in the first place.
   'services/sway_theme.dart': 1,
   'widgets/snap_lines_painter.dart': 1,
-  'widgets/properties_inspector.dart': 1,
 };
 
 /// Literal colours, radii and text styles: the three ways a call site decides
