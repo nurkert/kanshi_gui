@@ -615,19 +615,23 @@ Track C, eine Extraktion pro Commit, Fassade bleibt stehen.
 **Offen:** `ProfileStore` (inkl. `Profile` immutable), `OperationQueue`/`ApplyService`,
 `MirrorCoordinator`.
 
-**Verschoben nach M8 — `PreferencesController`.** Die elf gespiegelten Einstellungsfelder
-sind ein echtes Problem, aber M8 löscht `settings_page.dart` und zwölf der achtzehn
-Einstellungen. Jetzt eine Abstraktion über Werte zu bauen, die gleich darauf verschwinden,
-wäre Arbeit gegen den eigenen Plan. Der Umbau passiert dort, wo klar ist, was übrig bleibt.
+**`PreferencesController` — hat sich in M8 erledigt, statt gebaut zu werden.** Die
+Extraktion sollte elf gespiegelte Einstellungsfelder bändigen. M8 hat zehn Einstellungen
+gelöscht; `applyStartupSettings` schiebt heute noch drei Werte weiter. Eine Abstraktionsschicht
+für drei Werte zu bauen wäre Zeremonie. Das Problem ist verschwunden, weil die Ursache
+verschwunden ist — das ist das bessere Ergebnis als es sauber zu kapseln.
 
 ### M7 — Leinwand, Kachel, Regal
 Tokens, `monitor_tile.dart` neu (704 → ~330 Zeilen), Drift als gestrichelter Umriss statt
 Banner, Regal für abgeschaltete Bildschirme, Resize-Deform-Fehler behoben.
 
-**Verschoben nach M8 — das Regal.** Abgeschaltete Bildschirme stapeln sich heute nicht mehr
-auf (0,0); `LayoutMath` parkt sie bereits in einer eigenen Spur rechts neben dem aktiven
-Cluster. Sie in ein Band *unter* die Leinwand zu verlegen ist eine Änderung an genau der
-Bandstruktur, die M8 ohnehin neu baut — jetzt gebaut, wäre es zweimal gebaut.
+**Das Regal, erledigt in M8 — aber anders als geplant.** Der eigentliche Schaden war nicht
+die Position der geparkten Kacheln, sondern dass sie in die Bounding-Box eingingen, aus der
+die Leinwand ihren Maßstab berechnet: jeder abgeschaltete Bildschirm verkleinerte die, die
+man tatsächlich benutzt. Der Maßstab richtet sich jetzt nur noch nach dem aktiven Cluster;
+geparkte Kacheln ragen in den Rand, den die 80-%-Passung ohnehin lässt. Ein eigenes Band
+*unter* der Leinwand konkurriert mit dem Streifen um dieselbe Kante — diese Entscheidung
+gehört in M10, nach dem Design-Review.
 
 ### M8 — Streifen, Titelleiste, Erweitert-Sheet
 Der 300-px-Inspektor und die 248-px-Leiste verschwinden, `settings_page.dart` und
