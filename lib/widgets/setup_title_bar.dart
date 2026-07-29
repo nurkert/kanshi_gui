@@ -194,10 +194,24 @@ class SetupsPopover extends StatelessWidget {
                     ),
                     title: Text(p.name),
                     subtitle: Text(_describe(p.monitors.length, match)),
-                    trailing: IconButton(
-                      tooltip: 'Forget this setup',
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      onPressed: () => controller.deleteProfile(i),
+                    // Words, not icons. A setup the app captured for the user
+                    // is called "Setup 3" until they say otherwise, so the way
+                    // to say otherwise cannot be something they have to guess
+                    // — and a bare pencil next to a bare bin is two guesses.
+                    // A popover has room for the two words that remove them.
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: () => _rename(context, i, p.name),
+                          child: const Text('Rename'),
+                        ),
+                        const SizedBox(width: Sp.x1),
+                        TextButton(
+                          onPressed: () => controller.deleteProfile(i),
+                          child: const Text('Forget'),
+                        ),
+                      ],
                     ),
                     onTap: () {
                       controller.setActiveProfile(i);
@@ -222,6 +236,67 @@ class SetupsPopover extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Asks for a new name for the setup at [index] and applies it.
+  ///
+  /// Renaming had no UI at all between M8 — which deleted the profile rail
+  /// that used to carry it — and now, even though the controller could always
+  /// do it. A setup captured for you is called `Setup 3` until you say
+  /// otherwise, so being unable to say otherwise is not a small gap.
+  Future<void> _rename(BuildContext context, int index, String current) async {
+    final field = TextEditingController(text: current);
+    // Selected rather than merely focused: the name being replaced is
+    // usually a placeholder, and pre-selecting it means typing replaces it.
+    field.selection =
+        TextSelection(baseOffset: 0, extentOffset: current.length);
+    final formKey = GlobalKey<FormState>();
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        void submit() {
+          if (formKey.currentState?.validate() != true) return;
+          Navigator.of(dialogContext).pop(field.text.trim());
+        }
+
+        return AlertDialog(
+          title: const Text('Rename setup'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              controller: field,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Name'),
+              // The same validator the controller enforces, so the reason a
+              // name is refused arrives while it is being typed rather than
+              // as a toast after the dialog has closed.
+              validator: (v) =>
+                  KanshiController.profileNameError(v ?? ''),
+              onFieldSubmitted: (_) => submit(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(onPressed: submit, child: const Text('Rename')),
+          ],
+        );
+      },
+    );
+    field.dispose();
+    if (name == null || name == current) return;
+
+    final result = controller.renameProfile(index, name);
+    // A duplicate name can only be caught against the profile list, so it
+    // survives the field validator and has to be reported here.
+    if (!result.success && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message ?? 'Could not rename setup.')),
+      );
+    }
   }
 
   String _describe(int count, ProfileMatchInfo? match) {

@@ -246,4 +246,58 @@ void main() {
         arranged,
         reason: 'the recovered arrangement was overwritten by a capture');
   });
+
+  test('a legacy "Current Setup" is a normal profile, never a capture', () async {
+    // Configs written before 2.0.1 contain a profile literally named
+    // "Current Setup": the app used to reuse that one name for every capture,
+    // so arriving at a second desk overwrote the first. Those profiles are
+    // out there and they are the user's. Nothing may re-point one, and a new
+    // capture must take its own number rather than reach for that name.
+    final config = cfg();
+    await config.saveProfiles([
+      Profile(name: 'Current Setup', monitors: [
+        _mon(id: 'OLD1'),
+        _mon(id: 'OLD2', x: 1920),
+      ]),
+    ]);
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = await boot(fake, config);
+    addTearDown(c.dispose);
+    c.hotplugSettleWindow = const Duration(milliseconds: 20);
+
+    // Nothing matches the single connected screen, so a capture happens —
+    // beside the legacy profile, not on top of it.
+    expect(c.activeProfile!.name, 'Setup 1');
+    expect(c.profiles.map((p) => p.name),
+        containsAll(['Current Setup', 'Setup 1']));
+
+    // A hotplug into another unknown set must still leave it alone.
+    fake.emitOutputs([_mon(id: 'B'), _mon(id: 'C', x: 1920)]);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    final legacy = c.profiles.firstWhere((p) => p.name == 'Current Setup');
+    expect(legacy.monitors.map((m) => m.id), ['OLD1', 'OLD2'],
+        reason: 'the legacy profile was re-pointed at the live screens');
+  });
+
+  test('renaming a capture takes it out of the capture pool', () async {
+    // The user's own answer to "this is mine now": giving it a name. After
+    // that a hotplug must not treat it as scratch, even though the app is the
+    // one that created it.
+    final config = cfg();
+    final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
+    final c = await boot(fake, config);
+    addTearDown(c.dispose);
+    c.hotplugSettleWindow = const Duration(milliseconds: 20);
+    expect(c.activeProfile!.name, 'Setup 1');
+
+    expect(c.renameProfile(0, 'Kitchen table').success, isTrue);
+
+    fake.emitOutputs([_mon(id: 'B'), _mon(id: 'C', x: 1920)]);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    final mine = c.profiles.firstWhere((p) => p.name == 'Kitchen table');
+    expect(mine.monitors.single.id, 'A',
+        reason: 'a setup the user named was overwritten by a capture');
+  });
 }
