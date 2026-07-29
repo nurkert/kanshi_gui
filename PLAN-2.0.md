@@ -1,10 +1,20 @@
 # kanshi_gui 2.0 — Sanierungs- und Neuentwurfsplan
 
-**Stand:** 2026-07-28 · **Basis:** `main` @ `8e1eeb5` · **Ist-Version:** 1.6.2+39
+**Stand:** 2026-07-29 · **Basis:** `main` @ `8e1eeb5` · **Branch:** `v2.0` · **Version:** 2.0.0+40
 
-Dieses Dokument ist die Arbeitsgrundlage für eine neue Major-Version. Es hält fest, was
-stabilisiert, persistiert, refactort und komplett neu geschrieben werden muss, und in
-welcher Reihenfolge — so, dass die App zwischen zwei Commits nie kaputt ist.
+Dieses Dokument war die Arbeitsgrundlage für eine neue Major-Version und ist jetzt zugleich
+ihr Protokoll. **M0–M9 sind umgesetzt** (35 Commits, 358 → 558 Tests, keine Skips,
+`flutter analyze --fatal-infos` sauber, Release-Build grün). Offen ist nur M10, der
+nachträglich ergänzte UI-Polish.
+
+Zwei Dinge fehlen bewusst und können nicht von der Umsetzung erledigt werden:
+
+- **Nicht gepusht.** Der Branch liegt lokal. Veröffentlichen ist eine Entscheidung des
+  Maintainers, kein Schritt des Plans.
+- **Der Reboot-Test steht aus.** Ob Anordnung und Workspaces nach einem echten Neustart und
+  einem echten Dock-Wechsel sitzen, zeigt sich nur an echter Hardware. Vor jedem Schreiben
+  liegt ein Backup in `~/.config/kanshi/backups/`, und „Backup wiederherstellen" funktioniert
+  seit M4 tatsächlich.
 
 ---
 
