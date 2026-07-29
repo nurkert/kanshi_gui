@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/kanshi/kanshi_document.dart';
+import 'package:kanshi_gui/domain/kanshi/scfg.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -19,6 +21,39 @@ class ConfigHasIncludesException implements Exception {
       'Saving would overwrite them and orphan profiles in the '
       'included files. Move profiles into the main config to '
       're-enable saving from the GUI.';
+}
+
+/// Thrown by [ConfigService.saveProfiles] when the live kanshi config holds
+/// constructs the parser did not understand.
+///
+/// The GUI re-renders the entire config from its in-memory model, so saving a
+/// file it only partially read deletes whatever it never saw. A hand-written
+/// config using kanshi's optional-`enable` form used to parse as zero
+/// monitors per profile; the writer skips empty profiles; the first save
+/// therefore replaced the user's file with an empty one.
+class ConfigNotFullyParsedException implements Exception {
+  final String configPath;
+
+  /// What would be lost, e.g. "2 of 3 output lines".
+  final String loss;
+
+  const ConfigNotFullyParsedException(this.configPath, this.loss);
+
+  @override
+  String toString() =>
+      'kanshi config at $configPath uses syntax kanshi_gui does not model yet '
+      '($loss would be dropped). Refusing to save rather than delete it.';
+}
+
+/// Thrown when the freshly rendered config does not read back as the model
+/// that produced it. A writer bug must not reach the user's disk.
+class ConfigRoundTripException implements Exception {
+  final String detail;
+  const ConfigRoundTripException(this.detail);
+  @override
+  String toString() =>
+      'refusing to save: the rendered config does not read back as written '
+      '($detail). This is a bug in kanshi_gui, not in your config.';
 }
 
 /// Thin filesystem layer around the kanshi config file. Parsing and rendering
@@ -110,17 +145,172 @@ class ConfigService {
     return result;
   }
 
-  Future<void> saveProfiles(List<Profile> profiles) async {
-    // Refuse to save when the user's main config pulls in other files
-    // via `include`. We only parse the main file, so a render-and-
-    // overwrite would silently drop the `include` line and orphan
-    // every profile defined in the included files. Better to throw
-    // here than to corrupt the user's setup.
-    if (await hasIncludeDirectives()) {
-      throw ConfigHasIncludesException(configPath);
+  /// Describes what the parser could not read out of the live config, or null
+  /// when it understood all of it (including when there is no file yet).
+  ///
+  /// Cached like [hasIncludeDirectives], and for the same reason: it is
+  /// consulted on the save hot path and the file's shape is treated as stable
+  /// for the lifetime of the controller. [invalidateInspectionCache] clears
+  /// it after the GUI itself rewrites the file.
+  String? _unparsedCache;
+  bool _unparsedCacheValid = false;
+  Future<String?> unparsedContentDescription() async {
+    if (_unparsedCacheValid) return _unparsedCache;
+    final file = File(configPath);
+    if (!await file.exists()) {
+      _unparsedCache = null;
+      _unparsedCacheValid = true;
+      return null;
     }
-    final rendered =
-        KanshiConfigWriter.render(profiles, options: writeOptions);
+    final content = await file.readAsString();
+    _unparsedCache = KanshiConfigParser.diagnose(content).lossDescription;
+    _unparsedCacheValid = true;
+    return _unparsedCache;
+  }
+
+  /// Drops the cached inspection results. Called after the GUI writes the
+  /// file, since it just replaced the content the cache described.
+  void invalidateInspectionCache() {
+    _unparsedCacheValid = false;
+    _unparsedCache = null;
+    _hasIncludesCache = null;
+  }
+
+  /// Rewrites only what this app owns inside an existing config.
+  ///
+  /// The alternative — re-rendering the whole file from the model, which is
+  /// what this did for its whole life — deletes everything the model cannot
+  /// represent. Editing in place means the app can only lose what it
+  /// deliberately replaces.
+  String _editInPlace(String existing, List<Profile> profiles) {
+    final doc = KanshiDocument.parse(existing);
+
+    // Profiles the current parser genuinely read — meaning it found outputs
+    // in them, not merely that it saw the header. A profile parsed as empty
+    // is one the app could NOT read, and its absence from the model means
+    // "I never saw it", not "the user deleted it". Treating those two the
+    // same is how a hand-written profile would get removed by a save that
+    // was only meant to touch a different one.
+    final readable = {
+      for (final p in KanshiConfigParser.parse(existing))
+        if (p.monitors.isNotEmpty) p.name,
+    };
+    final modelNames = profiles.map((p) => p.name).toSet();
+
+    for (final p in profiles) {
+      if (p.monitors.isEmpty) continue;
+      // Render the profile with the normal writer, then take its body: the
+      // rendering rules stay in one place and this only decides where the
+      // result goes.
+      final block = KanshiConfigWriter.render([p], options: writeOptions);
+      _assertBlockRoundTrips(p, block);
+      final nodes = ScfgDocument.parse(block).nodes;
+      if (nodes.isEmpty) continue;
+      if (!doc.replaceManagedChildren(p.name, nodes.first.children)) {
+        doc.appendProfile(block.trimRight().split('\n'));
+      }
+    }
+
+    for (final name in doc.profileNames.toList()) {
+      if (modelNames.contains(name)) continue;
+      if (!readable.contains(name)) continue;
+      doc.removeProfile(name);
+    }
+    return doc.render();
+  }
+
+  /// Verifies that a profile block reads back as the profile that produced
+  /// it.
+  ///
+  /// Scoped to the app's OWN rendering, not the whole file: since M9 the file
+  /// legitimately contains profiles and directives the model cannot express,
+  /// and comparing against those would report a loss that is actually a
+  /// preservation. What must hold is that nothing the app wrote came back
+  /// wrong — the check that would have caught the transposed-mode oscillation
+  /// before it shipped.
+  static void _assertBlockRoundTrips(Profile profile, String block) {
+    final back = KanshiConfigParser.parse(block);
+    if (back.length != 1) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" rendered to ${back.length} profiles');
+    }
+    if (back.single.name != profile.name) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" came back as "${back.single.name}"');
+    }
+    if (back.single.monitors.length != profile.monitors.length) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" wrote ${profile.monitors.length} '
+          'outputs, read back ${back.single.monitors.length}');
+    }
+  }
+
+  /// Serialises writes so two saves can never interleave.
+  ///
+  /// [saveProfiles] is async and was previously re-entrant: two overlapping
+  /// calls both took a backup, both wrote the SAME `<path>.tmp`, and both
+  /// renamed it over the live config. The loser's rename hit a file the
+  /// winner had already moved, and the file could end up holding the older
+  /// of the two renders — i.e. an edit silently rolled back.
+  Future<void> _writeChain = Future.value();
+
+  /// Distinguishes temp files between processes and instances.
+  static int _writeSeq = 0;
+
+  Future<void> saveProfiles(List<Profile> profiles) {
+    // A snapshot per call: `profiles` and its Profile objects are mutable and
+    // owned by the controller, which keeps editing while a write is queued.
+    // Without this, a queued save would render whatever the model looks like
+    // when it finally runs, not what the caller asked to persist.
+    final snapshot = [
+      for (final p in profiles)
+        Profile(
+          name: p.name,
+          monitors: List.of(p.monitors),
+          workspaceMap:
+              p.workspaceMap == null ? null : Map.of(p.workspaceMap!),
+        ),
+    ];
+    final completer = Completer<void>();
+    _writeChain = _writeChain.then((_) async {
+      try {
+        await _saveProfilesLocked(snapshot);
+        completer.complete();
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _saveProfilesLocked(List<Profile> profiles) async {
+    // The include refusal is gone too, and for the same reason as M2's gate:
+    // it existed because re-rendering dropped the `include` line and orphaned
+    // every profile in the included files. Editing in place preserves the
+    // line, and profiles defined elsewhere were never in this file to lose.
+
+    // M2's refusal gate is gone, and deliberately so. It existed because the
+    // writer re-rendered the whole file from the model, so anything the
+    // parser had not read was deleted. Since M9 the save edits the document
+    // in place and only replaces what this app owns, which means a config
+    // full of syntax the model cannot express is no longer dangerous to save
+    // — and refusing to save it would leave those users with a read-only app
+    // for no remaining reason.
+
+    final existing =
+        await File(configPath).exists() ? await File(configPath).readAsString() : null;
+    final String rendered;
+    if (existing == null || existing.trim().isEmpty) {
+      // Nothing to preserve — render from the model, verifying each block.
+      for (final p in profiles.where((p) => p.monitors.isNotEmpty)) {
+        _assertBlockRoundTrips(
+            p, KanshiConfigWriter.render([p], options: writeOptions));
+      }
+      rendered = KanshiConfigWriter.render(profiles, options: writeOptions);
+    } else {
+      rendered = _editInPlace(existing, profiles);
+    }
+
 
     final file = File(configPath);
     await Directory(file.parent.path).create(recursive: true);
@@ -156,7 +346,7 @@ class ConfigService {
       backup = await file.copy('$backupPrefix.$ts');
     }
 
-    final tmp = File('$configPath.tmp');
+    final tmp = File('$configPath.tmp.${pid}_${_writeSeq++}');
     try {
       // Atomic write: a partial failure leaves the live config untouched
       // (the tmp file is on the same filesystem so rename is atomic).
@@ -178,6 +368,11 @@ class ConfigService {
       }
       rethrow;
     }
+
+    // The file the inspection cache described has just been replaced by our
+    // own output, which is lossless by construction (gate 2 above).
+    _unparsedCache = null;
+    _unparsedCacheValid = true;
 
     // Pruning happens after a successful write so a failed save never
     // walks the backup ring forward.

@@ -3,19 +3,23 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
-import 'package:kanshi_gui/pages/settings_page.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
+import 'package:kanshi_gui/widgets/advanced_sheet.dart';
 import 'package:kanshi_gui/widgets/app_menu.dart';
+import 'package:kanshi_gui/widgets/assurance_line.dart';
+import 'package:kanshi_gui/widgets/decision_card.dart';
+import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
-import 'package:kanshi_gui/widgets/editor_header.dart';
+import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
-import 'package:kanshi_gui/widgets/profile_rail.dart';
-import 'package:kanshi_gui/widgets/properties_inspector.dart';
-import 'package:kanshi_gui/widgets/safety_net_banner.dart';
+import 'package:kanshi_gui/widgets/setup_title_bar.dart';
+import 'package:kanshi_gui/widgets/screen_strip.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
 /// Top-level page: hosts the AppBar, the sliding sidebar, and the layout
@@ -67,9 +71,6 @@ class _HomePageState extends State<HomePage> {
     c.addListener(_onControllerChanged);
     c.onHotplugToast = (msg) {
       if (!mounted) return;
-      // Read the toggle at fire-time so the settings page takes effect
-      // without re-wiring the callback.
-      if (!widget.settings.hotplugToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
@@ -85,7 +86,6 @@ class _HomePageState extends State<HomePage> {
     };
     c.onProfileSuggestion = (s) {
       if (!mounted) return;
-      if (!widget.settings.profileSuggestionToasts) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
@@ -104,25 +104,41 @@ class _HomePageState extends State<HomePage> {
     // via the settings menu takes effect on the next event without any
     // re-wiring.
     c.autoSwitchProfileEnabled = () => widget.settings.autoSwitchProfile;
-    c.onConfigSaveBlocked = () {
+    c.onConfigSaveBlocked = (reason) {
       if (!mounted) return;
-      // Persistent SnackBar: the user needs to know that their edits
-      // are NOT landing on disk because their kanshi config uses
-      // `include` directives. Auto-dismissing this would leave them
-      // wondering why their layout reverts after the next launch.
-      // No action button — only the user fixing their config (or the
-      // GUI relaunching) clears it.
+      // Persistent SnackBar: the user needs to know that their edits are NOT
+      // landing on disk. Auto-dismissing this would leave them wondering why
+      // their layout reverts after the next launch. No action button — only
+      // the user fixing their config (or the GUI relaunching) clears it.
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(days: 1),
-          content: const Text(
-            "Your kanshi config uses `include` directives. The GUI "
-            "will not save to avoid orphaning profiles in the "
-            "included files. Move profiles into the main config to "
-            "re-enable saving.",
-          ),
+          content: Text(reason),
         ),
       );
+    };
+    c.onSafetyNetRevertFailed = (label, error) {
+      if (!mounted) return;
+      // The worst moment the app has: the risky change is still in effect —
+      // the user may be looking at a black screen — and the automatic way
+      // out just failed. Persistent, with a retry; never auto-dismissed.
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            duration: const Duration(days: 1),
+            backgroundColor: Theme.of(context).colorScheme.errorContainer,
+            content: Text(
+              "Could not undo '$label' automatically: $error",
+              style: T.label
+                  .copyWith(color: Theme.of(context).colorScheme.onErrorContainer),
+            ),
+            action: SnackBarAction(
+              label: 'Try again',
+              onPressed: () async => _toast(await c.retrySafetyNetReverts()),
+            ),
+          ),
+        );
     };
     c.onAutoSwitchedProfile = (name) {
       if (!mounted) return;
@@ -151,14 +167,15 @@ class _HomePageState extends State<HomePage> {
     } else {
       _wlMirrorAvailable = false;
     }
-    // If the controller's `init()` already detected `include`
-    // directives in the user's kanshi config, fire the warning toast
-    // once on first frame. Without this, the user would only learn
-    // their saves are blocked on their first attempted edit.
-    if (c.configHasIncludes) {
+    // If the controller's `init()` already found a reason saving is refused —
+    // `include` directives, or syntax the parser did not model — say so on
+    // the first frame. Without this the user would only learn their saves are
+    // blocked on their first attempted edit.
+    final blocked = c.saveBlockedReason;
+    if (blocked != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        c.onConfigSaveBlocked?.call();
+        c.onConfigSaveBlocked?.call(blocked);
       });
     }
     // Environment health probe (kanshi present/running, wl-mirror) — surface
@@ -185,6 +202,7 @@ class _HomePageState extends State<HomePage> {
     c.onProfileSuggestion = null;
     c.onAutoSwitchedProfile = null;
     c.onConfigSaveBlocked = null;
+    c.onSafetyNetRevertFailed = null;
     c.autoSwitchProfileEnabled = null;
     super.dispose();
   }
@@ -199,6 +217,72 @@ class _HomePageState extends State<HomePage> {
       // rollback from a long-cancelled session.
       _dragRollback.clear();
     }
+  }
+
+
+  /// The single status the assurance line shows, in strict priority order:
+  /// attention beats working beats settled. A decision (the safety-net
+  /// countdown) outranks all of them and is rendered by its own surface
+  /// above the line, because the user may be looking at a screen that just
+  /// went black and a 36px row at the bottom is the wrong shape for a
+  /// question they must answer.
+  AppStatus _statusFor(KanshiController c) {
+    final blocked = c.saveBlockedReason;
+    if (blocked != null) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: blocked,
+        actionLabel: 'Show file',
+        onAction: () => _revealConfigInFileManager(),
+      );
+    }
+    if (c.hasFailedSafetyNetRevert) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: "I could not put your display back on my own.",
+        actionLabel: 'Try again',
+        onAction: () async => _toast(await c.retrySafetyNetReverts()),
+      );
+    }
+    if (c.hasLayoutDrift) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: c.layoutDriftIssues.length == 1
+            ? 'A screen is not where you put it.'
+            : '${c.layoutDriftIssues.length} screens are not where you put '
+                'them.',
+        actionLabel: 'Put back',
+        onAction: () async => _toast(await c.reapplyActiveProfile()),
+      );
+    }
+    if (c.kanshiRunning == false) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: "kanshi isn't running, so this won't come back after a "
+            'reboot.',
+        actionLabel: 'Details',
+        onAction: _showHelp,
+      );
+    }
+    if (_healthWarnings.isNotEmpty && !_healthDismissed) {
+      return AppStatus(
+        level: StatusLevel.attention,
+        message: _healthWarnings.first,
+        actionLabel: 'Dismiss',
+        onAction: () => setState(() => _healthDismissed = true),
+      );
+    }
+    return AppStatus.settled(
+      c.assuranceLevel,
+      screenCount: c.activeMonitors.where((m) => m.enabled).length,
+    );
+  }
+
+  void _revealConfigInFileManager() {
+    // Deliberately just tells the user where it is: opening a file manager
+    // from a Wayland desktop app is a portal dance that can fail silently,
+    // and a path they can copy always works.
+    _toast(OpResult.err('Your kanshi config: ${c.config.configPath}'));
   }
 
   void _toast(OpResult r) {
@@ -238,7 +322,7 @@ class _HomePageState extends State<HomePage> {
           child: SingleChildScrollView(
             child: Text(
               content,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              style: T.mono.copyWith(fontFamily: 'monospace'),
             ),
           ),
         ),
@@ -304,7 +388,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 8),
             const Text(
               'Warning: custom modes can fail. You can revert afterwards via "Revert last custom mode".',
-              style: TextStyle(fontSize: 12),
+              style: T.caption,
             ),
           ],
         ),
@@ -377,33 +461,73 @@ class _HomePageState extends State<HomePage> {
               onShowLogs: _showLogs,
               onShowHelp: _showHelp,
               child: Scaffold(
-            bottomNavigationBar: SafetyNetBanner(controller: c),
+            // The per-screen controls live under the canvas, not beside it:
+            // the arrangement is a wide, short thing, so horizontal pixels are
+            // the scarce resource. At rest the band has zero height.
+            bottomNavigationBar: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ScreenStrip(
+                  controller: c,
+                  monitorId: _selectedId != null &&
+                          c.activeMonitors.any((m) => m.id == _selectedId)
+                      ? _selectedId
+                      : null,
+                  mirrorEnabled:
+                      c.supportsMirror && (_wlMirrorAvailable ?? false),
+                  onClose: () => setState(() => _selectedId = null),
+                  onResult: _toast,
+                ),
+                AssuranceLine(
+              status: _statusFor(c),
+                  trailingNote: c.assuranceLevel == AssuranceLevel.verified
+                      ? 'verified'
+                      : null,
+                ),
+              ],
+            ),
+            // The title bar replaces the 248px rail: the setup in play is
+            // whichever screens are attached, decided by the hardware and by
+            // kanshi, so a permanent browser for it was a quarter of the
+            // window spent on something nobody browses.
+            appBar: PreferredSize(
+              preferredSize: const Size.fromHeight(SetupTitleBar.height),
+              child: SetupTitleBar(
+                controller: c,
+                showApply: c.supportsLiveApply && !c.liveApply,
+                onApply: () async => _toast(await c.reloadAndApply()),
+                onIdentify: c.identifyDisplays,
+                onOpenSetups: () => SetupsPopover.show(
+                  context,
+                  controller: c,
+                  onCreateFromCurrent: c.createProfileFromCurrentSetup,
+                ),
+                onAdvanced: () => AdvancedSheet.show(
+                  context,
+                  controller: c,
+                  settings: widget.settings,
+                  onAppearanceChanged: widget.onAppearanceChanged,
+                ),
+              ),
+            ),
             body: Row(
               children: [
-                RepaintBoundary(
-                  child: ProfileRail(
-                    controller: c,
-                    activeAccent: widget.activeAccent,
-                    onCreateCurrentSetup: c.createProfileFromCurrentSetup,
-                  ),
-                ),
                 Expanded(
                   child: Stack(
                     children: [
                       // Static backdrop in its own layer — never repaints
                       // while monitors are dragged.
                       Positioned.fill(
-                        child: RepaintBoundary(
-                          child: DotGridBackground(
-                            accent: widget.activeAccent ??
-                                Theme.of(context).colorScheme.primary,
-                          ),
+                        child: const RepaintBoundary(
+                          child: DotGridBackground(),
                         ),
                       ),
                       Positioned.fill(
+                        // No top inset any more: the title bar is a real
+                        // app bar above the canvas rather than a panel
+                        // floating over it, so the canvas starts at the top.
                         child: Padding(
-                          padding:
-                              const EdgeInsets.only(top: EditorHeader.height),
+                          padding: EdgeInsets.zero,
                           child: RepaintBoundary(
                             child: LayoutBuilder(
                       builder: (context, constraints) {
@@ -426,6 +550,26 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               ),
                             ),
+                            // Where the screens ACTUALLY are, when that
+                            // disagrees with the setup. The canvas already
+                            // shows positions, so the honest way to say a
+                            // screen moved is to show it moved — the solid
+                            // tile stays where the setup wants it and the
+                            // dashed ghost marks where it went. This replaces
+                            // a banner that described the difference in
+                            // sentences over the top of the picture.
+                            if (c.hasLayoutDrift)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: DriftGhostPainter(
+                                      drifted: c.driftedLiveOutputs,
+                                      layout: layout,
+                                      color: context.colors.attention,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ...layout.displayMonitors.map((tile) {
                               final original = c.activeMonitors
                                   .firstWhere((m) => m.id == tile.id);
@@ -552,33 +696,6 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                       ),
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: RepaintBoundary(
-                          child: EditorHeader(
-                            profileName: c.activeProfile?.name,
-                            accent: widget.activeAccent ??
-                                Theme.of(context).colorScheme.primary,
-                            hasUnappliedEdits: c.hasUnappliedEdits,
-                            showApply: c.supportsLiveApply && !c.liveApply,
-                            onApply: () async =>
-                                _toast(await c.reloadAndApply()),
-                            onIdentify: c.identifyDisplays,
-                            onSettings: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => SettingsPage(
-                                  controller: c,
-                                  settings: widget.settings,
-                                  onAppearanceChanged:
-                                      widget.onAppearanceChanged,
-                                ),
-                              ),
-                            ),
-                          ),
-                          ),
-                        ),
                         // One-click layout presets, floating at the bottom.
                         Positioned(
                           left: 0,
@@ -586,66 +703,37 @@ class _HomePageState extends State<HomePage> {
                           bottom: 18,
                           child: Center(
                             child: PresetsBar(
-                              onExtend: () => _toast(c.extendOutputs()),
+                              onExtend: () async =>
+                                  _toast(await c.extendOutputs()),
                               onMirror: c.supportsMirror
-                                  ? () => _toast(c.mirrorAll())
+                                  ? () async => _toast(await c.mirrorAll())
                                   : null,
                               outputIds: c.activeMonitors
                                   .map((m) => m.id)
                                   .toList(),
-                              onUseOnly: (id) =>
-                                  _toast(c.useOnlyOutput(id)),
+                              onUseOnly: (id) async =>
+                                  _toast(await c.useOnlyOutput(id)),
                             ),
                           ),
                         ),
-                        // Environment health warnings (dismissible).
-                        if (_healthWarnings.isNotEmpty && !_healthDismissed)
-                          Positioned(
-                            top: EditorHeader.height + 10,
-                            left: 16,
-                            right: 16,
-                            child: _HealthBanner(
-                              warnings: _healthWarnings,
-                              onDismiss: () =>
-                                  setState(() => _healthDismissed = true),
-                            ),
-                          ),
-                        // Layout-drift banner: surfaces the kanshi-daemon
-                        // hotplug race where live positions silently
-                        // diverge from the active profile. One-click
-                        // re-apply runs `kanshictl reload`.
-                        if (c.hasLayoutDrift)
-                          Positioned(
-                            top: EditorHeader.height +
-                                10 +
-                                (_healthWarnings.isNotEmpty &&
-                                        !_healthDismissed
-                                    ? 96
-                                    : 0),
-                            left: 16,
-                            right: 16,
-                            child: _DriftBanner(
-                              issues: c.layoutDriftIssues,
-                              onReapply: () async {
-                                _toast(await c.reapplyActiveProfile());
-                              },
-                              onDismiss: c.dismissDriftBanner,
-                            ),
-                          ),
+                        // Health warnings and layout drift no longer float
+                        // over the canvas: they are levels of the single
+                        // assurance line at the bottom of the window. Two
+                        // banners stacked with a hardcoded 96px offset — and
+                        // able to appear alongside the safety-net bar and two
+                        // SnackBars — is what "not thought through" looked
+                        // like from outside.
+                        //
+                        // A decision is the one state that leaves the line:
+                        // it dims the canvas and takes the centre, because
+                        // the user may be looking at a screen that just went
+                        // black and a 36px row at the bottom is the wrong
+                        // place to ask them about it.
+                        DecisionCard(controller: c),
                       ],
                     ),
                   ),
                 // Right-hand properties inspector for the selected output.
-                if (_selectedId != null &&
-                    c.activeMonitors.any((m) => m.id == _selectedId))
-                  PropertiesInspector(
-                    controller: c,
-                    monitorId: _selectedId!,
-                    mirrorEnabled:
-                        c.supportsMirror && (_wlMirrorAvailable ?? false),
-                    onClose: () => setState(() => _selectedId = null),
-                    onResult: _toast,
-                  ),
               ],
             ),
           ),
@@ -775,136 +863,3 @@ class _HomePageState extends State<HomePage> {
 
 }
 
-/// Dismissible card surfacing [KanshiController.checkHealth] warnings at the
-/// top of the canvas (e.g. "kanshi isn't running").
-class _HealthBanner extends StatelessWidget {
-  final List<String> warnings;
-  final VoidCallback onDismiss;
-  const _HealthBanner({required this.warnings, required this.onDismiss});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(12),
-      color: Color.alphaBlend(
-        Colors.amber.withValues(alpha: 0.12),
-        scheme.surfaceContainerHighest,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Icon(Icons.warning_amber_rounded,
-                  color: Colors.amber, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final w in warnings)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(w,
-                          style: Theme.of(context).textTheme.bodyMedium),
-                    ),
-                ],
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Dismiss',
-              onPressed: onDismiss,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Banner that surfaces a live-vs-profile layout mismatch. Visible when
-/// the kanshi-daemon dropped a `position X,Y` directive during a hotplug
-/// re-apply and the compositor's actual layout no longer matches the GUI's
-/// expectation. One click on "Re-apply" fires `kanshictl reload`.
-class _DriftBanner extends StatelessWidget {
-  final List<String> issues;
-  final Future<void> Function() onReapply;
-  final VoidCallback onDismiss;
-  const _DriftBanner({
-    required this.issues,
-    required this.onReapply,
-    required this.onDismiss,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(12),
-      color: Color.alphaBlend(
-        Colors.orange.withValues(alpha: 0.14),
-        scheme.surfaceContainerHighest,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(top: 2),
-              child: Icon(Icons.warning_amber_rounded,
-                  color: Colors.orangeAccent, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Layout drift detected — the compositor is not showing '
-                    'the active profile.',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w500),
-                  ),
-                  const SizedBox(height: 4),
-                  for (final i in issues)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(i,
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('Re-apply'),
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.orange.shade700,
-              ),
-              onPressed: () {
-                // ignore: discarded_futures
-                onReapply();
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Dismiss',
-              onPressed: onDismiss,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

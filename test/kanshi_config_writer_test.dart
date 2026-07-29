@@ -492,15 +492,46 @@ void main() {
     });
 
     test('round-trips a rotated portrait monitor', () {
+      // MonitorTileData.width/height hold the ROTATED extent — that is what
+      // both backends produce (sway_backend.dart:110, wlr_randr_backend.dart:90)
+      // and what the parser produces. So a monitor that occupies 1440x2560 on
+      // screen must come back occupying 1440x2560; a round trip is an identity.
+      //
+      // This test used to expect the dimensions to come back SWAPPED, which
+      // enshrined a double transposition on the write path: with an empty
+      // modes list the writer handed the rotated extent back as if it were a
+      // physical mode, transposed it in _sanitizeMonitor, and transposed it
+      // again while rendering. The consequence was that the mode of a rotated
+      // output flipped on every single save, so every second save asked the
+      // panel for a resolution it does not have.
       final p = Profile(
         name: 'Vert',
-        monitors: [_mon(id: 'A', w: 2560, h: 1440, rotation: 90)],
+        monitors: [_mon(id: 'A', w: 1440, h: 2560, rotation: 90)],
       );
       final rendered = KanshiConfigWriter.render([p]);
+
+      // The config carries the PHYSICAL mode; `transform` does the rotating.
+      expect(rendered, contains('mode 2560x1440@60Hz'));
+      expect(rendered, contains('transform 90'));
+
       final m = KanshiConfigParser.parse(rendered).single.monitors.single;
       expect(m.rotation, equals(90));
       expect(m.width, equals(1440));
       expect(m.height, equals(2560));
+    });
+
+    test('a rotated monitor keeps its mode across repeated saves', () {
+      final p = Profile(
+        name: 'Vert',
+        monitors: [_mon(id: 'A', w: 1440, h: 2560, rotation: 270)],
+      );
+      var rendered = KanshiConfigWriter.render([p]);
+      for (var i = 0; i < 3; i++) {
+        rendered =
+            KanshiConfigWriter.render(KanshiConfigParser.parse(rendered));
+        expect(rendered, contains('mode 2560x1440@60Hz'),
+            reason: 'save #${i + 2} changed the mode');
+      }
     });
 
     test('mirror state survives writer→parser when sway extras are on', () {

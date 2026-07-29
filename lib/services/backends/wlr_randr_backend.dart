@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/kanshi_daemon.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
 
 /// Compositor-agnostic backend that talks to the wlroots-based session via
@@ -52,6 +54,8 @@ class WlrRandrBackend implements MonitorService {
     final serial = (output['serial'] ?? '').toString().trim();
     final fullName =
         '$make $model $serial'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final descriptor =
+        composeKanshiDescriptor(make: make, model: model, serial: serial);
     final enabled = output['enabled'] == true;
 
     final modesRaw = (output['modes'] as List?)?.cast<Map<String, dynamic>>()
@@ -94,6 +98,7 @@ class WlrRandrBackend implements MonitorService {
     return MonitorTileData(
       id: name.isNotEmpty ? name : fullName,
       manufacturer: fullName.isNotEmpty ? fullName : name,
+      edidDescriptor: descriptor ?? '',
       x: (position['x'] as num).toDouble(),
       y: (position['y'] as num).toDouble(),
       width: width,
@@ -200,32 +205,11 @@ class WlrRandrBackend implements MonitorService {
   }
 
   @override
-  Future<ProcessResult> restartCompositorProfileApply() async {
-    if (await _runner.exists('kanshictl')) {
-      final pgrep = await _runner.run('pgrep', ['-x', 'kanshi']);
-      if (pgrep.exitCode == 0) {
-        final r = await _runner.run('kanshictl', ['reload']);
-        if (r.exitCode == 0) return r;
-      }
-    }
-    final check = await _runner.run('systemctl', [
-      '--user',
-      'is-active',
-      '--quiet',
-      'kanshi.service',
-    ]);
-    if (check.exitCode == 0) {
-      return _runner
-          .run('systemctl', ['--user', 'restart', 'kanshi.service']);
-    }
-    return _runner.run('bash', [
-      '-c',
-      'pkill -x kanshi; for i in 1 2 3 4 5; do '
-          'pgrep -x kanshi >/dev/null || break; sleep 0.1; done; '
-          'setsid kanshi -c \$HOME/.config/kanshi/config '
-          '>/tmp/kanshi_gui.log 2>&1 &'
-    ]);
-  }
+  /// Delegates to [KanshiDaemon]: reloading kanshi has nothing to do with
+  /// which compositor is underneath, and this chain used to be duplicated
+  /// verbatim across two backends.
+  Future<ProcessResult> restartCompositorProfileApply() =>
+      KanshiDaemon(_runner).reload();
 
   MonitorMode? _modeMatchingTarget(MonitorTileData m) {
     if (m.modes.isEmpty) {
@@ -256,6 +240,12 @@ class WlrRandrBackend implements MonitorService {
       });
     return sorted.first;
   }
+
+  @override
+  /// wlr-randr backends have no per-output notification mechanism, so the
+  /// in-window card is the only prompt.
+  @override
+  ProcessStream? spawnSafetyPrompt(String output, String message) => null;
 
   @override
   ProcessStream? spawnIdentifyBanner(String output, String label) {

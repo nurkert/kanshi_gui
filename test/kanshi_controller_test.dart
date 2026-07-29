@@ -587,6 +587,9 @@ void main() {
       c.createProfileFromCurrentSetup();
       await c.setMirror('B', 'A');
       expect(mr.activeDestinations, contains('B'));
+      // Unplug and replug are two deliberate, separate events here, not one
+      // dock salvo, so switch the settle barrier off for this test.
+      c.hotplugSettleWindow = Duration.zero;
       // B unplugs.
       fake.emitOutputs([_mon(id: 'A', x: 0, y: 0)]);
       await Future<void>.delayed(Duration.zero);
@@ -694,13 +697,12 @@ void main() {
     expect(cfg.writeOptions.injectSwayWorkspaceExec, isFalse);
   });
 
-  test('init detects include directives and sets configHasIncludes',
+  test('a config with include directives is editable and keeps the include',
       () async {
-    // A user whose kanshi config carries `include` directives must
-    // not have their save path fire — that would render-and-overwrite
-    // the main config, dropping the include line. The controller
-    // sets a flag at init time that the save paths short-circuit on,
-    // and surfaces a callback to the UI for the persistent banner.
+    // This used to be refused outright: re-rendering the file from the model
+    // dropped the `include` line and orphaned every profile in the included
+    // files. Since M9 the save edits in place, so the line stays and the
+    // user gets their app back.
     final cfgPath = '${tmp.path}/config';
     await File(cfgPath).writeAsString(
       'include /etc/kanshi.d/work\nprofile foo {\n}\n',
@@ -713,19 +715,24 @@ void main() {
     final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
     final c = KanshiController(monitors: fake, config: cfg);
     await c.init();
-    expect(c.configHasIncludes, isTrue,
-        reason: 'init must detect include directives upfront so the '
-            'first mutation does not have to discover the issue '
-            'mid-flight. (The HomePage surfaces the banner from this '
-            'flag on first frame.)');
-    // Safe-start: opening the app must not write the config at all — not
-    // even an attempt — so a hand-written include-using config survives
-    // byte-for-byte untouched until the user makes a deliberate edit.
+    expect(c.saveBlockedReason, isNull,
+        reason: 'an include is no longer a reason to refuse');
+    // Safe-start still holds: opening the app must not write the config at
+    // all, so a hand-written config survives byte-for-byte until the user
+    // makes a deliberate edit.
     expect(
       await File(cfgPath).readAsString(),
       equals('include /etc/kanshi.d/work\nprofile foo {\n}\n'),
       reason: 'Opening the app must not write to disk.',
     );
+
+    // And a deliberate edit keeps it.
+    await cfg.saveProfiles([
+      Profile(name: 'foo', monitors: [_mon(id: 'A')]),
+    ]);
+    expect(await File(cfgPath).readAsString(),
+        contains('include /etc/kanshi.d/work'));
+    c.dispose();
   });
 
   test('opening the app does not write the kanshi config (safe-start)',
@@ -798,20 +805,13 @@ void main() {
       final cfg = _tmpConfig(tmp);
       final c = KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
       final s = AppSettings(filePath: '${tmp.path}/s.json')
-        ..snapDistance = 99
-        ..scaleSnapping = false
-        ..safetyNetSeconds = 5
-        ..customModeRevertSeconds = 7
-        ..identifyBannerSeconds = 4
-        ..maxBackups = 3
         ..mirrorScaling = MirrorScaling.cover
-        ..workspaceManagement = WorkspaceManagementMode.grouped;
+        ..workspaceManagement = WorkspaceManagementMode.grouped
+        ..liveApply = false
+        ..autoReapplyOnDrift = true;
       c.applyStartupSettings(s);
-      expect(c.snapThreshold, 99);
-      expect(c.scaleSnapping, isFalse);
-      expect(c.safetyNet.window, const Duration(seconds: 5));
-      expect(c.identifyBannerDuration, const Duration(seconds: 4));
-      expect(cfg.maxBackups, 3);
+      expect(c.liveApply, isFalse);
+      expect(c.autoReapplyOnDrift, isTrue);
       expect(mr.scaling, 'cover');
       // Folds into the effective write options (boot-fallback exec line).
       expect(cfg.writeOptions.mirrorScaling, 'cover');
@@ -1105,7 +1105,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.extendOutputs();
+      final r = await c.extendOutputs();
       expect(r.success, isTrue);
       final a = c.activeMonitors.firstWhere((m) => m.id == 'A');
       final b = c.activeMonitors.firstWhere((m) => m.id == 'B');
@@ -1124,7 +1124,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.mirrorAll();
+      final r = await c.mirrorAll();
       expect(r.success, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'A').mirrorOf, isNull);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'B').mirrorOf, 'A');
@@ -1137,7 +1137,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      expect(c.mirrorAll().success, isFalse);
+      expect((await c.mirrorAll()).success, isFalse);
     });
 
     test('useOnlyOutput enables the target and disables the rest', () async {
@@ -1147,7 +1147,7 @@ void main() {
       );
       final c = KanshiController(monitors: fake, config: cfg);
       await c.init();
-      final r = c.useOnlyOutput('A');
+      final r = await c.useOnlyOutput('A');
       expect(r.success, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isTrue);
       expect(c.activeMonitors.firstWhere((m) => m.id == 'B').enabled, isFalse);

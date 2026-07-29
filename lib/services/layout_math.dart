@@ -438,10 +438,20 @@ class LayoutMath {
       maxX = pinnedBounds.right;
       maxY = pinnedBounds.bottom;
     } else {
-      minX = laidOut.map((m) => m.x).reduce(min);
-      minY = laidOut.map((m) => m.y).reduce(min);
-      maxX = laidOut.map((m) => m.x + m.width / m.scale).reduce(max);
-      maxY = laidOut.map((m) => m.y + m.height / m.scale).reduce(max);
+      // Fit to the ACTIVE cluster only. Parked tiles are shown beside it, but
+      // including them in the bounding box meant a single disabled screen
+      // shrank the real arrangement to make room for something the user
+      // cannot interact with — the more screens they switched off, the
+      // smaller the ones they were actually using became. Parked tiles simply
+      // extend into the margin the fit already leaves (it uses 80% of the
+      // viewport), and fall back to the full set when everything is off.
+      final fitted =
+          laidOut.where((m) => m.enabled).toList(growable: false);
+      final basis = fitted.isEmpty ? laidOut : fitted;
+      minX = basis.map((m) => m.x).reduce(min);
+      minY = basis.map((m) => m.y).reduce(min);
+      maxX = basis.map((m) => m.x + m.width / m.scale).reduce(max);
+      maxY = basis.map((m) => m.y + m.height / m.scale).reduce(max);
     }
 
     final boundingWidth = maxX - minX;
