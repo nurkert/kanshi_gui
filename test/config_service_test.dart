@@ -302,22 +302,22 @@ void main() {
     });
 
     test(
-        'saveProfiles throws ConfigHasIncludesException for an '
-        'include-using config and leaves the file unchanged',
+        'saveProfiles keeps the include line instead of refusing',
         () async {
+      // This used to throw. The refusal existed because re-rendering the file
+      // from the model dropped the `include` line and orphaned every profile
+      // in the included files; since M9 the save edits in place, so the line
+      // stays and the user keeps a working app.
       const originalContent =
           'include /etc/kanshi.d/work\nprofile foo {\n}\n';
       await File('${tmp.path}/config').writeAsString(originalContent);
       final cfg = make();
-      await expectLater(
-        cfg.saveProfiles([profileNamed('overwriting')]),
-        throwsA(isA<ConfigHasIncludesException>()),
-      );
+      await cfg.saveProfiles([profileNamed('overwriting')]);
       final after = await File('${tmp.path}/config').readAsString();
-      expect(after, equals(originalContent),
-          reason: 'A blocked save must leave the existing config '
-              'untouched — orphaning the user\'s included profiles '
-              'is exactly the failure mode we are preventing.');
+      expect(after, contains('include /etc/kanshi.d/work'));
+      expect(after, contains("profile 'overwriting'"));
+      expect(after, contains('profile foo {'),
+          reason: 'a profile the parser could not read is not deleted');
     });
 
     test('hasIncludeDirectives caches the answer after first call',

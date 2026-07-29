@@ -125,7 +125,6 @@ class KanshiController extends ChangeNotifier {
   /// directives. While true, all save paths short-circuit and fire
   /// [onConfigSaveBlocked] instead of writing — overwriting would
   /// orphan profiles in the included files.
-  bool get configHasIncludes => _saves.hasIncludes;
 
   /// Whether a kanshi daemon was seen running. Null until probed.
   bool? _kanshiRunning;
