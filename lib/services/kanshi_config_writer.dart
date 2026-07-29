@@ -269,6 +269,19 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
+      // A setup that has been observed carries its own map; the distribution
+      // rule only seeds one that never has. See [Profile.workspaceMap].
+      final learned = profile.workspaceMap;
+      if (learned != null && learned.isNotEmpty) {
+        for (final entry in (learned.keys.toList()..sort())) {
+          buffer.writeln(
+              "    # kanshi_gui:ws '$entry'='${learned[entry]}'");
+        }
+        final chain = buildLearnedWorkspaceChain(learned, criteria: criteria);
+        if (chain != null) {
+          buffer.writeln('    exec swaymsg "$chain"');
+        }
+      } else {
       final ranked = resolveWorkspaceRanks(
         mons.where((m) => m.enabled && m.mirrorOf == null).toList(),
       );
@@ -296,6 +309,7 @@ class KanshiConfigWriter {
         // workspace 1..N which displaces any visible orphan, and
         // sway garbage-collects empty non-visible workspaces.
         buffer.writeln("    exec swaymsg \"$chain\"");
+      }
       }
     }
 

@@ -137,6 +137,7 @@ class KanshiConfigParser {
     final mirrorByProfile = _extractMirrorComments(content);
     final edidByProfile = _extractEdidComments(content);
     final portByProfile = _extractPortComments(content);
+    final wsByProfile = _extractWorkspaceComments(content);
     final lines = _stripComments(content).split('\n');
 
     var i = 0;
@@ -186,8 +187,10 @@ class KanshiConfigParser {
       final mirrors = mirrorByProfile[header] ?? const <String, String>{};
       final edids = edidByProfile[header] ?? const <String, String>{};
       final ports = portByProfile[header] ?? const <String, String>{};
+      final ws = wsByProfile[header];
       profiles.add(Profile(
         name: header,
+        workspaceMap: ws == null || ws.isEmpty ? null : ws,
         monitors: _applyEdids(
           _applyRanks(
             // Mirror annotations override the legacy `exec wl-mirror`
@@ -285,6 +288,49 @@ class KanshiConfigParser {
         if (m != null) {
           (out[currentProfile] ??= <String, String>{})[m.group(1)!] =
               m.group(2)!;
+        }
+        depth += _countChar(raw, '{') - _countChar(raw, '}');
+        if (depth <= 0) {
+          currentProfile = null;
+          depth = 0;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Walks the raw config text and pulls
+  /// `# kanshi_gui:ws '<number>'='<output>'` annotations out of each profile.
+  ///
+  /// This is where a setup's observed workspace layout lives. It is written
+  /// as a comment because kanshi has no field for it: the placement itself is
+  /// carried out by the `exec swaymsg` chain, and this records what that
+  /// chain should say next time.
+  static Map<String, Map<int, String>> _extractWorkspaceComments(
+    String content,
+  ) {
+    final out = <String, Map<int, String>>{};
+    final wsLine = RegExp(
+      r"^\s*#\s*kanshi_gui:ws\s+'(\d+)'\s*=\s*'([^']*)'\s*$",
+    );
+    String? currentProfile;
+    var depth = 0;
+    for (final raw in content.split('\n')) {
+      if (currentProfile == null) {
+        final hdr = _matchProfileHeader(raw.trim());
+        if (hdr != null) {
+          currentProfile = hdr;
+          depth = _countChar(raw, '{') - _countChar(raw, '}');
+          if (depth == 0 && raw.contains('{')) currentProfile = null;
+          continue;
+        }
+      } else {
+        final m = wsLine.firstMatch(raw);
+        if (m != null) {
+          final n = int.tryParse(m.group(1)!);
+          if (n != null) {
+            (out[currentProfile] ??= <int, String>{})[n] = m.group(2)!;
+          }
         }
         depth += _countChar(raw, '{') - _countChar(raw, '}');
         if (depth <= 0) {
