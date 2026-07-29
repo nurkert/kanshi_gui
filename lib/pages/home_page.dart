@@ -18,7 +18,7 @@ import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
 import 'package:kanshi_gui/widgets/setup_title_bar.dart';
-import 'package:kanshi_gui/widgets/properties_inspector.dart';
+import 'package:kanshi_gui/widgets/screen_strip.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
 
 /// Top-level page: hosts the AppBar, the sliding sidebar, and the layout
@@ -460,11 +460,30 @@ class _HomePageState extends State<HomePage> {
               onShowLogs: _showLogs,
               onShowHelp: _showHelp,
               child: Scaffold(
-            bottomNavigationBar: AssuranceLine(
+            // The per-screen controls live under the canvas, not beside it:
+            // the arrangement is a wide, short thing, so horizontal pixels are
+            // the scarce resource. At rest the band has zero height.
+            bottomNavigationBar: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ScreenStrip(
+                  controller: c,
+                  monitorId: _selectedId != null &&
+                          c.activeMonitors.any((m) => m.id == _selectedId)
+                      ? _selectedId
+                      : null,
+                  mirrorEnabled:
+                      c.supportsMirror && (_wlMirrorAvailable ?? false),
+                  onClose: () => setState(() => _selectedId = null),
+                  onResult: _toast,
+                ),
+                AssuranceLine(
               status: _statusFor(c),
-              trailingNote: c.assuranceLevel == AssuranceLevel.verified
-                  ? 'verified'
-                  : null,
+                  trailingNote: c.assuranceLevel == AssuranceLevel.verified
+                      ? 'verified'
+                      : null,
+                ),
+              ],
             ),
             // The title bar replaces the 248px rail: the setup in play is
             // whichever screens are attached, decided by the hardware and by
@@ -714,16 +733,6 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 // Right-hand properties inspector for the selected output.
-                if (_selectedId != null &&
-                    c.activeMonitors.any((m) => m.id == _selectedId))
-                  PropertiesInspector(
-                    controller: c,
-                    monitorId: _selectedId!,
-                    mirrorEnabled:
-                        c.supportsMirror && (_wlMirrorAvailable ?? false),
-                    onClose: () => setState(() => _selectedId = null),
-                    onResult: _toast,
-                  ),
               ],
             ),
           ),
