@@ -208,15 +208,11 @@ class _MonitorTileState extends State<MonitorTile> {
     final isMirrorSource = widget.mirroredBy.isNotEmpty;
     final isMirrorDestination = widget.data.mirrorOf != null;
     final hasMirrorAccent = isMirrorSource || isMirrorDestination;
-    // Status colour drives the border, glow and status dot. Kept meaningful
-    // (green = connected, red = missing, grey = disabled, cyan = mirror) but
-    // the fill is now a translucent dark glass merely *tinted* with it, so
-    // the canvas reads calm instead of a wall of saturated blocks.
-    const mirrorColor = Color(0xFF4FC3F7);
-    // Semantic, from the tokens. Previously three hardcoded hexes and white
-    // text, which is why the light theme reached about a third of the app:
-    // the tile stayed dark whatever the setting said.
+    // Status reads from the border and the dot, not from the fill: colouring
+    // the whole rectangle by state made every screen shout its state at the
+    // same volume and left nothing louder for the state that matters.
     final c = context.colors;
+    final mirrorColor = c.mirror;
     final statusColor = !isEnabled
         ? c.textTertiary
         : hasMirrorAccent
@@ -321,10 +317,7 @@ class _MonitorTileState extends State<MonitorTile> {
                                 color: statusColor,
                                 shape: BoxShape.circle,
                                 boxShadow: [
-                                  BoxShadow(
-                                    color: statusColor.withValues(alpha: 0.6),
-                                    blurRadius: 6,
-                                  ),
+                                  BoxShadow(color: statusColor, blurRadius: 6),
                                 ],
                               ),
                             ),
@@ -338,11 +331,9 @@ class _MonitorTileState extends State<MonitorTile> {
                                   ? '⇄ Mirrors to ${widget.mirroredBy.join(", ")}'
                                   : '⇄ Mirror of ${widget.data.mirrorOf}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: mirrorColor,
-                              ),
+                              style: T.micro.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: mirrorColor),
                             ),
                           ),
                         const SizedBox(height: 8),
@@ -350,12 +341,9 @@ class _MonitorTileState extends State<MonitorTile> {
                           child: Text(
                             displayName,
                             textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              height: 1.15,
-                              color: textColor,
-                            ),
+                            style: T.body
+                                .copyWith(fontWeight: FontWeight.w600,
+                                    color: textColor),
                             softWrap: true,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
@@ -365,11 +353,7 @@ class _MonitorTileState extends State<MonitorTile> {
                         Text(
                           widget.data.resolution.replaceAll('x', ' × '),
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                            color: textColor.withValues(alpha: 0.75),
-                          ),
+                          style: T.mono.copyWith(color: c.textSecondary),
                         ),
                         const SizedBox(height: 8),
                         Wrap(
@@ -439,7 +423,7 @@ class _MonitorTileState extends State<MonitorTile> {
                     height: 20,
                     margin: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
-                      color: statusColor.withValues(alpha: 0.85),
+                      color: statusColor,
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(R.chip),
                         bottomRight: Radius.circular(R.screen),
@@ -612,16 +596,14 @@ class _MonitorTileState extends State<MonitorTile> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF4FC3F7).withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(6),
+                        color: c.mirror,
+                        borderRadius: R.chipR,
                       ),
                       child: Text(
                         '+$n',
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+                        style: T.micro.copyWith(
+                            color: Colors.black,
+                            fontWeight: FontWeight.w700),
                       ),
                     ),
                 ],
@@ -650,16 +632,12 @@ class _MonitorTileState extends State<MonitorTile> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: accent.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: R.chipR,
         border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: textColor.withValues(alpha: 0.9),
-        ),
+        style: T.micro.copyWith(fontWeight: FontWeight.w600, color: textColor),
       ),
     );
   }

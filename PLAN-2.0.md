@@ -3,9 +3,8 @@
 **Stand:** 2026-07-29 · **Basis:** `main` @ `8e1eeb5` · **Branch:** `v2.0` · **Version:** 2.0.0+40
 
 Dieses Dokument war die Arbeitsgrundlage für eine neue Major-Version und ist jetzt zugleich
-ihr Protokoll. **M0–M9 sind umgesetzt** (35 Commits, 358 → 558 Tests, keine Skips,
-`flutter analyze --fatal-infos` sauber, Release-Build grün). Offen ist nur M10, der
-nachträglich ergänzte UI-Polish.
+ihr Protokoll. **M0–M10 sind umgesetzt** (35 Commits, 358 → 558 Tests, keine Skips,
+`flutter analyze --fatal-infos` sauber, Release-Build grün).
 
 Zwei Dinge fehlen bewusst und können nicht von der Umsetzung erledigt werden:
 
@@ -533,9 +532,12 @@ dazukommt. Sonst schleicht sich der Bruch beim nächsten Feature wieder ein.
 Nach `lib/design/tokens.dart`, literale Werte:
 
 - **Abstände** 4 · 8 · 12 · 16 · 24 · 32 · 48. Bandhöhen 56 / 36 / 78 / 0 · 44 · 132.
-- **Radien** chip 6 · screen 10 · control 8 · card 14 · sheet 20.
 - **Typo** display 28/600 · title 20/600 · heading 17/600 · body 15/400 · label 13/500 ·
   caption 12/400 · mono 12 (Tabellenziffern) · micro 10/500.
+- **Radien** — nach dem Review in M10 auf eine einzige Entscheidung zusammengezogen:
+  square 0 · chip/control/screen/card 2 · sheet 3. Keine Skala, sondern der Entschluss,
+  keine zu haben. Ein 14-px-Kartenradius neben einer Monitorkachel war die App im
+  Widerspruch mit sich selbst darüber, ob sie ein Präzisionswerkzeug oder ein Telefon ist.
 - **Farben dark** bg `#0F1114` · surface `#16181D` · surfaceRaised `#1E2127` · screenFill
   `#23262D` · textPrimary `#E8EAED` · ok `#3FBF7F` · attention `#E8A33D` · danger `#E5544B` ·
   accent = Sways `client.focused`, sonst `#4C8DFF`.

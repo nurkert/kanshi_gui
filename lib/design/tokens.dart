@@ -41,16 +41,30 @@ class Sp {
 
 /// Corner radii.
 ///
-/// Deliberately tight. This is a precision tool that sits next to a tiling
-/// window manager; soft, pill-shaped chrome reads as a phone app and fights
-/// what the canvas is showing — rectangles with hard pixel coordinates.
+/// Effectively one value: a 2px chamfer, with 3px reserved for the largest
+/// surfaces. Not a scale so much as a decision to stop having one.
+///
+/// The app draws rectangles with hard pixel coordinates and sits beside a
+/// tiling window manager. Rounded chrome fights both: a 14px card corner
+/// next to a monitor tile is the app disagreeing with itself about whether
+/// this is a precision instrument or a phone. A chamfer keeps edges legible
+/// where two surfaces meet without pretending to be soft.
+///
+/// Everything reads from here, so this paragraph is the only place the
+/// decision lives.
 class R {
   R._();
-  static const double chip = 4;
-  static const double control = 4;
-  static const double screen = 6;
-  static const double card = 8;
-  static const double sheet = 10;
+
+  /// A genuinely square corner, for anything that meets another edge flush.
+  static const double square = 0;
+
+  static const double chip = 2;
+  static const double control = 2;
+  static const double screen = 2;
+  static const double card = 2;
+  static const double sheet = 3;
+
+  static const BorderRadius squareR = BorderRadius.zero;
 
   static const BorderRadius chipR = BorderRadius.all(Radius.circular(chip));
   static const BorderRadius controlR =
@@ -113,6 +127,11 @@ class AppColors {
   final Color accent;
   final Color ok;
   final Color attention;
+
+  /// Screens showing the same picture as another. A distinct hue rather than
+  /// the accent: mirroring is a relationship between two screens, not a
+  /// selection, and reusing the accent made the two read as the same state.
+  final Color mirror;
   final Color danger;
   final Color scrim;
 
@@ -132,6 +151,7 @@ class AppColors {
     required this.accent,
     required this.ok,
     required this.attention,
+    required this.mirror,
     required this.danger,
     required this.scrim,
   });
@@ -161,6 +181,7 @@ class AppColors {
         accent: accent,
         ok: const Color(0xFF3FBF7F),
         attention: const Color(0xFFE8A33D),
+        mirror: const Color(0xFF4FC3F7),
         danger: const Color(0xFFE5544B),
         scrim: const Color(0x66000000),
       );
@@ -183,6 +204,7 @@ class AppColors {
         accent: accent,
         ok: const Color(0xFF1E9E5F),
         attention: const Color(0xFFB36B00),
+        mirror: const Color(0xFF0277BD),
         danger: const Color(0xFFC4362C),
         scrim: const Color(0x4715171A),
       );

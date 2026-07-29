@@ -13,6 +13,7 @@ import 'package:kanshi_gui/widgets/app_menu.dart';
 import 'package:kanshi_gui/widgets/assurance_line.dart';
 import 'package:kanshi_gui/widgets/decision_card.dart';
 import 'package:kanshi_gui/design/theme_context.dart';
+import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
 import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
@@ -129,8 +130,8 @@ class _HomePageState extends State<HomePage> {
             backgroundColor: Theme.of(context).colorScheme.errorContainer,
             content: Text(
               "Could not undo '$label' automatically: $error",
-              style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer),
+              style: T.label
+                  .copyWith(color: Theme.of(context).colorScheme.onErrorContainer),
             ),
             action: SnackBarAction(
               label: 'Try again',
@@ -321,7 +322,7 @@ class _HomePageState extends State<HomePage> {
           child: SingleChildScrollView(
             child: Text(
               content,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              style: T.mono.copyWith(fontFamily: 'monospace'),
             ),
           ),
         ),
@@ -387,7 +388,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 8),
             const Text(
               'Warning: custom modes can fail. You can revert afterwards via "Revert last custom mode".',
-              style: TextStyle(fontSize: 12),
+              style: T.caption,
             ),
           ],
         ),

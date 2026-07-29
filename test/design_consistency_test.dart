@@ -17,12 +17,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// a new file starts at zero. That turns "we should tidy this up some day"
 /// into something the build enforces.
 const Map<String, int> _allowedInlineStyling = {
-  'widgets/monitor_tile.dart': 16,
-  'widgets/identify_overlay.dart': 4,
-  'pages/home_page.dart': 3,
+  // Animated alphas — they ARE the pulse, so they cannot be static tokens.
+  'widgets/identify_overlay.dart': 3,
+  // Two accent alphas that vary with the tile's state.
+  'widgets/monitor_tile.dart': 2,
   // Not a widget: it parses a colour out of the sway config, which is where
   // the accent comes from in the first place.
   'services/sway_theme.dart': 1,
+  // One alpha on the guide colour, tuned against the canvas.
   'widgets/snap_lines_painter.dart': 1,
 };
 
@@ -92,6 +94,23 @@ void main() {
           reason: '$family is unthemed, so it will render as Material '
               'defaults in its own overlay');
     }
+  });
+
+  test('the corner radii are one decision, not a scale', () {
+    // M10's angular pass. A 14px card corner beside a monitor tile was the
+    // app disagreeing with itself about whether this is a precision
+    // instrument or a phone; there is effectively one radius now, and the
+    // reasoning lives in tokens.dart rather than in whichever widget was
+    // written last.
+    final tokens = File('lib/design/tokens.dart').readAsStringSync();
+    final radii = RegExp(r'static const double (chip|control|screen|card|sheet) = (\d+);')
+        .allMatches(tokens)
+        .map((m) => int.parse(m.group(2)!))
+        .toList();
+    expect(radii, hasLength(5), reason: 'all five radii must be declared');
+    expect(radii.every((r) => r <= 3), isTrue,
+        reason: 'anything softer than a chamfer belongs to a different app: '
+            'found $radii');
   });
 
   test('the seed-based colour scheme is gone', () {
