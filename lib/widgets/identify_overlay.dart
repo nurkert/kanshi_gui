@@ -60,7 +60,8 @@ class _IdentifyOverlayState extends State<IdentifyOverlay>
             child: Center(
               child: Text(
                 '${widget.number}',
-                style: TextStyle(
+                // The alpha is animated, not a token: it is the pulse.
+                style: T.display.copyWith(
                   color: Colors.white.withValues(alpha: 0.85 + 0.15 * t),
                   fontSize: 96,
                   fontWeight: FontWeight.w800,
