@@ -66,36 +66,36 @@ void main() {
     s.dispose();
   });
 
-  test('an include directive blocks the save and says why', () async {
+  test('an include directive is no longer a reason to refuse', () async {
+    // It was, while the save re-rendered the file from the model and would
+    // have dropped the line. Since M9 the save edits in place and the line
+    // stays, so refusing would only take the app away for nothing.
     File('${tmp.path}/config')
         .writeAsStringSync('include /etc/kanshi/config.d/*\n');
     final s = SaveCoordinator(cfg());
     await s.inspect();
 
-    expect(s.hasIncludes, isTrue);
-    expect(s.blockedReason, contains('include'));
-
-    String? reason;
-    s.onBlocked = (r) => reason = r;
-    expect(await s.flush(profiles()), isFalse);
-    expect(reason, contains('include'));
-    // The file is untouched: rendering our model over it would orphan every
-    // profile in the included files.
+    expect(s.blockedReason, isNull);
+    expect(await s.flush(profiles()), isTrue);
     expect(File('${tmp.path}/config').readAsStringSync(),
-        'include /etc/kanshi/config.d/*\n');
+        contains('include /etc/kanshi/config.d/*'));
     s.dispose();
   });
 
-  test('a config the parser could not fully read blocks the save', () async {
-    // kanshi makes `enable` optional; the parser does not, so this reads as
-    // zero monitors and re-rendering would delete the file.
+  test('a config the parser cannot fully read is still saveable', () async {
+    // kanshi makes `enable` optional and the parser does not, so this reads
+    // as zero monitors. In-place editing means that is no longer dangerous.
     File('${tmp.path}/config').writeAsStringSync(
         'profile docked {\n    output eDP-1 position 0,0\n}\n');
     final s = SaveCoordinator(cfg());
     await s.inspect();
 
-    expect(s.unparsedLoss, isNotNull);
-    expect(s.blockedReason, contains('does not understand'));
+    expect(s.unparsedLoss, isNotNull,
+        reason: 'the app still knows what it could not read');
+    expect(s.blockedReason, isNull, reason: 'but it no longer refuses');
+    expect(await s.flush(profiles()), isTrue);
+    expect(File('${tmp.path}/config').readAsStringSync(),
+        contains('output eDP-1 position 0,0'));
     s.dispose();
   });
 

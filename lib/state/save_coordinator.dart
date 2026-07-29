@@ -51,11 +51,6 @@ class SaveCoordinator {
   /// attempt of the session.
   bool? lastSaveOk;
 
-  /// Set when the live config pulls in other files. While true every save
-  /// path short-circuits: rendering our model over it would orphan every
-  /// profile in the included files.
-  bool hasIncludes = false;
-
   /// Set when the parser could not read all of the live config, describing
   /// what would be lost. While non-null, saving is refused rather than
   /// deleting what was never read.
@@ -69,20 +64,15 @@ class SaveCoordinator {
   void Function()? onChanged;
 
   /// Why saving is currently refused, or null when it is not.
-  String? get blockedReason {
-    if (hasIncludes) return SaveBlockedReasons.includes;
-    final loss = unparsedLoss;
-    return loss == null ? null : SaveBlockedReasons.notFullyParsed(loss);
-  }
+  ///
+  /// Since M9 the save edits the document in place, so neither an `include`
+  /// directive nor syntax the model cannot express is a reason to refuse —
+  /// nothing is re-rendered over them. Only a genuine write failure blocks.
+  String? get blockedReason => null;
 
   /// Re-reads the shape of the live config. Called at startup and after the
   /// file is replaced from outside our own writes.
   Future<void> inspect() async {
-    try {
-      hasIncludes = await config.hasIncludeDirectives();
-    } catch (_) {
-      hasIncludes = false;
-    }
     try {
       unparsedLoss = await config.unparsedContentDescription();
     } catch (_) {
@@ -93,10 +83,6 @@ class SaveCoordinator {
   /// Queues a debounced write of [profiles].
   void schedule(List<Profile> profiles) {
     _timer?.cancel();
-    if (hasIncludes) {
-      onBlocked?.call(SaveBlockedReasons.includes);
-      return;
-    }
     _timer = Timer(debounce, () {
       // Fire-and-forget by design: the next mutation re-triggers. Errors are
       // NOT dropped, though — that is the whole point of _route.
@@ -113,10 +99,6 @@ class SaveCoordinator {
   /// Writes [profiles] now, waiting for the result. Returns true on success.
   Future<bool> flush(List<Profile> profiles) async {
     _timer?.cancel();
-    if (hasIncludes) {
-      onBlocked?.call(SaveBlockedReasons.includes);
-      return false;
-    }
     try {
       await config.saveProfiles(profiles);
       lastSaveOk = true;
@@ -134,12 +116,7 @@ class SaveCoordinator {
 
   void _route(Object e) {
     lastSaveOk = false;
-    if (e is ConfigHasIncludesException) {
-      // The user added an `include` since we last looked; ConfigService
-      // catches what our cached answer missed.
-      hasIncludes = true;
-      onBlocked?.call(SaveBlockedReasons.includes);
-    } else if (e is ConfigNotFullyParsedException) {
+    if (e is ConfigNotFullyParsedException) {
       unparsedLoss = e.loss;
       onBlocked?.call(SaveBlockedReasons.notFullyParsed(e.loss));
     } else if (e is ConfigRoundTripException) {

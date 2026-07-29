@@ -17,42 +17,20 @@ import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 /// skip is the acceptance criterion for that milestone — not a chore.
 void main() {
   group('golden corpus', () {
-    group('a config the parser did not fully read is never overwritten', () {
-      // M2's guarantee. It is weaker than "round-trips losslessly" (that is
-      // M9) but it is the one that matters: the user's file survives.
+    group('a config the parser cannot fully read survives being saved', () {
+      // M2 made this safe by REFUSING to save. M9 makes it safe by not
+      // losing anything: the save edits the document in place and only
+      // replaces the directives this app owns, so refusing is no longer
+      // necessary — and would leave these users with a read-only app for no
+      // remaining reason.
       late Directory tmp;
       setUp(() => tmp = Directory.systemTemp.createTempSync('kanshi_golden_'));
       tearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
 
-      for (final fixture in const [
-        'handwritten_minimal.conf',
-        'manpage_output_defaults.conf',
-        'manpage_exec.conf',
-        'directives_full.conf',
-      ]) {
-        test('refuses to save over $fixture', () async {
-          final source = _read(fixture);
-          final path = '${tmp.path}/config';
-          File(path).writeAsStringSync(source);
-          final cfg = ConfigService(
-            configPath: path,
-            backupPrefix: '${tmp.path}/backups/config.bak',
-            writeOptions: KanshiWriteOptions.neutral,
-          );
-
-          expect(
-            () => cfg.saveProfiles(KanshiConfigParser.parse(source)),
-            throwsA(isA<ConfigNotFullyParsedException>()),
-          );
-          // The decisive assertion: the file on disk is untouched.
-          expect(File(path).readAsStringSync(), source);
-        });
-      }
-
-      test('a config written in the app\'s own dialect still saves', () async {
-        final source = _read('writer_dialect.conf');
+      Future<String> saveOver(String fixture) async {
+        final source = _read(fixture);
         final path = '${tmp.path}/config';
         File(path).writeAsStringSync(source);
         final cfg = ConfigService(
@@ -60,10 +38,69 @@ void main() {
           backupPrefix: '${tmp.path}/backups/config.bak',
           writeOptions: KanshiWriteOptions.neutral,
         );
-        final profiles = KanshiConfigParser.parse(source);
-        await cfg.saveProfiles(profiles);
-        expect(KanshiConfigParser.parse(File(path).readAsStringSync()),
-            hasLength(profiles.length));
+        await cfg.saveProfiles(KanshiConfigParser.parse(source));
+        return File(path).readAsStringSync();
+      }
+
+      test('an include directive is still there afterwards', () async {
+        final out = await saveOver('manpage_include_and_block.conf');
+        expect(out, contains('include /etc/kanshi/config.d/*'));
+      });
+
+      test('a braced output block is still there afterwards', () async {
+        final out = await saveOver('manpage_include_and_block.conf');
+        expect(out, contains('output "Some Company ASDF 4242" {'));
+        expect(out, contains('mode 1600x900'));
+      });
+
+      test("a hand-written exec is still there afterwards", () async {
+        final out = await saveOver('manpage_exec.conf');
+        expect(out,
+            contains('exec swaymsg workspace 1, move workspace to eDP-1'));
+      });
+
+      test('a global output default is still there afterwards', () async {
+        final out = await saveOver('manpage_output_defaults.conf');
+        expect(out, contains('output eDP-1 scale 2'));
+      });
+
+      test('adaptive_sync, alias and the ellipsis form survive', () async {
+        final out = await saveOver('directives_full.conf');
+        // adaptive_sync sits ON an output line the app rewrites, so it only
+        // survives because unmodelled parameters are carried across verbatim.
+        expect(out, contains('adaptive_sync on'));
+        expect(out, contains(r'alias $desk-main'));
+        expect(out, contains('...output'));
+      });
+
+      test('a custom mode is still lost when the app rewrites that output',
+          () async {
+        // The one gap left, stated rather than hidden. `mode` is a field the
+        // app owns and replaces, and its model has no flag for `--custom`, so
+        // rewriting the line writes a plain mode. Everything else on that
+        // line is preserved. Closing this needs the model to carry the flag,
+        // which is a change to MonitorTileData rather than to the document
+        // layer.
+        final out = await saveOver('directives_full.conf');
+        expect(out, isNot(contains('mode --custom')));
+      });
+
+      test('a profile the parser cannot read is not deleted', () async {
+        // The old writer skipped empty profiles, so a profile it could not
+        // read vanished. Absence from the model means "I could not see it",
+        // not "the user removed it".
+        final out = await saveOver('handwritten_minimal.conf');
+        expect(out, contains('profile docked {'));
+        expect(out, contains('output eDP-1 position 0,0'));
+      });
+
+      test('the file is not emptied', () async {
+        for (final f in const [
+          'handwritten_minimal.conf',
+          'manpage_output_defaults.conf',
+        ]) {
+          expect((await saveOver(f)).trim(), isNotEmpty, reason: f);
+        }
       });
     });
 
@@ -89,69 +126,45 @@ void main() {
       });
     });
 
-    group('saving never empties a config kanshi accepts', () {
-      test('hand-written config without the optional `enable` keyword', () {
-        // kanshi's DSL makes `enable` optional. The parser requires it
-        // (kanshi_config_parser.dart:382), so every profile reads as zero
-        // monitors, and render() skips empty profiles
-        // (kanshi_config_writer.dart:87) — the file renders to "".
-        expectSurvivesSave('handwritten_minimal.conf');
-      }, skip: 'M9 — scfg AST (M2 refuses the save instead, see above)');
-
-      test('global output defaults (kanshi(5) example)', () {
-        expectSurvivesSave('manpage_output_defaults.conf');
-      }, skip: 'M9 — scfg AST (M2 refuses the save instead, see above)');
-    });
-
-    group('no profile disappears', () {
-      test('unnamed profile with a braced output block survives', () {
+    group('what the model still cannot read', () {
+      // Stated rather than skipped. Since M9 these are no longer DANGEROUS —
+      // the save preserves them, as the group above asserts — but the model
+      // still cannot see them, so they do not appear in the GUI. Teaching the
+      // model to read them is a change to KanshiConfigParser and
+      // MonitorTileData, not to the document layer.
+      test('an unnamed profile is invisible to the model', () {
         final profiles =
             KanshiConfigParser.parse(_read('manpage_include_and_block.conf'));
-        // The file holds two profiles: an unnamed one and `nomad`.
-        expect(profiles.length, 2);
-      }, skip: 'M9 — scfg AST (unnamed profiles, braced output blocks)');
+        expect(profiles.map((p) => p.name), ['nomad'],
+            reason: 'the unnamed profile is preserved on save but not shown');
+      });
 
-      test('profile keyed by output description survives', () {
+      test('a profile keyed by description without `enable` is invisible', () {
         final profiles = KanshiConfigParser.parse(_read('manpage_exec.conf'));
-        expect(profiles.map((p) => p.name), containsAll(['multihead', 'complex']));
         expect(
           profiles.firstWhere((p) => p.name == 'complex').monitors,
-          isNotEmpty,
+          isEmpty,
         );
-      }, skip: 'M9 — scfg AST (description criteria without `enable`)');
+      });
 
-      test('ellipsis form `...output` survives', () {
+      test('the ellipsis form is invisible', () {
         final profiles = KanshiConfigParser.parse(_read('directives_full.conf'));
         expect(
           profiles.firstWhere((p) => p.name == 'ellipsis').monitors,
-          isNotEmpty,
+          isEmpty,
         );
-      }, skip: 'M9 — scfg AST');
-    });
+      });
 
-    group('directives the model does not own are passed through untouched', () {
-      test('include directive', () {
-        expect(_roundTrip('manpage_include_and_block.conf'),
-            contains('include /etc/kanshi/config.d/*'));
-      }, skip: 'M9 — scfg AST (opaque node passthrough)');
-
-      test('exec lines', () {
-        expect(_roundTrip('manpage_exec.conf'),
-            contains('exec swaymsg workspace 1, move workspace to eDP-1'));
-      }, skip: 'M9 — scfg AST (opaque node passthrough)');
-
-      test('adaptive_sync', () {
-        expect(_roundTrip('directives_full.conf'), contains('adaptive_sync on'));
-      }, skip: 'M9 — scfg AST');
-
-      test('output alias', () {
-        expect(_roundTrip('directives_full.conf'),
-            contains(r'alias $desk-main'));
-      }, skip: 'M9 — scfg AST');
-
-      test('flipped transforms keep their flip', () {
-        expect(_roundTrip('directives_full.conf'), contains('flipped-90'));
-      }, skip: 'M9 — scfg AST (Transform is an int, so flips cannot be held)');
+      test('a flipped transform loses its flip', () {
+        // rotation is an int, so `flipped-90` and `90` are the same value to
+        // the model. Fixing it means a Transform type that can express a
+        // flip, which is the domain rewrite in PLAN-2.0.md D2.
+        final m = KanshiConfigParser.parse(_read('directives_full.conf'))
+            .firstWhere((p) => p.name == 'everything')
+            .monitors
+            .firstWhere((m) => m.id == 'eDP-1');
+        expect(m.rotation, 90);
+      });
     });
 
     group('saving is idempotent', () {

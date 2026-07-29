@@ -90,6 +90,127 @@ class KanshiDocument {
     return true;
   }
 
+  /// Replaces everything inside profile [name] that this app owns with
+  /// [replacement], leaving everything else in place and in order.
+  ///
+  /// Ownership is deliberately explicit rather than "whatever we recognise":
+  /// the app owns flat `output` directives, its own `# kanshi_gui:`
+  /// annotations, and the `exec` lines it generates itself. A user's own
+  /// `exec`, a braced `output { … }` block it cannot express, an
+  /// `adaptive_sync` line and every other directive belong to the user and
+  /// survive untouched — which is the entire difference between editing
+  /// someone's file and overwriting it.
+  bool replaceManagedChildren(
+    String name,
+    List<ScfgNode> replacement, {
+    String annotationPrefix = '# kanshi_gui:',
+  }) {
+    final idx = _indexOfProfile(name);
+    if (idx == -1) return false;
+    final node = doc.nodes[idx];
+
+    final kept = <ScfgNode>[];
+    final salvaged = <String>[];
+    // Output directives the app is about to replace, by criteria, so any
+    // parameter it does not model can be carried across.
+    final oldOutputs = <String, ScfgNode>{};
+    for (final child in node.children) {
+      if (_isManaged(child, annotationPrefix)) {
+        if (child.name == 'output' && child.params.isNotEmpty) {
+          oldOutputs[child.params.first] = child;
+        }
+        salvaged.addAll(_theirComments(child.leadingLines, annotationPrefix));
+        continue;
+      }
+      kept.add(_withoutOurAnnotations(child, annotationPrefix));
+    }
+
+    final rebuilt = <ScfgNode>[
+      for (var i = 0; i < replacement.length; i++)
+        _mergeForeignParams(
+          i == 0 && salvaged.isNotEmpty
+              ? replacement[i].copyWith(
+                  leadingLines: [...salvaged, ...replacement[i].leadingLines])
+              : replacement[i],
+          oldOutputs,
+        ),
+      ...kept,
+    ];
+    doc.nodes[idx] = node.copyWith(
+      children: rebuilt,
+      trailingLines: [
+        for (final line in node.trailingLines)
+          if (!_isOurs(line, annotationPrefix)) line,
+      ],
+    );
+    return true;
+  }
+
+  /// Output directives this app models. Anything else on an `output` line
+  /// belongs to the user and is carried across when the line is rewritten.
+  static const _modelledOutputKeys = {
+    'enable',
+    'disable',
+    'scale',
+    'mode',
+    'transform',
+    'position',
+  };
+
+  /// Re-attaches parameters the app does not model to a rewritten line.
+  ///
+  /// `output X enable adaptive_sync on` is one directive, not two: replacing
+  /// the geometry would otherwise silently drop the adaptive-sync setting,
+  /// which is a real preference the app simply has no field for. It cannot
+  /// round-trip what it does not model unless it copies it across verbatim.
+  static ScfgNode _mergeForeignParams(
+    ScfgNode fresh,
+    Map<String, ScfgNode> oldOutputs,
+  ) {
+    if (fresh.name != 'output' || fresh.params.isEmpty) return fresh;
+    final old = oldOutputs[fresh.params.first];
+    if (old == null) return fresh;
+
+    final extra = <String>[];
+    var i = 1;
+    while (i < old.params.length) {
+      final key = old.params[i];
+      if (_modelledOutputKeys.contains(key)) {
+        i += (key == 'enable' || key == 'disable') ? 1 : 2;
+        continue;
+      }
+      // An unmodelled directive: take it and its value when it has one.
+      extra.add(key);
+      if (i + 1 < old.params.length &&
+          !_modelledOutputKeys.contains(old.params[i + 1])) {
+        extra.add(old.params[i + 1]);
+        i += 2;
+      } else {
+        i += 1;
+      }
+    }
+    if (extra.isEmpty) return fresh;
+    return fresh.copyWith(
+      params: [...fresh.params, ...extra],
+      rawLine: '${fresh.rawLine} ${extra.join(' ')}',
+    );
+  }
+
+  /// Whether this app wrote [child], and may therefore replace it.
+  static bool _isManaged(ScfgNode child, String annotationPrefix) {
+    if (_isOurs(child.rawLine, annotationPrefix)) return true;
+    // A braced output block is NOT ours: the app cannot express one, so it
+    // was written by hand and dropping it would lose the user's mode.
+    if (child.name == 'output' && !child.hasBlock) return true;
+    if (child.name != 'exec') return false;
+    // The exec lines the writer generates, and only those. A user's own exec
+    // — the reason this distinction exists — stays where they put it.
+    final body = child.rawLine.trim();
+    return body.contains('workspace number 1') ||
+        body.contains('.current_kanshi_profile') ||
+        body.contains('wl-mirror');
+  }
+
   /// Appends a whole profile, source text and all.
   void appendProfile(List<String> lines) {
     final sub = ScfgDocument.parse(lines.join('\n'));

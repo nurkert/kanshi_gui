@@ -22,8 +22,8 @@ class KanshiConfigDiagnostics {
   /// Monitors the parser produced across all profiles.
   final int outputsParsed;
 
-  /// Global-scope `output <criteria> …` default lines. The model has no
-  /// place for them, so re-rendering deletes them.
+  /// Global-scope `output <criteria> …` default lines. The model has no place
+  /// for them, so they do not appear in the GUI — but they are preserved.
   final int globalOutputDefaults;
 
   const KanshiConfigDiagnostics({
@@ -76,19 +76,21 @@ class KanshiConfigDiagnostics {
 ///   braces in `exec` lines, etc.)
 /// - whitespace is normalised between tokens
 ///
-/// It does NOT model all of kanshi's DSL — see [diagnose], which is how the
-/// save path finds out that it must not overwrite a file it only half read.
+/// It does NOT model all of kanshi's DSL. That is no longer dangerous: since
+/// M9 the save edits the document in place through [KanshiDocument] and only
+/// replaces the directives this app owns, so what the parser cannot read is
+/// preserved rather than deleted. [diagnose] still reports the gap, because
+/// the app should be able to say what it cannot show.
 class KanshiConfigParser {
   KanshiConfigParser._();
 
   /// Counts what the file contains and what [parse] managed to read from it.
   ///
-  /// This is the basis of the save-refusal gate: the GUI re-renders the whole
-  /// config from its model, so a file it only partially understood must not
-  /// be overwritten. Before this existed, a hand-written config using kanshi's
-  /// optional-`enable` form parsed as zero monitors per profile, the writer
-  /// skipped every empty profile, and the first save replaced the user's file
-  /// with an empty one.
+  /// Reports what the app cannot show the user. It was once the basis of a
+  /// save-refusal gate — a hand-written config using kanshi's optional-`enable`
+  /// form parsed as zero monitors per profile, the writer skipped every empty
+  /// profile, and the first save replaced the file with an empty one. Since M9
+  /// the save preserves what it cannot read, so this is informational.
   static KanshiConfigDiagnostics diagnose(String content) {
     final stripped = _stripComments(content).split('\n');
     final profileHeader = RegExp(r'^\s*profile\b');
@@ -570,10 +572,15 @@ class KanshiConfigParser {
     // written for connectors), "double-quoted" (kanshi(5)'s documented form,
     // and what a stable EDID description needs because it contains spaces),
     // and bare.
+    // Anchored at the start of a line. Without the anchor the pattern also
+    // matched INSIDE `...output "X" enable`, so the ellipsis form — which
+    // this app cannot express — was read as an ordinary output and written
+    // back as a second, duplicate directive next to the original.
     final outputRE = RegExp(
-      "output\\s+(?:'([^']+)'|\"([^\"]+)\"|(\\S+))"
+      "^[ \\t]*output\\s+(?:'([^']+)'|\"([^\"]+)\"|(\\S+))"
       r"\s+(enable|disable)([^\n]*)",
       caseSensitive: false,
+      multiLine: true,
     );
 
     for (final m in outputRE.allMatches(block)) {

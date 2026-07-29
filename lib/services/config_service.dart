@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/kanshi/kanshi_document.dart';
+import 'package:kanshi_gui/domain/kanshi/scfg.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -174,29 +176,72 @@ class ConfigService {
     _hasIncludesCache = null;
   }
 
-  /// Verifies that [rendered] reads back as [profiles].
-  static void _assertRoundTrips(List<Profile> profiles, String rendered) {
-    // Empty profiles are intentionally not rendered, so they are excluded
-    // from the comparison rather than counted as a loss.
-    final expected = profiles.where((p) => p.monitors.isNotEmpty).toList();
-    final actual = KanshiConfigParser.parse(rendered);
+  /// Rewrites only what this app owns inside an existing config.
+  ///
+  /// The alternative — re-rendering the whole file from the model, which is
+  /// what this did for its whole life — deletes everything the model cannot
+  /// represent. Editing in place means the app can only lose what it
+  /// deliberately replaces.
+  String _editInPlace(String existing, List<Profile> profiles) {
+    final doc = KanshiDocument.parse(existing);
 
-    if (actual.length != expected.length) {
-      throw ConfigRoundTripException(
-          'wrote ${expected.length} profiles, read back ${actual.length}');
+    // Profiles the current parser genuinely read — meaning it found outputs
+    // in them, not merely that it saw the header. A profile parsed as empty
+    // is one the app could NOT read, and its absence from the model means
+    // "I never saw it", not "the user deleted it". Treating those two the
+    // same is how a hand-written profile would get removed by a save that
+    // was only meant to touch a different one.
+    final readable = {
+      for (final p in KanshiConfigParser.parse(existing))
+        if (p.monitors.isNotEmpty) p.name,
+    };
+    final modelNames = profiles.map((p) => p.name).toSet();
+
+    for (final p in profiles) {
+      if (p.monitors.isEmpty) continue;
+      // Render the profile with the normal writer, then take its body: the
+      // rendering rules stay in one place and this only decides where the
+      // result goes.
+      final block = KanshiConfigWriter.render([p], options: writeOptions);
+      _assertBlockRoundTrips(p, block);
+      final nodes = ScfgDocument.parse(block).nodes;
+      if (nodes.isEmpty) continue;
+      if (!doc.replaceManagedChildren(p.name, nodes.first.children)) {
+        doc.appendProfile(block.trimRight().split('\n'));
+      }
     }
-    for (var i = 0; i < expected.length; i++) {
-      if (actual[i].name != expected[i].name) {
-        throw ConfigRoundTripException(
-            'profile ${i + 1} came back as "${actual[i].name}" instead of '
-            '"${expected[i].name}"');
-      }
-      if (actual[i].monitors.length != expected[i].monitors.length) {
-        throw ConfigRoundTripException(
-            'profile "${expected[i].name}" wrote '
-            '${expected[i].monitors.length} outputs, read back '
-            '${actual[i].monitors.length}');
-      }
+
+    for (final name in doc.profileNames.toList()) {
+      if (modelNames.contains(name)) continue;
+      if (!readable.contains(name)) continue;
+      doc.removeProfile(name);
+    }
+    return doc.render();
+  }
+
+  /// Verifies that a profile block reads back as the profile that produced
+  /// it.
+  ///
+  /// Scoped to the app's OWN rendering, not the whole file: since M9 the file
+  /// legitimately contains profiles and directives the model cannot express,
+  /// and comparing against those would report a loss that is actually a
+  /// preservation. What must hold is that nothing the app wrote came back
+  /// wrong — the check that would have caught the transposed-mode oscillation
+  /// before it shipped.
+  static void _assertBlockRoundTrips(Profile profile, String block) {
+    final back = KanshiConfigParser.parse(block);
+    if (back.length != 1) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" rendered to ${back.length} profiles');
+    }
+    if (back.single.name != profile.name) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" came back as "${back.single.name}"');
+    }
+    if (back.single.monitors.length != profile.monitors.length) {
+      throw ConfigRoundTripException(
+          'profile "${profile.name}" wrote ${profile.monitors.length} '
+          'outputs, read back ${back.single.monitors.length}');
     }
   }
 
@@ -234,31 +279,33 @@ class ConfigService {
   }
 
   Future<void> _saveProfilesLocked(List<Profile> profiles) async {
-    // Refuse to save when the user's main config pulls in other files
-    // via `include`. We only parse the main file, so a render-and-
-    // overwrite would silently drop the `include` line and orphan
-    // every profile defined in the included files. Better to throw
-    // here than to corrupt the user's setup.
-    if (await hasIncludeDirectives()) {
-      throw ConfigHasIncludesException(configPath);
+    // The include refusal is gone too, and for the same reason as M2's gate:
+    // it existed because re-rendering dropped the `include` line and orphaned
+    // every profile in the included files. Editing in place preserves the
+    // line, and profiles defined elsewhere were never in this file to lose.
+
+    // M2's refusal gate is gone, and deliberately so. It existed because the
+    // writer re-rendered the whole file from the model, so anything the
+    // parser had not read was deleted. Since M9 the save edits the document
+    // in place and only replaces what this app owns, which means a config
+    // full of syntax the model cannot express is no longer dangerous to save
+    // — and refusing to save it would leave those users with a read-only app
+    // for no remaining reason.
+
+    final existing =
+        await File(configPath).exists() ? await File(configPath).readAsString() : null;
+    final String rendered;
+    if (existing == null || existing.trim().isEmpty) {
+      // Nothing to preserve — render from the model, verifying each block.
+      for (final p in profiles.where((p) => p.monitors.isNotEmpty)) {
+        _assertBlockRoundTrips(
+            p, KanshiConfigWriter.render([p], options: writeOptions));
+      }
+      rendered = KanshiConfigWriter.render(profiles, options: writeOptions);
+    } else {
+      rendered = _editInPlace(existing, profiles);
     }
 
-    // Gate 1 — do not overwrite a file we only partially understood.
-    // Anything the parser could not read is not in the model, so rendering
-    // the model back would delete it.
-    final loss = await unparsedContentDescription();
-    if (loss != null) {
-      throw ConfigNotFullyParsedException(configPath, loss);
-    }
-
-    final rendered =
-        KanshiConfigWriter.render(profiles, options: writeOptions);
-
-    // Gate 2 — the rendered text must read back as the model that produced
-    // it. This catches writer bugs before they reach the user's disk rather
-    // than after, which is how the transposed-mode oscillation survived so
-    // long.
-    _assertRoundTrips(profiles, rendered);
 
     final file = File(configPath);
     await Directory(file.parent.path).create(recursive: true);

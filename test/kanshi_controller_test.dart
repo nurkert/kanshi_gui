@@ -697,13 +697,12 @@ void main() {
     expect(cfg.writeOptions.injectSwayWorkspaceExec, isFalse);
   });
 
-  test('init detects include directives and sets configHasIncludes',
+  test('a config with include directives is editable and keeps the include',
       () async {
-    // A user whose kanshi config carries `include` directives must
-    // not have their save path fire — that would render-and-overwrite
-    // the main config, dropping the include line. The controller
-    // sets a flag at init time that the save paths short-circuit on,
-    // and surfaces a callback to the UI for the persistent banner.
+    // This used to be refused outright: re-rendering the file from the model
+    // dropped the `include` line and orphaned every profile in the included
+    // files. Since M9 the save edits in place, so the line stays and the
+    // user gets their app back.
     final cfgPath = '${tmp.path}/config';
     await File(cfgPath).writeAsString(
       'include /etc/kanshi.d/work\nprofile foo {\n}\n',
@@ -716,19 +715,24 @@ void main() {
     final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
     final c = KanshiController(monitors: fake, config: cfg);
     await c.init();
-    expect(c.configHasIncludes, isTrue,
-        reason: 'init must detect include directives upfront so the '
-            'first mutation does not have to discover the issue '
-            'mid-flight. (The HomePage surfaces the banner from this '
-            'flag on first frame.)');
-    // Safe-start: opening the app must not write the config at all — not
-    // even an attempt — so a hand-written include-using config survives
-    // byte-for-byte untouched until the user makes a deliberate edit.
+    expect(c.saveBlockedReason, isNull,
+        reason: 'an include is no longer a reason to refuse');
+    // Safe-start still holds: opening the app must not write the config at
+    // all, so a hand-written config survives byte-for-byte until the user
+    // makes a deliberate edit.
     expect(
       await File(cfgPath).readAsString(),
       equals('include /etc/kanshi.d/work\nprofile foo {\n}\n'),
       reason: 'Opening the app must not write to disk.',
     );
+
+    // And a deliberate edit keeps it.
+    await cfg.saveProfiles([
+      Profile(name: 'foo', monitors: [_mon(id: 'A')]),
+    ]);
+    expect(await File(cfgPath).readAsString(),
+        contains('include /etc/kanshi.d/work'));
+    c.dispose();
   });
 
   test('opening the app does not write the kanshi config (safe-start)',
