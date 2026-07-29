@@ -47,6 +47,12 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+/// Vertical strip at the foot of the canvas that the floating presets pill
+/// occupies: its own height plus the 18px it is inset by. The canvas fits the
+/// arrangement above this so no screen is ever drawn underneath a control that
+/// would eat its clicks.
+const double _presetsLaneHeight = 80;
+
 class _HomePageState extends State<HomePage> {
   final Map<String, MonitorTileData> _dragRollback = {};
   bool? _wlMirrorAvailable;
@@ -537,8 +543,18 @@ class _HomePageState extends State<HomePage> {
                         // No top inset any more: the title bar is a real
                         // app bar above the canvas rather than a panel
                         // floating over it, so the canvas starts at the top.
+                        //
+                        // The bottom inset is the presets pill's lane. The
+                        // pill is painted ABOVE the tiles and takes pointer
+                        // events, so without reserving its strip a short
+                        // canvas put screens underneath it: they were drawn,
+                        // and drags, resize grips and the three-dot menu all
+                        // went to the pill instead. Fitting the arrangement
+                        // above it costs a little size and is honest about
+                        // where the user can actually click.
                         child: Padding(
-                          padding: EdgeInsets.zero,
+                          padding: const EdgeInsets.only(
+                              bottom: _presetsLaneHeight),
                           child: RepaintBoundary(
                             child: LayoutBuilder(
                       builder: (context, constraints) {

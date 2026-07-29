@@ -659,9 +659,9 @@ class KanshiController extends ChangeNotifier {
       // docking into an unknown arrangement leaves them editing a layout that
       // is not in front of them. A profile they chose or edited is never
       // taken away from them: that is what the scratch check buys.
-      final onScratch = _activeProfileIndex == null ||
-          _profiles[_activeProfileIndex!].name == _scratchSetupName;
-      if (!didAutoSwitch && onScratch && _findProfileMatchingCurrent() == null) {
+      if (!didAutoSwitch &&
+          _activeIsScratch &&
+          _findProfileMatchingCurrent() == null) {
         // ignore: discarded_futures
         ensureCurrentSetupMatches(persist: false);
       }
@@ -795,20 +795,20 @@ class KanshiController extends ChangeNotifier {
       // doing, so drift detection compared the live layout against itself
       // and could never report anything.
       final snapshot = List<MonitorTileData>.from(_currentMonitors);
-      final scratch = _scratchSetupName;
-      final idx =
-          scratch == null ? -1 : _profiles.indexWhere((p) => p.name == scratch);
+      final idx = _scratchIndex;
       if (idx == -1) {
-        final name = _freeSetupName();
-        _scratchSetupName = name;
-        _store.add(Profile(name: name, monitors: snapshot), makeActive: true);
+        _store.add(Profile(name: _freeSetupName(), monitors: snapshot),
+            makeActive: true);
+        _markScratch(_activeProfileIndex!);
       } else {
-        // Still the untouched scratch from this session, so it may be
-        // re-pointed at whatever is plugged in now. Once the user edits it,
-        // [_pushHistory] releases it and the next unknown setup gets its own
-        // number instead of overwriting what they just arranged.
+        // Still the untouched capture from this session, so it may be
+        // re-pointed at whatever is plugged in now. The moment the user
+        // changes anything its content stops matching the fingerprint, and
+        // the next unknown setup gets its own number instead of overwriting
+        // what they arranged.
         _store.setMonitors(idx, snapshot);
         _activeProfileIndex = idx;
+        _markScratch(idx);
       }
     }
 
@@ -837,19 +837,58 @@ class KanshiController extends ChangeNotifier {
   void _pushHistory(
     String label, {
     Map<String, MonitorTileData>? overrides,
-  }) {
-    // Every user edit funnels through here, which makes it the one honest
-    // place to decide that the setup captured on their behalf has stopped
-    // being scratch and become theirs. After this, an unknown set of screens
-    // gets a fresh number rather than overwriting what they just arranged.
-    _scratchSetupName = null;
-    _history.push(_profiles, _activeProfileIndex, label, overrides: overrides);
+  }) =>
+      _history.push(_profiles, _activeProfileIndex, label,
+          overrides: overrides);
+
+  /// The profile this session captured because nothing matched the connected
+  /// screens, together with the exact content it was captured with.
+  ///
+  /// The pair is what makes "the user has not touched this yet" answerable.
+  /// Keying on the name alone looked equivalent and was not: `updateMonitor`
+  /// (a rotation from the screen strip) mutates the active profile without
+  /// going through the undo stack, so a name-keyed marker stayed armed and the
+  /// next hotplug re-pointed the profile and threw the rotation away. And a
+  /// name is not unique over time — delete `Setup 1`, let a capture take the
+  /// freed name, then undo the delete, and the restored profile answers to a
+  /// marker that was never about it. Comparing the CONTENT closes both: any
+  /// mutation, by any path, through any number of call sites, releases the
+  /// capture without that path having to know the mechanism exists.
+  String? _scratchSetupName;
+  String? _scratchFingerprint;
+
+  /// Everything about a profile the user could have changed. Deliberately not
+  /// `hashCode`: a collision here silently discards an edit.
+  static String _fingerprint(Profile p) => [
+        p.name,
+        for (final m in p.monitors)
+          '${m.id}|${m.x}|${m.y}|${m.width}|${m.height}|${m.scale}|'
+              '${m.rotation}|${m.refresh}|${m.enabled}|${m.mirrorOf}',
+      ].join(';');
+
+  /// Index of the still-untouched capture, or -1 when there is none.
+  int get _scratchIndex {
+    final name = _scratchSetupName;
+    if (name == null) return -1;
+    final idx = _profiles.indexWhere((p) => p.name == name);
+    if (idx == -1) return -1;
+    return _fingerprint(_profiles[idx]) == _scratchFingerprint ? idx : -1;
   }
 
-  /// The profile this session created because nothing matched the connected
-  /// screens, for as long as the user has not edited it. Null once they have
-  /// — see [_pushHistory].
-  String? _scratchSetupName;
+  /// True when what is on the canvas is a capture the user has not adopted —
+  /// so re-pointing it at newly connected screens takes nothing away from
+  /// them. False for any profile they chose, arranged, or restored.
+  bool get _activeIsScratch {
+    final i = _activeProfileIndex;
+    if (i == null) return true;
+    return i == _scratchIndex;
+  }
+
+  /// Records [index] as the untouched capture.
+  void _markScratch(int index) {
+    _scratchSetupName = _profiles[index].name;
+    _scratchFingerprint = _fingerprint(_profiles[index]);
+  }
 
   /// The lowest unused `Setup N`.
   ///
@@ -889,6 +928,14 @@ class KanshiController extends ChangeNotifier {
   Future<void> _restoreSnapshot(HistoryEntry entry) async {
     final activeChanged = _activeProfileIndex != entry.activeIndex;
     _store.replaceAll(entry.profiles, activeIndex: entry.activeIndex);
+    // Undo and redo are the user managing their setups deliberately, so
+    // nothing that comes back through here is still ours to re-point. The
+    // content fingerprint alone would not settle this: a name is not unique
+    // over time, and a profile deleted, re-captured under the freed name and
+    // then restored can come back matching a marker that was never about it.
+    // Whatever the restored state is, it is now the user's.
+    _scratchSetupName = null;
+    _scratchFingerprint = null;
     // If undoing rolled the user *back* to a different active profile
     // (e.g. they hit Undo on the auto-switch toast), arm the
     // suggestion-cooldown so a flaky cable wiggle doesn't immediately
@@ -1033,16 +1080,17 @@ class KanshiController extends ChangeNotifier {
     // adding a second profile the user would have to tell apart from it. It is
     // still re-pointed at what is connected right now: the scratch may predate
     // a hotplug, and the button names the present, not when it was captured.
-    final scratch = _scratchSetupName;
-    final existing =
-        scratch == null ? -1 : _profiles.indexWhere((p) => p.name == scratch);
+    final existing = _scratchIndex;
 
-    // Pushed before either branch mutates, and it also releases the scratch:
-    // from here the profile is one the user asked for by name.
     _pushHistory('create profile');
     if (existing != -1) {
+      // Adopted rather than re-captured: the fingerprint is deliberately NOT
+      // refreshed, so from here this is a profile the user asked for and a
+      // later hotplug will leave it alone.
       _store.setMonitors(existing, captured);
       _activeProfileIndex = existing;
+      _scratchSetupName = null;
+      _scratchFingerprint = null;
     } else {
       _store.add(Profile(name: _freeSetupName(), monitors: captured),
           makeActive: true);
