@@ -72,6 +72,12 @@ jobs:
         with:
           name: deb-${{ matrix.arch }}
           path: build/kanshi-gui_*_${{ matrix.arch }}.deb
+          # The default is `warn`: a glob that matches nothing produces a
+          # green step, and the release job then publishes a "latest" release
+          # with no package in it. Since allowUpdates is false, that empty
+          # release cannot be corrected under the same tag — the version would
+          # have to be burned. Fail here instead.
+          if-no-files-found: error
 
   release:
     name: Create GitHub release
@@ -105,6 +111,25 @@ jobs:
           merge-multiple: true
           path: dist
 
+      # The release page used to go out with an empty body, so the one place
+      # a user checks before upgrading said nothing about what changed — and
+      # 2.0.1 in particular exists to tell them 2.0.0 was unusable.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          # The heading carries the marketing version only ("## 2.0.1"), while
+          # the tag carries the build number too ("v2.0.1+41").
+          heading="${version%%+*}"
+          awk -v want="## $heading" '
+            $0 == want {found = 1; next}
+            found && /^## / {exit}
+            found {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "No CHANGELOG.md section for '$heading'." > RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
+
       - name: Create release
         uses: ncipollo/release-action@v1
         with:
@@ -112,6 +137,7 @@ jobs:
           name: v${{ steps.version.outputs.value }}
           artifacts: dist/*.deb
           artifactErrorsFailBuild: true
+          bodyFile: RELEASE_NOTES.md
           # No allowUpdates: re-running against an existing release used to
           # replace its binaries in place, so the tag and the published .deb
           # could end up describing different commits. Publishing twice for
