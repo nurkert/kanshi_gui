@@ -40,7 +40,13 @@ class ProfileStore {
     _profiles
       ..clear()
       ..addAll([
-        for (final p in next) Profile(name: p.name, monitors: [...p.monitors]),
+        for (final p in next)
+          Profile(
+            name: p.name,
+            monitors: [...p.monitors],
+            workspaceMap:
+                p.workspaceMap == null ? null : Map.of(p.workspaceMap!),
+          ),
       ]);
     _activeIndex = _clamp(activeIndex);
   }
@@ -90,8 +96,11 @@ class ProfileStore {
   /// Replaces the monitor list of [index] wholesale.
   void setMonitors(int index, List<MonitorTileData> monitors) {
     if (index < 0 || index >= _profiles.length) return;
-    _profiles[index] =
-        Profile(name: _profiles[index].name, monitors: [...monitors]);
+    _profiles[index] = Profile(
+      name: _profiles[index].name,
+      monitors: [...monitors],
+      workspaceMap: _profiles[index].workspaceMap,
+    );
   }
 
   /// Applies [update] to the monitor [outputId] inside the profile named
@@ -115,7 +124,11 @@ class ProfileStore {
     final i = mons.indexWhere((m) => m.id == outputId);
     if (i == -1) return false;
     mons[i] = update(mons[i]);
-    _profiles[pIdx] = Profile(name: _profiles[pIdx].name, monitors: mons);
+    _profiles[pIdx] = Profile(
+      name: _profiles[pIdx].name,
+      monitors: mons,
+      workspaceMap: _profiles[pIdx].workspaceMap,
+    );
     return true;
   }
 
@@ -139,7 +152,11 @@ class ProfileStore {
     final i = mons.indexWhere((m) => m.id == outputId);
     if (i == -1) return false;
     mons[i] = update(mons[i]);
-    _profiles[idx] = Profile(name: _profiles[idx].name, monitors: mons);
+    _profiles[idx] = Profile(
+      name: _profiles[idx].name,
+      monitors: mons,
+      workspaceMap: _profiles[idx].workspaceMap,
+    );
     return true;
   }
 

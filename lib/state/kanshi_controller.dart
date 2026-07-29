@@ -489,6 +489,12 @@ class KanshiController extends ChangeNotifier {
     // The status line may only promise the layout comes back if something
     // will actually re-apply it at boot.
     await refreshKanshiRunning();
+    // Notice where the user's workspaces are, once the repair pass above has
+    // settled the layout. Only records what it can attribute to this setup;
+    // see [learnWorkspaceMap] for why it is cautious about the moment.
+    if (config.writeOptions.injectSwayWorkspaceExec) {
+      await learnWorkspaceMap();
+    }
   }
 
   /// Reads the live `workspace_number → output_name` mapping from the
@@ -509,6 +515,65 @@ class KanshiController extends ChangeNotifier {
   /// the GUI's in-memory model has the new ones. Force-apply makes the
   /// declarations land. The chain is idempotent enough that re-running
   /// is cheap (declarations no-op, focus dances end at ws 1).
+  /// Records where the user's workspaces actually are, for this setup.
+  ///
+  /// The setting this replaces asked "interleaved or grouped?" — a question
+  /// nobody can answer without trying both. People know where they want their
+  /// workspaces and express it by putting them there; the app's job is to
+  /// notice and put them back.
+  ///
+  /// Deliberately cautious about WHEN it learns, because learning the wrong
+  /// moment cements the wrong answer — and this is the feature that was
+  /// reported broken. It refuses unless:
+  ///   * a live compositor is there to be asked,
+  ///   * a setup is active to attribute the observation to,
+  ///   * the layout is NOT drifted, so the screens are where the setup says,
+  ///   * every workspace it can see sits on an output this setup knows.
+  /// Anything else means the observation describes a transient state.
+  Future<bool> learnWorkspaceMap() async {
+    if (!monitors.isLive) return false;
+    final idx = _activeProfileIndex;
+    if (idx == null) return false;
+    if (hasLayoutDrift) return false;
+
+    Map<int, String> live;
+    try {
+      live = await monitors.getWorkspaceOutputs();
+    } catch (e) {
+      debugPrint('learnWorkspaceMap: getWorkspaceOutputs failed: $e');
+      return false;
+    }
+    if (_isDisposed || live.isEmpty) return false;
+
+    final known = {
+      for (final m in _profiles[idx].monitors)
+        if (m.enabled && m.mirrorOf == null) _resolveOutputName(m.id),
+    };
+    final learned = <int, String>{};
+    for (final entry in live.entries) {
+      if (entry.key < 1) continue;
+      if (!known.contains(entry.value)) return false;
+      learned[entry.key] = entry.value;
+    }
+    if (learned.isEmpty) return false;
+
+    final profile = _profiles[idx];
+    if (_sameWorkspaceMap(profile.workspaceMap, learned)) return false;
+    profile.workspaceMap = learned;
+    _scheduleSave();
+    notifyListeners();
+    return true;
+  }
+
+  static bool _sameWorkspaceMap(Map<int, String>? a, Map<int, String> b) {
+    if (a == null) return false;
+    if (a.length != b.length) return false;
+    for (final e in b.entries) {
+      if (a[e.key] != e.value) return false;
+    }
+    return true;
+  }
+
   Future<void> _verifyAndFixWorkspacePlacement({bool force = false}) async {
     if (_isDisposed) return;
     final activeIdx = _activeProfileIndex;
@@ -521,6 +586,7 @@ class KanshiController extends ChangeNotifier {
       liveOutputs: _currentMonitors,
       distribution: config.writeOptions.workspaceDistribution,
       resolveConnector: _resolveOutputName,
+      learnedMap: _profiles[activeIdx].workspaceMap,
       force: force,
       isCancelled: () => _isDisposed,
     );

@@ -67,7 +67,12 @@ class HistoryStack {
           if (ov != null) mons[j] = ov;
         }
       }
-      snap.add(Profile(name: p.name, monitors: mons));
+      snap.add(Profile(
+        name: p.name,
+        monitors: mons,
+        workspaceMap:
+            p.workspaceMap == null ? null : Map.of(p.workspaceMap!),
+      ));
     }
     _push(_undo, HistoryEntry(
       profiles: snap,
@@ -114,7 +119,12 @@ class HistoryStack {
       HistoryEntry(
         profiles: [
           for (final p in profiles)
-            Profile(name: p.name, monitors: [...p.monitors]),
+            Profile(
+              name: p.name,
+              monitors: [...p.monitors],
+              workspaceMap:
+                  p.workspaceMap == null ? null : Map.of(p.workspaceMap!),
+            ),
         ],
         activeIndex: activeIndex,
         label: label,
