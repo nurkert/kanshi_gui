@@ -274,9 +274,9 @@ void main() {
           ]),
         ],
       );
-      // ensureCurrentSetupMatches creates 'Current Setup' because the
+      // ensureCurrentSetupMatches captures a numbered setup because the
       // single-Samsung profile cannot cover both connected outputs.
-      expect(c.activeProfile?.name, equals('Current Setup'),
+      expect(c.activeProfile?.name, equals('Setup 1'),
           reason: 'A single-slot profile must not double-claim two '
               'identical-EDID outputs.');
     });

@@ -653,6 +653,18 @@ class KanshiController extends ChangeNotifier {
         _reconcileMirrors();
         _maybeFireProfileSuggestion();
       }
+      // Nothing saved describes the screens that are now plugged in, and what
+      // is on the canvas is a setup we captured rather than one the user
+      // picked — so re-point it at what is actually there. Without this,
+      // docking into an unknown arrangement leaves them editing a layout that
+      // is not in front of them. A profile they chose or edited is never
+      // taken away from them: that is what the scratch check buys.
+      final onScratch = _activeProfileIndex == null ||
+          _profiles[_activeProfileIndex!].name == _scratchSetupName;
+      if (!didAutoSwitch && onScratch && _findProfileMatchingCurrent() == null) {
+        // ignore: discarded_futures
+        ensureCurrentSetupMatches(persist: false);
+      }
       // A fresh hotplug invalidates any prior dismissal of the drift
       // banner — the new live layout might genuinely diverge from the
       // active profile (the kanshi-daemon position-drop race) and the
@@ -777,18 +789,24 @@ class KanshiController extends ChangeNotifier {
     if (matchIdx != null) {
       _activeProfileIndex = matchIdx;
     } else {
-      const currentName = 'Current Setup';
       // COPY the live list. Handing `_currentMonitors` itself to the profile
       // aliased the compositor snapshot into the editor: every drag wrote
       // through the profile into what the app believed the compositor was
       // doing, so drift detection compared the live layout against itself
       // and could never report anything.
       final snapshot = List<MonitorTileData>.from(_currentMonitors);
-      final idx = _profiles.indexWhere((p) => p.name == currentName);
+      final scratch = _scratchSetupName;
+      final idx =
+          scratch == null ? -1 : _profiles.indexWhere((p) => p.name == scratch);
       if (idx == -1) {
-        _store.add(Profile(name: currentName, monitors: snapshot),
-            makeActive: true);
+        final name = _freeSetupName();
+        _scratchSetupName = name;
+        _store.add(Profile(name: name, monitors: snapshot), makeActive: true);
       } else {
+        // Still the untouched scratch from this session, so it may be
+        // re-pointed at whatever is plugged in now. Once the user edits it,
+        // [_pushHistory] releases it and the next unknown setup gets its own
+        // number instead of overwriting what they just arranged.
         _store.setMonitors(idx, snapshot);
         _activeProfileIndex = idx;
       }
@@ -819,9 +837,33 @@ class KanshiController extends ChangeNotifier {
   void _pushHistory(
     String label, {
     Map<String, MonitorTileData>? overrides,
-  }) =>
-      _history.push(_profiles, _activeProfileIndex, label,
-          overrides: overrides);
+  }) {
+    // Every user edit funnels through here, which makes it the one honest
+    // place to decide that the setup captured on their behalf has stopped
+    // being scratch and become theirs. After this, an unknown set of screens
+    // gets a fresh number rather than overwriting what they just arranged.
+    _scratchSetupName = null;
+    _history.push(_profiles, _activeProfileIndex, label, overrides: overrides);
+  }
+
+  /// The profile this session created because nothing matched the connected
+  /// screens, for as long as the user has not edited it. Null once they have
+  /// — see [_pushHistory].
+  String? _scratchSetupName;
+
+  /// The lowest unused `Setup N`.
+  ///
+  /// Named rather than numbered-from-count so deleting `Setup 2` of three
+  /// does not make the next capture collide with `Setup 3`. Names are the key
+  /// the config file is edited by, so a collision is not a cosmetic problem:
+  /// two profiles sharing a name resolve to one block on save.
+  String _freeSetupName() {
+    final taken = _profiles.map((p) => p.name).toSet();
+    for (var n = 1;; n++) {
+      final candidate = 'Setup $n';
+      if (!taken.contains(candidate)) return candidate;
+    }
+  }
 
   /// Reverts the most recent mutation by replacing `_profiles` and the
   /// active index with the top of the undo stack, pushing the current
@@ -976,20 +1018,35 @@ class KanshiController extends ChangeNotifier {
   }
 
   void createProfileFromCurrentSetup() {
+    final captured = _currentMonitors.map((m) {
+      return m.rotation % 180 == 0
+          ? m.copyWith(orientation: 'landscape')
+          : m.copyWith(
+              width: m.height,
+              height: m.width,
+              orientation: 'portrait',
+            );
+    }).toList();
+
+    // If this session already captured these screens as an untouched scratch
+    // setup, "remember the screens I have now" means keep THAT one rather than
+    // adding a second profile the user would have to tell apart from it. It is
+    // still re-pointed at what is connected right now: the scratch may predate
+    // a hotplug, and the button names the present, not when it was captured.
+    final scratch = _scratchSetupName;
+    final existing =
+        scratch == null ? -1 : _profiles.indexWhere((p) => p.name == scratch);
+
+    // Pushed before either branch mutates, and it also releases the scratch:
+    // from here the profile is one the user asked for by name.
     _pushHistory('create profile');
-    final newProfile = Profile(
-      name: 'Current Setup',
-      monitors: _currentMonitors.map((m) {
-        return m.rotation % 180 == 0
-            ? m.copyWith(orientation: 'landscape')
-            : m.copyWith(
-                width: m.height,
-                height: m.width,
-                orientation: 'portrait',
-              );
-      }).toList(),
-    );
-    _store.add(newProfile, makeActive: true);
+    if (existing != -1) {
+      _store.setMonitors(existing, captured);
+      _activeProfileIndex = existing;
+    } else {
+      _store.add(Profile(name: _freeSetupName(), monitors: captured),
+          makeActive: true);
+    }
     _scheduleSave();
     notifyListeners();
   }

@@ -511,6 +511,17 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             body: Row(
+              // The Scaffold hands its body a LOOSE height (0..available), and
+              // every child of the canvas Stack below is a Positioned.fill —
+              // so the Stack has nothing to take its height from and the whole
+              // row collapses to zero. That is invisible in the widget code
+              // and total on screen: the canvas renders, but 0 px tall, and
+              // every tile is scaled by a factor of 0. Stretching the row is
+              // what pins the canvas to the space the Scaffold left for it.
+              // Until M10 the title bar was a non-positioned child INSIDE this
+              // Stack and gave it a height by accident; moving it to `appBar`
+              // removed the accident and with it the canvas.
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Expanded(
                   child: Stack(

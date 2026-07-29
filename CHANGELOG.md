@@ -1,6 +1,38 @@
 # Changelog
 
-## 2.0.0 — unreleased
+## 2.0.1
+
+A repair release. 2.0.0 shipped with a canvas that did not draw, which made
+the app unusable — everything below follows from that and from what looking
+into it turned up.
+
+### Fixed
+
+- **The screens are visible again.** The canvas rendered at zero height, so
+  every tile was scaled by a factor of 0 and the area where the monitors
+  belong was simply empty. Nothing threw and nothing was logged: the Scaffold
+  hands its body a loose height, every child of the canvas Stack is a
+  `Positioned.fill`, and a Stack with no non-positioned child takes no height
+  from that. Until 2.0.0 the title bar sat inside that Stack and gave it a
+  height by accident; promoting it to a real `appBar` removed the accident.
+  There are now widget tests that measure the rendered boxes rather than
+  merely assert the widgets exist — the whole test suite passed while the app
+  showed nothing, and only a measured test can tell those two apart.
+- **A setup captured for you gets its own name.** When no saved profile fits
+  the connected screens, the app captures them so there is always something
+  to arrange. That capture was always called "Current Setup" and reused by
+  name, so a second desk overwrote the first desk's capture. Captures are now
+  numbered — `Setup 1`, `Setup 2`, taking the lowest free number — and a
+  capture is only ever re-pointed while you have not edited it. Once you
+  arrange it, it is yours and the next unknown desk gets its own.
+- **Pressing "remember the screens I have now" twice no longer creates two
+  profiles with the same name.** Names are the key the config file is edited
+  by, so two profiles sharing one collapsed into a single block when saved.
+- **Docking into an unknown arrangement re-points the captured setup** instead
+  of leaving you editing a layout that is not in front of you. A profile you
+  chose or edited yourself is never taken away from you.
+
+## 2.0.0
 
 A major version. The short version: it no longer loses your layout, it no
 longer loses your config, and it stopped asking you questions it can answer

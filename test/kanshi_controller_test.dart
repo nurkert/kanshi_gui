@@ -75,12 +75,12 @@ void main() {
     expect(c.activeProfile?.name, equals('Match'));
   });
 
-  test('init() creates a Current Setup when nothing matches', () async {
+  test('init() captures the connected screens when nothing matches', () async {
     final cfg = _tmpConfig(tmp);
     final fake = FakeMonitorService(outputs: [_mon(id: 'A')]);
     final c = KanshiController(monitors: fake, config: cfg);
     await c.init();
-    expect(c.activeProfile?.name, equals('Current Setup'));
+    expect(c.activeProfile?.name, equals('Setup 1'));
   });
 
   test('renameProfile rejects duplicates', () async {

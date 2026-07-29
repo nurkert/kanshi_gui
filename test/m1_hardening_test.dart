@@ -177,7 +177,7 @@ void main() {
         service: fake,
       );
       // With nothing connected, init() cannot match a profile and activates
-      // an empty "Current Setup"; select the one under test explicitly.
+      // an empty captured setup; select the one under test explicitly.
       two.setActiveProfile(two.profiles.indexWhere((p) => p.name == 'Desk'));
       expect((await two.toggleEnabled('A', false)).message,
           isNot(contains('last enabled output')));
@@ -211,7 +211,7 @@ void main() {
       );
       await c.init();
 
-      expect(c.profiles.single.name, 'Current Setup');
+      expect(c.profiles.single.name, 'Setup 1');
       final beforeX = c.currentMonitors.single.x;
 
       c.snapAndCommit(
