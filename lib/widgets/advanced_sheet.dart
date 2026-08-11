@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/design/tokens.dart';
+import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
@@ -55,6 +56,10 @@ class AdvancedSheet extends StatefulWidget {
 
 class _AdvancedSheetState extends State<AdvancedSheet> {
   AppSettings get s => widget.settings;
+
+  /// True once the workspace mode was changed in this sheet, which is the
+  /// only moment the sway caveat under the preview is worth the words.
+  bool _workspaceModeChanged = false;
 
   void _persist() {
     unawaited(s.save().catchError((Object e) {
@@ -110,6 +115,68 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
                   },
                 ),
               ),
+              if (widget.controller.supportsWorkspaceManagement) ...[
+                const SizedBox(height: Sp.x4),
+                _row(
+                  c,
+                  label: 'Workspaces',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Read from the controller, not from settings: the
+                      // controller is what actually decides where workspaces
+                      // go, and if writing settings.json fails the control
+                      // must still show the mode the app is in.
+                      DropdownButton<WorkspaceManagementMode>(
+                        value: widget.controller.workspaceMode,
+                        isExpanded: true,
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(
+                            value: WorkspaceManagementMode.off,
+                            child: Text('Leave them alone'),
+                          ),
+                          DropdownMenuItem(
+                            value: WorkspaceManagementMode.interleaved,
+                            child: Text('Number keys walk left to right'),
+                          ),
+                          DropdownMenuItem(
+                            value: WorkspaceManagementMode.grouped,
+                            child: Text('One block of numbers per screen'),
+                          ),
+                          DropdownMenuItem(
+                            value: WorkspaceManagementMode.learned,
+                            child: Text('Keep them where I put them'),
+                          ),
+                        ],
+                        onChanged: (mode) =>
+                            unawaited(_setWorkspaceMode(mode)),
+                      ),
+                      const SizedBox(height: Sp.x1),
+                      Text(
+                        _workspacePreview(),
+                        style: T.caption.copyWith(color: c.textSecondary),
+                      ),
+                      // Only after a change, and only because sway cannot do
+                      // what the line above promises within one session: it
+                      // appends each workspace→output binding to a list and
+                      // uses the first entry that resolves, so a workspace
+                      // that already had a home keeps it. The ones that never
+                      // had one — the reason this setting exists — move now.
+                      if (_workspaceModeChanged) ...[
+                        const SizedBox(height: Sp.x1),
+                        Text(
+                          'Workspaces you already have open move now. Any that '
+                          'sway already placed elsewhere follow after your '
+                          'next login.',
+                          style: T.caption.copyWith(color: c.textTertiary),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
               const Divider(height: Sp.x8),
               _row(
                 c,
@@ -162,6 +229,56 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
         ),
       ),
     );
+  }
+
+  Future<void> _setWorkspaceMode(WorkspaceManagementMode? mode) async {
+    if (mode == null || mode == widget.controller.workspaceMode) return;
+    _workspaceModeChanged = true;
+    s.workspaceManagement = mode;
+    _persist();
+    try {
+      await widget.controller.setWorkspaceMode(mode);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not change workspace handling: $e')),
+      );
+      return;
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Spells out what the chosen mode does to THESE screens, because the
+  /// mode names describe a rule and the question people actually have is
+  /// "where does $mod+9 take me".
+  String _workspacePreview() {
+    final mode = widget.controller.workspaceMode;
+    final distribution = mode.distribution;
+    if (distribution == null) {
+      return r'Your $mod+number keys are left to sway.';
+    }
+    final mons = [
+      for (final m in widget.controller.activeMonitors.isNotEmpty
+          ? widget.controller.activeMonitors
+          : widget.controller.currentMonitors)
+        if (m.enabled && m.mirrorOf == null) m,
+    ];
+    final ranked = resolveWorkspaceRanks(mons);
+    if (ranked.isEmpty) return 'No screens to spread them across yet.';
+    final map = resolveWorkspaceMap(
+      ranked,
+      distribution: distribution,
+      learned: mode.learns ? widget.controller.activeProfile?.workspaceMap : null,
+    );
+    final perScreen = [
+      for (final entry in ranked)
+        (map.entries.where((e) => e.value == entry.id).map((e) => e.key).toList()
+              ..sort())
+            .join(' '),
+    ];
+    return 'Left to right: '
+        '${perScreen.map((s) => s.isEmpty ? '—' : s).join('  ·  ')}';
   }
 
   Widget _row(
