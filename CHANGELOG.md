@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.0.3
+
+### Fixed
+
+- **Workspaces above the number of screens had no home.** On a three-screen
+  desk, `$mod+4` through `$mod+9` opened wherever the cursor happened to be.
+  Since M9 a setup that had ever been observed used its recorded
+  workspace map *instead of* the distribution rule — but sway only reports the
+  workspaces that currently exist, so what got recorded was whatever was open
+  at that moment. Three workspaces up meant three homes written, and the other
+  six had no `workspace N output X` line anywhere in the config. sway puts an
+  unbound workspace on the focused output, and the next observation then wrote
+  that accident down as a preference. The rule now covers 1–9 unconditionally
+  and an observation only overlays it, so a hole is no longer expressible.
+
+- **The workspace layout is declared on every launch.** The startup repair pass
+  compared the live mapping against the intended one and did nothing when they
+  agreed — but a workspace that has no home *and* does not exist yet is
+  invisible to that comparison, which is exactly the case that was broken.
+  The `workspace N output X` half of the chain is silent and idempotent, so it
+  now runs unconditionally; the focus-and-move half still only runs on a real
+  mismatch, and still never steals the focus on a quiet launch.
+
+### Added
+
+- **The workspace setting is reachable again**, under Advanced → Workspaces,
+  on sway. Four choices: leave them alone, let the number keys walk left to
+  right (1 4 7 · 2 5 8 · 3 6 9 on three screens), give each screen one
+  contiguous block, or keep them where you put them. Underneath the choice the
+  sheet spells out what it does to *your* screens, because the question people
+  actually have is where `$mod+9` takes them.
+
+### Changed
+
+- **Learning where you put your workspaces is now one of those four choices,
+  not the behaviour underneath all of them.** M9 applied it to everyone,
+  including users who had explicitly asked for a distribution; the setting kept
+  saying `interleaved` while the app did something else. A config still
+  carrying `# kanshi_gui:ws` annotations while a rule is selected is corrected
+  on the next launch — the annotations are an observation, not your data, and
+  the "keep them where I put them" mode records the setup you are on again the
+  moment you pick it.
+
+### Known limitation
+
+- Within a running sway session, a workspace that already has the *wrong* home
+  keeps it. sway appends each `workspace N output X` to a list and uses the
+  first entry that resolves, so a later declaration can fill a missing binding
+  but never replace one (`sway/commands/workspace.c`,
+  `workspace_get_initial_output`). Workspaces that never had a home — the ones
+  that were opening under the cursor — are fixed immediately; a stale one
+  clears on the next login, or right away with
+  `swaymsg reload && kanshictl reload`.
+
 ## 2.0.2
 
 ### Added

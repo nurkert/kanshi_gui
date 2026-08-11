@@ -72,11 +72,21 @@ class WorkspacePlacement {
       final ranked = resolveWorkspaceRanks(resolved);
       if (ranked.isEmpty) return;
 
-      // An observed map is the truth for this setup; the distribution rule
-      // only fills in for one that has never been observed.
-      final want = learnedMap != null && learnedMap.isNotEmpty
-          ? learnedMap
-          : expectedMapping(ranked, distribution);
+      // The rule covers all of 1..maxWorkspaces; an observed map only
+      // overlays it. Anything less leaves workspaces with no home at all —
+      // see [resolveWorkspaceMap]. The observation is restated in the live
+      // connector names `ranked` is keyed by, because a profile addressed by
+      // EDID descriptor would otherwise have every entry read as unknown.
+      final want = expectedMapping(
+        ranked,
+        distribution,
+        learned: learnedMap == null
+            ? null
+            : {
+                for (final e in learnedMap.entries)
+                  e.key: resolveConnector(e.value),
+              },
+      );
 
       Map<int, String> actual;
       try {
@@ -87,20 +97,33 @@ class WorkspacePlacement {
       }
       if (isCancelled?.call() ?? false) return;
 
-      if (!force && !needsRepair(want, actual)) return;
-
-      final criteria = <String, OutputCriteria>{
-        for (final m in resolved)
-          if (m.edidDescriptor.isNotEmpty)
-            m.id: OutputCriteria.description(m.edidDescriptor),
-      };
-      final chain = learnedMap != null && learnedMap.isNotEmpty
-          ? buildLearnedWorkspaceChain(learnedMap, criteria: criteria)
-          : buildSwayWorkspaceChain(
-              ranked,
-              distribution: distribution,
-              criteria: criteria,
-            );
+      // The SAME chooser the writer uses, not a hand-rolled map. Two panels of
+      // the same model with no distinguishing serial share a descriptor, and
+      // sway cannot tell them apart from it — [chooseOutputCriteria] falls
+      // back to connector names for exactly that case. Reimplementing the map
+      // inline skipped the fallback, so both screens' workspaces resolved onto
+      // whichever one sway found first. This pass now runs on every launch,
+      // which would have turned a rare bug into a reliable one.
+      final criteria = chooseOutputCriteria(
+        resolved.map((m) => m.id),
+        (connector) {
+          final m = resolved.firstWhere((e) => e.id == connector);
+          return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
+        },
+      );
+      // Two halves, and which one runs is the whole cost/benefit of this pass.
+      //
+      // The full chain focuses each workspace in turn to force-move it, which
+      // is visible, so it only runs when the live layout actually disagrees.
+      // The declarations alone are invisible, and they cover the case this
+      // pass is otherwise blind to: sway reports the workspaces it HAS, so one
+      // that has no home AND does not exist yet is indistinguishable from one
+      // that is simply closed. Declaring all of them every time is what stops
+      // `$mod+9` opening under the cursor. See [buildWorkspaceDeclarations]
+      // for what a declaration can and cannot change.
+      final chain = force || needsRepair(want, actual)
+          ? buildWorkspaceChain(want, criteria: criteria)
+          : buildWorkspaceDeclarations(want, criteria: criteria);
       if (chain == null) return;
       try {
         await monitors.applyWorkspaceChain(chain);
@@ -112,19 +135,19 @@ class WorkspacePlacement {
     }
   }
 
-  /// The workspace → output mapping the chain will produce.
+  /// The workspace → output mapping the chain will produce, for every
+  /// workspace 1..[maxWorkspaces].
   static Map<int, String> expectedMapping(
     List<WorkspaceRankEntry> ranked,
-    WorkspaceDistribution distribution,
-  ) {
-    final n = ranked.length;
-    return {
-      for (var ws = 1; ws <= maxWorkspaces; ws++)
-        ws: ranked[workspaceSlotRank(ws, n, distribution,
-                maxWorkspaces: maxWorkspaces)]
-            .id,
-    };
-  }
+    WorkspaceDistribution distribution, {
+    Map<int, String>? learned,
+  }) =>
+      resolveWorkspaceMap(
+        ranked,
+        maxWorkspaces: maxWorkspaces,
+        distribution: distribution,
+        learned: learned,
+      );
 
   /// Whether the live mapping disagrees with the intended one.
   ///

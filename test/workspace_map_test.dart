@@ -24,9 +24,13 @@ MonitorTileData _mon({required String id, double x = 0}) => MonitorTileData(
       orientation: 'landscape',
     );
 
-/// Where the workspaces go is learned, not configured. "Interleaved or
-/// grouped?" is a question nobody can answer without trying both; people know
-/// where they want their workspaces and express it by putting them there.
+/// Where the workspaces go can be learned rather than ruled: people know where
+/// they want their workspaces and express it by putting them there.
+///
+/// This is [WorkspaceManagementMode.learned], one choice among four — it was
+/// briefly the only behaviour, applied even to users who had asked for a
+/// distribution, and an observation replaced the rule instead of overlaying
+/// it. See workspace_grid_test.dart for what that cost.
 void main() {
   late Directory tmp;
   setUp(() => tmp = Directory.systemTemp.createTempSync('kanshi_ws_'));
@@ -37,7 +41,8 @@ void main() {
   ConfigService cfg() => ConfigService(
         configPath: '${tmp.path}/config',
         backupPrefix: '${tmp.path}/backups/config.bak',
-        writeOptions: KanshiWriteOptions.swayDefaults,
+        writeOptions: KanshiWriteOptions.swayDefaults
+            .copyWith(followLearnedWorkspaces: true),
       );
 
   group('persistence', () {
@@ -65,8 +70,7 @@ void main() {
       expect(back.single.workspaceMap, isNull);
     });
 
-    test('the chain follows the observed map, not the distribution rule',
-        () async {
+    test('the chain follows the observed map where there is one', () async {
       final c = cfg();
       await c.saveProfiles([
         Profile(
@@ -80,12 +84,17 @@ void main() {
       expect(text, contains("workspace 1 output 'B'"));
       expect(text, contains("workspace 2 output 'B'"));
       expect(text, contains("workspace 3 output 'A'"));
+      // …and the rule still answers for the ones nobody observed. An
+      // observation is a partial snapshot by construction: sway only reports
+      // the workspaces that exist.
+      expect(text, contains("workspace 4 output 'B'"));
+      expect(text, contains("workspace 9 output 'A'"));
     });
   });
 
-  group('buildLearnedWorkspaceChain', () {
+  group('buildWorkspaceChain', () {
     test('declares homes first, then force-moves', () {
-      final chain = buildLearnedWorkspaceChain({1: 'A', 2: 'B'})!;
+      final chain = buildWorkspaceChain({1: 'A', 2: 'B'})!;
       final declare = chain.indexOf("workspace 1 output 'A'");
       final move = chain.indexOf("move workspace to output 'A'");
       expect(declare, lessThan(move),
@@ -94,7 +103,7 @@ void main() {
     });
 
     test('an empty map produces nothing', () {
-      expect(buildLearnedWorkspaceChain(const {}), isNull);
+      expect(buildWorkspaceChain(const {}), isNull);
     });
   });
 
@@ -111,8 +120,11 @@ void main() {
         config: c,
         mirrorRunner: FakeMirrorRunner(),
         // Workspace management on: without it the app must not touch the
-        // live workspace layout at all, so there is nothing to learn.
+        // live workspace layout at all, so there is nothing to learn. And
+        // following the user, because a rule mode deliberately records
+        // nothing — see workspace_grid_test.dart.
         workspaceDistribution: WorkspaceDistribution.interleaved,
+        followLearnedWorkspaces: true,
       );
       await ctl.init();
       return ctl;

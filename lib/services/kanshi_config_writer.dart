@@ -28,6 +28,13 @@ class KanshiWriteOptions {
   /// Which [WorkspaceDistribution] the injected workspace chain uses.
   /// Ignored when [injectSwayWorkspaceExec] is false.
   final WorkspaceDistribution workspaceDistribution;
+  /// Whether a setup's observed [Profile.workspaceMap] overlays the
+  /// distribution rule ("keep them where I put them") or is ignored in favour
+  /// of the rule alone. Off by default: a user who picked a distribution
+  /// asked for that distribution, and an observation that contradicts it is
+  /// as likely to be an accident as a preference. Ignored when
+  /// [injectSwayWorkspaceExec] is false.
+  final bool followLearnedWorkspaces;
   /// `--scaling` mode for the boot-fallback `exec wl-mirror …` lines.
   /// Ignored when [injectMirrorExec] is false. Mirrors the live
   /// MirrorRunner setting so the config and the GUI agree.
@@ -38,6 +45,7 @@ class KanshiWriteOptions {
     this.writeCurrentProfileMarker = false,
     this.injectMirrorExec = false,
     this.workspaceDistribution = WorkspaceDistribution.interleaved,
+    this.followLearnedWorkspaces = false,
     this.mirrorScaling = 'fit',
   });
 
@@ -46,6 +54,7 @@ class KanshiWriteOptions {
     bool? writeCurrentProfileMarker,
     bool? injectMirrorExec,
     WorkspaceDistribution? workspaceDistribution,
+    bool? followLearnedWorkspaces,
     String? mirrorScaling,
   }) {
     return KanshiWriteOptions(
@@ -56,6 +65,8 @@ class KanshiWriteOptions {
       injectMirrorExec: injectMirrorExec ?? this.injectMirrorExec,
       workspaceDistribution:
           workspaceDistribution ?? this.workspaceDistribution,
+      followLearnedWorkspaces:
+          followLearnedWorkspaces ?? this.followLearnedWorkspaces,
       mirrorScaling: mirrorScaling ?? this.mirrorScaling,
     );
   }
@@ -92,6 +103,34 @@ class KanshiConfigWriter {
       _renderProfile(buffer, profile, options);
     }
     return buffer.toString();
+  }
+
+  /// Restates an observed workspace map in terms of [mons]' own ids.
+  ///
+  /// Returns null when there is nothing to restate, so the caller falls
+  /// straight through to the distribution rule.
+  static Map<int, String>? _rekeyWorkspaceMap(
+    Map<int, String>? learned,
+    List<MonitorTileData> mons,
+  ) {
+    if (learned == null || learned.isEmpty) return null;
+    String? idFor(String target) {
+      for (final m in mons) {
+        if (m.id == target ||
+            m.edidDescriptor == target ||
+            m.manufacturer == target) {
+          return m.id;
+        }
+      }
+      return null;
+    }
+
+    final out = <int, String>{};
+    for (final entry in learned.entries) {
+      final id = idFor(entry.value);
+      if (id != null) out[entry.key] = id;
+    }
+    return out.isEmpty ? null : out;
   }
 
   static void _renderProfile(
@@ -269,19 +308,6 @@ class KanshiConfigWriter {
     }
 
     if (options.injectSwayWorkspaceExec) {
-      // A setup that has been observed carries its own map; the distribution
-      // rule only seeds one that never has. See [Profile.workspaceMap].
-      final learned = profile.workspaceMap;
-      if (learned != null && learned.isNotEmpty) {
-        for (final entry in (learned.keys.toList()..sort())) {
-          buffer.writeln(
-              "    # kanshi_gui:ws '$entry'='${learned[entry]}'");
-        }
-        final chain = buildLearnedWorkspaceChain(learned, criteria: criteria);
-        if (chain != null) {
-          buffer.writeln('    exec swaymsg "$chain"');
-        }
-      } else {
       final ranked = resolveWorkspaceRanks(
         mons.where((m) => m.enabled && m.mirrorOf == null).toList(),
       );
@@ -292,9 +318,31 @@ class KanshiConfigWriter {
           );
         }
       }
+      // An observed map only ever OVERLAYS the rule — it never replaces it.
+      // Replacing it is what left workspaces 4..9 with no `workspace N
+      // output X` line at all on a three-screen desk, because sway can only
+      // report the workspaces that happen to exist. See [resolveWorkspaceMap].
+      // Re-keyed onto this profile's own output ids before use. An observation
+      // is recorded against the LIVE connector sway reported, while a profile
+      // monitor may be keyed by its EDID descriptor — and an entry whose
+      // target does not match a monitor here is dropped as unknown, which
+      // would silently discard the very preference the mode exists to keep.
+      final learned = options.followLearnedWorkspaces
+          ? _rekeyWorkspaceMap(profile.workspaceMap, mons)
+          : null;
+      if (learned != null && learned.isNotEmpty) {
+        // Round-trip the OBSERVATION, not the resolved map: writing the
+        // resolved one back would make every setup look like it had been
+        // observed, and the rule would be indistinguishable from a choice.
+        for (final entry in (learned.keys.toList()..sort())) {
+          buffer.writeln(
+              "    # kanshi_gui:ws '$entry'='${learned[entry]}'");
+        }
+      }
       final chain = buildSwayWorkspaceChain(
         ranked,
         distribution: options.workspaceDistribution,
+        learned: learned,
         criteria: criteria,
       );
       if (chain != null) {
@@ -309,7 +357,6 @@ class KanshiConfigWriter {
         // workspace 1..N which displaces any visible orphan, and
         // sway garbage-collects empty non-visible workspaces.
         buffer.writeln("    exec swaymsg \"$chain\"");
-      }
       }
     }
 

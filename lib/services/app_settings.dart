@@ -4,14 +4,25 @@ import 'dart:io';
 
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 
-/// User-facing tri-state for the (Sway-only) workspace-management feature.
+/// User-facing choice for the (Sway-only) workspace-management feature.
 /// [off] is the default for fresh installs so a first launch never reshuffles
-/// a new user's workspaces; the other two pick how the numeric workspaces are
-/// spread across monitors (see [WorkspaceDistribution]).
+/// a new user's workspaces; the rest pick where the numeric workspaces live
+/// (see [WorkspaceDistribution]).
 enum WorkspaceManagementMode {
   off,
   interleaved,
-  grouped;
+  grouped,
+
+  /// Keep the workspaces where the user put them: an observed map overlays
+  /// the [interleaved] rule instead of the rule deciding on its own.
+  ///
+  /// M9 made this the ONLY behaviour, silently, for any setup that had ever
+  /// been observed — including the setups of users who had explicitly picked
+  /// [interleaved] or [grouped]. Two things went wrong with that. sway only
+  /// reports the workspaces that exist, so what got learned was a fragment;
+  /// and once a fragment replaced the rule, every workspace outside it lost
+  /// its home. It is a real preference, so it stays — as a preference.
+  learned;
 
   /// Parses the JSON string written by [AppSettings.save]. Anything
   /// unrecognised (including null) falls back to [off].
@@ -21,6 +32,8 @@ enum WorkspaceManagementMode {
         return WorkspaceManagementMode.interleaved;
       case 'grouped':
         return WorkspaceManagementMode.grouped;
+      case 'learned':
+        return WorkspaceManagementMode.learned;
       default:
         return WorkspaceManagementMode.off;
     }
@@ -30,14 +43,20 @@ enum WorkspaceManagementMode {
 
   bool get enabled => this != WorkspaceManagementMode.off;
 
+  /// Whether a setup's observed map overlays the rule.
+  bool get learns => this == WorkspaceManagementMode.learned;
+
   /// The writer-level distribution this mode maps to, or null when
   /// management is [off]. The controller uses this to gate the Sway
-  /// workspace exec injection.
+  /// workspace exec injection. [learned] still needs one: an observation
+  /// covers only the workspaces that existed when it was taken, and the
+  /// rule is what fills in the rest.
   WorkspaceDistribution? get distribution {
     switch (this) {
       case WorkspaceManagementMode.off:
         return null;
       case WorkspaceManagementMode.interleaved:
+      case WorkspaceManagementMode.learned:
         return WorkspaceDistribution.interleaved;
       case WorkspaceManagementMode.grouped:
         return WorkspaceDistribution.grouped;

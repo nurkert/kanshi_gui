@@ -17,6 +17,52 @@ enum WorkspaceDistribution {
   grouped,
 }
 
+/// The complete `workspace number → output id` assignment for workspaces
+/// 1..[maxWorkspaces], across the ranked outputs.
+///
+/// This is the one place that decides where a workspace lives, and it always
+/// answers for **every** workspace in the range. That totality is the whole
+/// point:
+///
+/// M9 let a setup carry its own observed map and used it *instead of* the
+/// rule. But sway only reports workspaces that currently exist — it does not
+/// pre-create empty ones — so an observation is always a partial snapshot.
+/// A three-screen desk with workspaces 1, 2, 3 open learned exactly those
+/// three, and 4..9 were then left with no `workspace N output X` binding at
+/// all. Sway creates an unbound workspace on whatever output has focus, which
+/// is the long-standing "$mod+9 opens wherever my cursor is" complaint — and
+/// worse, the next observation recorded that accident as a preference and
+/// pinned it.
+///
+/// So [learned] is an *overlay* on the rule, never a replacement. Entries
+/// outside 1..[maxWorkspaces], or naming an output this setup does not have,
+/// are dropped rather than emitted: a binding sway cannot resolve is silently
+/// ignored, which puts the workspace back in the homeless state this function
+/// exists to prevent.
+Map<int, String> resolveWorkspaceMap(
+  List<WorkspaceRankEntry> ranked, {
+  int maxWorkspaces = 9,
+  WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
+  Map<int, String>? learned,
+}) {
+  final n = ranked.length;
+  if (n == 0) return const {};
+  final map = <int, String>{
+    for (var ws = 1; ws <= maxWorkspaces; ws++)
+      ws: ranked[workspaceSlotRank(ws, n, distribution,
+              maxWorkspaces: maxWorkspaces)]
+          .id,
+  };
+  if (learned == null) return map;
+  final known = {for (final e in ranked) e.id};
+  for (final entry in learned.entries) {
+    if (entry.key < 1 || entry.key > maxWorkspaces) continue;
+    if (!known.contains(entry.value)) continue;
+    map[entry.key] = entry.value;
+  }
+  return map;
+}
+
 /// Builds the semicolon-joined `swaymsg` command that distributes the
 /// numeric workspaces 1..[maxWorkspaces] across the ranked outputs.
 ///
@@ -31,10 +77,31 @@ enum WorkspaceDistribution {
 /// Caller supplies a pre-computed ranked list (typically via
 /// [resolveWorkspaceRanks]) so the controller-side verify-and-fix path
 /// (which also wants to know the desired ws→output mapping for
-/// comparison) doesn't have to re-derive it.
+/// comparison) doesn't have to re-derive it. [learned] overlays an observed
+/// map onto the rule; see [resolveWorkspaceMap].
 ///
 /// Returns `null` when [ranked] is empty — there's no workspace
 /// distribution to express.
+String? buildSwayWorkspaceChain(
+  List<WorkspaceRankEntry> ranked, {
+  int maxWorkspaces = 9,
+  WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
+  Map<int, String>? learned,
+  Map<String, OutputCriteria> criteria = const {},
+}) {
+  return buildWorkspaceChain(
+    resolveWorkspaceMap(
+      ranked,
+      maxWorkspaces: maxWorkspaces,
+      distribution: distribution,
+      learned: learned,
+    ),
+    criteria: criteria,
+  );
+}
+
+/// Renders a `workspace number → output id` [map] as the chained swaymsg
+/// command that puts every one of those workspaces on its output.
 ///
 /// Why a single chained invocation instead of N separate `exec swaymsg`
 /// lines:
@@ -78,58 +145,53 @@ enum WorkspaceDistribution {
 /// their numeric workspaces needs the numeric-slot selector here,
 /// otherwise the unsuffixed form would create an empty "1" alongside
 /// the live "1: code" and silently fragment their setup.
-String? buildSwayWorkspaceChain(
-  List<WorkspaceRankEntry> ranked, {
-  int maxWorkspaces = 9,
-  WorkspaceDistribution distribution = WorkspaceDistribution.interleaved,
-  Map<String, OutputCriteria> criteria = const {},
-}) {
-  final n = ranked.length;
-  if (n == 0) return null;
-  final parts = <String>[];
-  for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = workspaceSlotRank(ws, n, distribution,
-        maxWorkspaces: maxWorkspaces);
-    // Phase 1: persistent output binding. NO `number` keyword — see
-    // the docstring above for why.
-    parts.add('workspace $ws output ${_execCriteria(ranked[rank].id, criteria)}');
-  }
-  for (var ws = 1; ws <= maxWorkspaces; ws++) {
-    final rank = workspaceSlotRank(ws, n, distribution,
-        maxWorkspaces: maxWorkspaces);
-    // Phase 2: focus the numeric slot (renamed-workspace safe) and
-    // force-move any pre-existing workspace to its new home output.
-    parts.add('workspace number $ws');
-    parts.add(
-        'move workspace to output ${_execCriteria(ranked[rank].id, criteria)}');
-  }
-  parts.add('workspace number 1');
-  return parts.join('; ');
-}
-
-/// Builds the swaymsg chain from an observed workspace map.
-///
-/// Same two phases as [buildSwayWorkspaceChain] and for the same reason: the
-/// declarations tell sway where each workspace belongs, and the force-moves
-/// relocate any that already exist somewhere else. The difference is only
-/// where the mapping comes from — here it is what the user actually had,
-/// rather than what a distribution rule computed for them.
-String? buildLearnedWorkspaceChain(
+String? buildWorkspaceChain(
   Map<int, String> map, {
   Map<String, OutputCriteria> criteria = const {},
 }) {
-  if (map.isEmpty) return null;
+  final declarations = buildWorkspaceDeclarations(map, criteria: criteria);
+  if (declarations == null) return null;
   final numbers = map.keys.toList()..sort();
-  final parts = <String>[];
+  final parts = <String>[declarations];
   for (final ws in numbers) {
-    parts.add('workspace $ws output ${_execCriteria(map[ws]!, criteria)}');
-  }
-  for (final ws in numbers) {
+    // Phase 2: focus the numeric slot (renamed-workspace safe) and
+    // force-move any pre-existing workspace to its new home output.
     parts.add('workspace number $ws');
     parts.add('move workspace to output ${_execCriteria(map[ws]!, criteria)}');
   }
   parts.add('workspace number ${numbers.first}');
   return parts.join('; ');
+}
+
+/// Phase 1 on its own: the `workspace N output X` bindings, with no focus
+/// dance and no moves.
+///
+/// This half is invisible — it tells sway where each workspace belongs and
+/// touches nothing that exists — which makes it safe to run on every launch.
+/// That matters because a missing binding is precisely what the repair pass
+/// cannot detect: sway reports the workspaces it HAS, so a workspace with no
+/// home and no existence looks identical to one that is simply closed.
+///
+/// It FILLS a missing binding; it does not OVERRIDE an existing one. `sway`'s
+/// `cmd_workspace` appends to `wsc->outputs` and never clears it, and
+/// `workspace_get_initial_output` walks that list and takes the first output
+/// that exists — so the earliest declaration in a sway session wins for the
+/// whole session. Re-declaring a workspace whose home was already set to
+/// something else is a no-op until sway itself is reloaded (`swaymsg reload`
+/// discards the workspace configs; `kanshictl reload` does not). Workspaces
+/// that never had a home — the ones that were opening under the cursor — are
+/// unaffected by that, which is why this is worth running anyway.
+String? buildWorkspaceDeclarations(
+  Map<int, String> map, {
+  Map<String, OutputCriteria> criteria = const {},
+}) {
+  if (map.isEmpty) return null;
+  final numbers = map.keys.toList()..sort();
+  return [
+    // NO `number` keyword — see [buildWorkspaceChain] for why.
+    for (final ws in numbers)
+      'workspace $ws output ${_execCriteria(map[ws]!, criteria)}',
+  ].join('; ');
 }
 
 /// How an output is spelled inside the `exec swaymsg \"…\"` chain.

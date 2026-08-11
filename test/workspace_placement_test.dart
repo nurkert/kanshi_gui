@@ -84,16 +84,17 @@ void main() {
       Map<int, String> live = const {},
       bool force = false,
       List<MonitorTileData>? profile,
+      List<MonitorTileData>? liveOutputs,
     }) async {
-      final fake = FakeMonitorService(
-        outputs: [_mon(id: 'eDP-1'), _mon(id: 'DP-1', x: 1920)],
-      );
+      final connected =
+          liveOutputs ?? [_mon(id: 'eDP-1'), _mon(id: 'DP-1', x: 1920)];
+      final fake = FakeMonitorService(outputs: connected);
       fake.workspaceOutputs = live;
       await WorkspacePlacement(fake).verifyAndFix(
         enabled: enabled,
         profileMonitors:
             profile ?? [_mon(id: 'eDP-1'), _mon(id: 'DP-1', x: 1920)],
-        liveOutputs: [_mon(id: 'eDP-1'), _mon(id: 'DP-1', x: 1920)],
+        liveOutputs: connected,
         distribution: WorkspaceDistribution.interleaved,
         resolveConnector: (id) => id,
         force: force,
@@ -108,9 +109,19 @@ void main() {
       expect(fake.calls, isEmpty);
     });
 
-    test('leaves a correct mapping alone', () async {
+    test('a correct mapping is declared, not danced through', () async {
+      // The declarations are invisible and idempotent, and they are the only
+      // way a workspace that does not exist yet gets a home at all — sway
+      // cannot report one, so `needsRepair` can never see it missing. The
+      // focus-and-move half is what stays out of the way.
       final fake = await run(enabled: true, live: {1: 'eDP-1', 2: 'DP-1'});
-      expect(fake.calls.where((c) => c.startsWith('workspaceChain')), isEmpty);
+      final chain =
+          fake.calls.firstWhere((c) => c.startsWith('workspaceChain'));
+      expect(chain, contains("workspace 9 output 'eDP-1'"));
+      expect(chain, isNot(contains('move workspace to output')),
+          reason: 'nothing is out of place, so nothing may be moved');
+      expect(chain, isNot(contains('workspace number')),
+          reason: 'a launch must not steal the focus');
     });
 
     test('repairs a wrong mapping', () async {
@@ -143,6 +154,31 @@ void main() {
       expect(chain, isNot(contains("'DP-1'")),
           reason: 'a mirror destination shows the source, so it owns no '
               'workspaces of its own');
+    });
+
+    test('two screens of the same model are told apart by port', () async {
+      // Two panels of one model with no distinguishing serial share an EDID
+      // descriptor, and sway cannot tell them apart from it — it resolves both
+      // to whichever it finds first, which would put every workspace on one
+      // screen. The writer falls back to connector names for exactly this;
+      // this pass has to make the same choice, and it now runs on every launch.
+      final fake = await run(
+        enabled: true,
+        force: true,
+        profile: [
+          _mon(id: 'DP-1', descriptor: 'Acme P27 Unknown'),
+          _mon(id: 'DP-2', x: 1920, descriptor: 'Acme P27 Unknown'),
+        ],
+        liveOutputs: [
+          _mon(id: 'DP-1', descriptor: 'Acme P27 Unknown'),
+          _mon(id: 'DP-2', x: 1920, descriptor: 'Acme P27 Unknown'),
+        ],
+      );
+      final chain = fake.calls.firstWhere((c) => c.startsWith('workspaceChain'));
+      expect(chain, isNot(contains("'Acme P27 Unknown'")),
+          reason: 'a descriptor two screens share names neither of them');
+      expect(chain, contains("'DP-1'"));
+      expect(chain, contains("'DP-2'"));
     });
 
     test('the repair chain uses the same stable identity as the config',

@@ -902,16 +902,20 @@ void main() {
         workspaceDistribution: WorkspaceDistribution.interleaved,
       );
       await c.init();
-      expect(fake.workspaceChainCalls, isEmpty,
+      expect(fake.workspaceChainCalls.single,
+          isNot(contains('move workspace to output')),
           reason: 'A correct mapping must NOT trigger a redundant reapply.');
+      expect(fake.workspaceChainCalls.single, contains("workspace 9 output 'A'"),
+          reason: 'the homes are still declared — a workspace sway has not '
+              'created yet cannot be seen to be missing one');
     });
 
-    test('skips workspaces sway has not created yet', () async {
+    test('does not move workspaces sway has not created yet', () async {
       // On a quiet boot sway may only have ws 1 created (the focused
-      // initial workspace). Absence is not mismatch — the chain's
-      // `workspace N output X` already declared the home for any
-      // future workspace. We only reapply when an *existing*
-      // workspace lives on the wrong output.
+      // initial workspace). Absence is not mismatch — so nothing is
+      // force-moved. The homes are declared all the same, because a
+      // workspace that does not exist is precisely the one that would
+      // otherwise open under the cursor.
       final cfg = _tmpConfig(tmp);
       final liveA = _mon(id: 'A');
       final liveB = _mon(id: 'B', x: 1920);
@@ -928,7 +932,8 @@ void main() {
         workspaceDistribution: WorkspaceDistribution.interleaved,
       );
       await c.init();
-      expect(fake.workspaceChainCalls, isEmpty,
+      expect(fake.workspaceChainCalls.single,
+          isNot(contains('move workspace to output')),
           reason:
               'A partial live mapping that agrees with the ranks for the '
               'existing workspace must not trigger a reapply.');
