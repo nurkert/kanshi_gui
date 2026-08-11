@@ -206,7 +206,15 @@ class KanshiDocument {
     // The exec lines the writer generates, and only those. A user's own exec
     // — the reason this distinction exists — stays where they put it.
     final body = child.rawLine.trim();
-    return body.contains('workspace number 1') ||
+    // The workspace chain is recognised by its shape, not by the number it
+    // ends on. It used to be matched on the literal `workspace number 1`,
+    // which a chain built from an observed map that happened not to include
+    // workspace 1 does not contain — so the app failed to recognise its own
+    // line, kept it, and wrote a second one beside it. Two exec chains giving
+    // sway contradictory homes is worse than either of them.
+    return (body.contains('workspace number ') &&
+            body.contains('move workspace to output')) ||
+        body.contains('workspace number 1') ||
         body.contains('.current_kanshi_profile') ||
         body.contains('wl-mirror');
   }

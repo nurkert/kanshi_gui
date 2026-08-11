@@ -227,6 +227,12 @@ class KanshiController extends ChangeNotifier {
   /// [setWorkspaceDistribution] can flip it at runtime.
   WorkspaceDistribution? _workspaceDistribution;
 
+  /// Whether a setup's observed [Profile.workspaceMap] overlays the rule.
+  /// False means the rule alone decides — and that nothing is learned, so an
+  /// accident of where a workspace happened to open cannot be recorded as a
+  /// preference. See [WorkspaceManagementMode.learned].
+  bool _followLearnedWorkspaces = false;
+
   /// Whether scale-slider release rasters onto the common HiDPI snap
   /// values. Always on; Alt suppresses it during a drag.
   bool scaleSnapping = true;
@@ -276,10 +282,12 @@ class KanshiController extends ChangeNotifier {
     MirrorRunner? mirrorRunner,
     double snapThreshold = 60.0,
     WorkspaceDistribution? workspaceDistribution,
+    bool followLearnedWorkspaces = false,
     ProcessRunner? processRunner,
   })  : mirrorRunner = mirrorRunner ?? MirrorRunner(),
         _snapThreshold = snapThreshold,
         _workspaceDistribution = workspaceDistribution,
+        _followLearnedWorkspaces = followLearnedWorkspaces,
         _processRunner = processRunner ?? const DefaultProcessRunner() {
     config.writeOptions = _effectiveWriteOptions();
     safetyNet.onChange((prompt) {
@@ -353,6 +361,7 @@ class KanshiController extends ChangeNotifier {
     return base.copyWith(
       injectSwayWorkspaceExec: true,
       workspaceDistribution: dist,
+      followLearnedWorkspaces: _followLearnedWorkspaces,
     );
   }
 
@@ -470,6 +479,9 @@ class KanshiController extends ChangeNotifier {
     // save, so a refusal is known up front rather than after the user's
     // first edit silently fails to land.
     await _saves.inspect();
+    // BEFORE ensureCurrentSetupMatches, which may add an in-memory scratch
+    // setup that must not reach the file. See [_migrateStaleWorkspaceMaps].
+    await _migrateStaleWorkspaceMaps();
     // persist: false — opening the app must never rewrite (and risk
     // re-applying) the user's working config. See [ensureCurrentSetupMatches].
     await ensureCurrentSetupMatches(persist: false);
@@ -492,9 +504,45 @@ class KanshiController extends ChangeNotifier {
     // Notice where the user's workspaces are, once the repair pass above has
     // settled the layout. Only records what it can attribute to this setup;
     // see [learnWorkspaceMap] for why it is cautious about the moment.
-    if (config.writeOptions.injectSwayWorkspaceExec) {
+    if (config.writeOptions.injectSwayWorkspaceExec &&
+        _followLearnedWorkspaces) {
       await learnWorkspaceMap();
     }
+  }
+
+  /// Clears `# kanshi_gui:ws` annotations a rule mode would never write.
+  ///
+  /// A config written between M9 and now carries an observed map that
+  /// REPLACED the distribution rule rather than overlaying it, which left
+  /// most of 1..9 with no `workspace N output X` line at all. The GUI's own
+  /// startup pass repairs the running sway session, but the file is what
+  /// kanshi replays on the next dock — and with the GUI closed, that is the
+  /// only thing there is.
+  ///
+  /// Not routed through [_scheduleSave]: this is the app correcting its own
+  /// bookkeeping, not the user editing a layout, so it must not light up
+  /// "Not applied yet" on a window nobody has touched. Self-clearing — once
+  /// the annotations are gone the condition never holds again.
+  ///
+  /// Two things make this an immediate, awaited write over an explicit copy
+  /// rather than a scheduled save of `_profiles`:
+  ///
+  ///  * [SaveCoordinator.schedule] keeps the list it was handed and serialises
+  ///    it 600ms later, so a live `_profiles` would pick up whatever was
+  ///    appended in the meantime — including the scratch `Setup N` that
+  ///    [ensureCurrentSetupMatches] creates in memory and deliberately does
+  ///    NOT persist. Hence also the call order in [init].
+  ///  * `dispose()` cancels a pending timer without flushing it, so a launch
+  ///    short enough would drop the repair on the floor and leave the user
+  ///    with the broken config they opened the app to fix.
+  Future<void> _migrateStaleWorkspaceMaps() async {
+    if (!config.writeOptions.injectSwayWorkspaceExec) return;
+    if (_followLearnedWorkspaces) return;
+    if (!_profiles.any((p) => p.workspaceMap != null)) return;
+    for (final p in _profiles) {
+      p.workspaceMap = null;
+    }
+    await _saves.flush(List<Profile>.of(_profiles));
   }
 
   /// Reads the live `workspace_number → output_name` mapping from the
@@ -517,20 +565,24 @@ class KanshiController extends ChangeNotifier {
   /// is cheap (declarations no-op, focus dances end at ws 1).
   /// Records where the user's workspaces actually are, for this setup.
   ///
-  /// The setting this replaces asked "interleaved or grouped?" — a question
-  /// nobody can answer without trying both. People know where they want their
-  /// workspaces and express it by putting them there; the app's job is to
-  /// notice and put them back.
+  /// Only in [WorkspaceManagementMode.learned]. M9 made this unconditional,
+  /// on the theory that people express where they want their workspaces by
+  /// putting them there. The theory is sound; running it over someone who
+  /// asked for a distribution rule was not, and it had a feedback loop —
+  /// a workspace with no binding opens under the cursor, and the next
+  /// observation writes that down as a preference.
   ///
   /// Deliberately cautious about WHEN it learns, because learning the wrong
   /// moment cements the wrong answer — and this is the feature that was
   /// reported broken. It refuses unless:
+  ///   * the user asked for their workspaces to be followed,
   ///   * a live compositor is there to be asked,
   ///   * a setup is active to attribute the observation to,
   ///   * the layout is NOT drifted, so the screens are where the setup says,
   ///   * every workspace it can see sits on an output this setup knows.
   /// Anything else means the observation describes a transient state.
   Future<bool> learnWorkspaceMap() async {
+    if (!_followLearnedWorkspaces) return false;
     if (!monitors.isLive) return false;
     final idx = _activeProfileIndex;
     if (idx == null) return false;
@@ -560,7 +612,10 @@ class KanshiController extends ChangeNotifier {
     final profile = _profiles[idx];
     if (_sameWorkspaceMap(profile.workspaceMap, learned)) return false;
     profile.workspaceMap = learned;
-    _scheduleSave();
+    // Not [_scheduleSave]: noticing where the workspaces are is the app's own
+    // bookkeeping, and marking the session dirty for it would put "Not applied
+    // yet" on a window the user has not touched.
+    _saves.schedule(_profiles);
     notifyListeners();
     return true;
   }
@@ -586,7 +641,9 @@ class KanshiController extends ChangeNotifier {
       liveOutputs: _currentMonitors,
       distribution: config.writeOptions.workspaceDistribution,
       resolveConnector: _resolveOutputName,
-      learnedMap: _profiles[activeIdx].workspaceMap,
+      learnedMap: _followLearnedWorkspaces
+          ? _profiles[activeIdx].workspaceMap
+          : null,
       force: force,
       isCancelled: () => _isDisposed,
     );
@@ -1533,6 +1590,7 @@ class KanshiController extends ChangeNotifier {
     autoReapplyOnDrift = s.autoReapplyOnDrift;
     _mirrorScaling = s.mirrorScaling.arg;
     _workspaceDistribution = s.workspaceManagement.distribution;
+    _followLearnedWorkspaces = s.workspaceManagement.learns;
     mirrorRunner.scaling = _mirrorScaling;
     config.writeOptions = _effectiveWriteOptions();
   }
@@ -1616,26 +1674,59 @@ class KanshiController extends ChangeNotifier {
 
   // ── Workspace management opt-in ────────────────────────────────────────
 
-  /// Change the workspace-management mode at runtime (settings toggle /
-  /// first-run wizard opt-in). Recomputes the effective write options,
-  /// rewrites the kanshi config (adding or dropping the `exec swaymsg "…"`
-  /// line) and reloads kanshi. When turning management ON, force-applies the
-  /// distribution chain so the change lands immediately rather than only on
-  /// the next profile activation.
+  /// Change the workspace-management mode at runtime. Recomputes the
+  /// effective write options, rewrites the kanshi config (adding or dropping
+  /// the `exec swaymsg "…"` line) and reloads kanshi. When turning management
+  /// ON, force-applies the chain so the change lands immediately rather than
+  /// only on the next profile activation.
   ///
   /// Turning it OFF removes the exec line and stops re-applying, but does
   /// NOT move workspaces back — there is no pre-management snapshot to
   /// restore to, so the current placement simply stays put until the user
   /// rearranges it themselves. No-op on backends that don't support it.
-  Future<void> setWorkspaceDistribution(WorkspaceDistribution? dist) async {
-    if (_workspaceDistribution == dist) return;
+  ///
+  /// Leaving [WorkspaceManagementMode.learned] also drops each setup's
+  /// recorded map, so the file stops carrying `# kanshi_gui:ws` lines that
+  /// contradict the chain printed right below them. The map is an
+  /// observation, not user data — but only the setup you are ON is re-observed
+  /// when you switch back, so the others start from the rule again until you
+  /// next plug them in.
+  Future<void> setWorkspaceMode(WorkspaceManagementMode mode) async {
+    final dist = mode.distribution;
+    if (_workspaceDistribution == dist &&
+        _followLearnedWorkspaces == mode.learns) {
+      return;
+    }
     _workspaceDistribution = dist;
+    _followLearnedWorkspaces = mode.learns;
+    if (!mode.learns) {
+      for (final p in _profiles) {
+        p.workspaceMap = null;
+      }
+    }
     config.writeOptions = _effectiveWriteOptions();
+    // Learn BEFORE anything is applied. Entering "keep them where I put them"
+    // with no recorded map means `want` is the bare rule, and the force-apply
+    // below would move every workspace onto it — the mode that promises not to
+    // touch them would be the one that scattered them, and the observation
+    // afterwards would then record the damage as the user's preference.
+    if (mode.learns) await learnWorkspaceMap();
     await _flushSaveAndReload();
     if (dist != null && supportsWorkspaceManagement) {
       await _verifyAndFixWorkspacePlacement(force: true);
     }
     notifyListeners();
+  }
+
+  /// The mode the controller is running in, for the settings UI to show as
+  /// selected. Derived rather than stored so it cannot drift from the two
+  /// fields that actually decide behaviour.
+  WorkspaceManagementMode get workspaceMode {
+    if (_workspaceDistribution == null) return WorkspaceManagementMode.off;
+    if (_followLearnedWorkspaces) return WorkspaceManagementMode.learned;
+    return _workspaceDistribution == WorkspaceDistribution.grouped
+        ? WorkspaceManagementMode.grouped
+        : WorkspaceManagementMode.interleaved;
   }
 
   // ── Workspace rank ─────────────────────────────────────────────────────
