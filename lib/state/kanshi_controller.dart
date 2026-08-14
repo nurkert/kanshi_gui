@@ -1616,6 +1616,7 @@ class KanshiController extends ChangeNotifier {
   /// reload (init handles the initial apply). The settings UI uses the
   /// individual `set*` methods below for live changes instead.
   void applyStartupSettings(AppSettings s) {
+    _settings = s;
     liveApply = s.liveApply;
     autoReapplyOnDrift = s.autoReapplyOnDrift;
     _mirrorScaling = s.mirrorScaling.arg;
@@ -1624,6 +1625,36 @@ class KanshiController extends ChangeNotifier {
     _learnsWorkspaceMap = s.workspaceManagement.learns;
     mirrorRunner.scaling = _mirrorScaling;
     config.writeOptions = _effectiveWriteOptions();
+  }
+
+  /// The settings object the mode is mirrored into. Held from
+  /// [applyStartupSettings] so [_persistWorkspaceMode] has somewhere to write.
+  AppSettings? _settings;
+
+  /// Writes the mode actually in force back to `settings.json`.
+  ///
+  /// The UI used to do this, at each of the places that could change the mode,
+  /// and one of them got it wrong: dragging a workspace in the grid switches
+  /// to "my own" inside the controller, and the file could still say
+  /// `interleaved`. Nothing looks broken until the next launch, when the
+  /// setting wins and quietly puts nine hand-placed numbers back on a pattern.
+  ///
+  /// Found on a real desk: the config carried the user's arrangement, the
+  /// settings file carried a rule, and both had been written in the same
+  /// second. So the mode is derived in one place and persisted from that same
+  /// place — a caller can no longer forget, because there is nothing left for
+  /// a caller to remember.
+  Future<void> _persistWorkspaceMode() async {
+    final s = _settings;
+    if (s == null) return;
+    final mode = workspaceMode;
+    if (s.workspaceManagement == mode) return;
+    s.workspaceManagement = mode;
+    try {
+      await s.save();
+    } catch (e) {
+      debugPrint('could not persist the workspace mode: $e');
+    }
   }
 
   void setSnapDistance(double v) {
@@ -1761,6 +1792,11 @@ class KanshiController extends ChangeNotifier {
     // touch them would be the one that scattered them, and the observation
     // afterwards would then record the damage as the user's preference.
     if (mode.learns) await learnWorkspaceMap();
+    // Before the config write, not after it. The config write is real I/O,
+    // and the two files disagreeing for the length of it is exactly how a
+    // crash — or a window closed at the wrong moment — leaves a setting that
+    // contradicts the arrangement on disk.
+    await _persistWorkspaceMode();
     await _flushSaveAndReload();
     if (dist != null && supportsWorkspaceManagement) {
       await _verifyAndFixWorkspacePlacement(force: true);
@@ -1850,7 +1886,14 @@ class KanshiController extends ChangeNotifier {
     _profiles[idx].workspaceMap = Map<int, String>.of(current)..[ws] = outputId;
     _followsWorkspaceMap = true;
     _learnsWorkspaceMap = false;
+    // The fallback rule moves with the mode. Left behind, a desk that was on
+    // `grouped` would keep grouped as the base for anything the map does not
+    // name, while settings.json — and the next launch — says interleaved.
+    _workspaceDistribution = WorkspaceManagementMode.custom.distribution;
     config.writeOptions = _effectiveWriteOptions();
+    // Before the config write, so a crash between the two cannot leave a file
+    // holding the user's arrangement while the setting says a rule.
+    await _persistWorkspaceMode();
     await _flushSaveAndReload();
     if (supportsWorkspaceManagement) {
       await _verifyAndFixWorkspacePlacement(force: true);
