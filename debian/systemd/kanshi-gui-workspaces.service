@@ -1,0 +1,24 @@
+[Unit]
+Description=kanshi_gui workspace placement helper
+Documentation=https://github.com/nurkert/kanshi_gui
+# Tied to the graphical session where there is one. Sway sessions started
+# without sway-systemd never activate that target, which is why the install
+# section below hangs off default.target instead — the helper waits for a sway
+# socket to appear rather than assuming systemd will tell it about one.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/kanshi_gui/kanshi-gui-workspaced
+# It is a watcher: if it dies it stops doing the one thing it is for, and
+# nothing tells the user. Come back.
+Restart=on-failure
+RestartSec=5
+# The namespacing options (ProtectSystem, PrivateNetwork, …) are deliberately
+# absent: they need privileges a --user unit does not have, and systemd fails
+# the unit outright rather than skipping them. This one is safe here.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

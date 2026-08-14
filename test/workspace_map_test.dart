@@ -42,7 +42,7 @@ void main() {
         configPath: '${tmp.path}/config',
         backupPrefix: '${tmp.path}/backups/config.bak',
         writeOptions: KanshiWriteOptions.swayDefaults
-            .copyWith(followLearnedWorkspaces: true),
+            .copyWith(followProfileWorkspaceMap: true),
       );
 
   group('persistence', () {
@@ -124,7 +124,8 @@ void main() {
         // following the user, because a rule mode deliberately records
         // nothing — see workspace_grid_test.dart.
         workspaceDistribution: WorkspaceDistribution.interleaved,
-        followLearnedWorkspaces: true,
+        followProfileWorkspaceMap: true,
+        learnWorkspaceMapFromLive: true,
       );
       await ctl.init();
       return ctl;

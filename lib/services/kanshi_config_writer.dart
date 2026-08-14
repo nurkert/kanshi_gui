@@ -34,7 +34,7 @@ class KanshiWriteOptions {
   /// asked for that distribution, and an observation that contradicts it is
   /// as likely to be an accident as a preference. Ignored when
   /// [injectSwayWorkspaceExec] is false.
-  final bool followLearnedWorkspaces;
+  final bool followProfileWorkspaceMap;
   /// `--scaling` mode for the boot-fallback `exec wl-mirror …` lines.
   /// Ignored when [injectMirrorExec] is false. Mirrors the live
   /// MirrorRunner setting so the config and the GUI agree.
@@ -45,7 +45,7 @@ class KanshiWriteOptions {
     this.writeCurrentProfileMarker = false,
     this.injectMirrorExec = false,
     this.workspaceDistribution = WorkspaceDistribution.interleaved,
-    this.followLearnedWorkspaces = false,
+    this.followProfileWorkspaceMap = false,
     this.mirrorScaling = 'fit',
   });
 
@@ -54,7 +54,7 @@ class KanshiWriteOptions {
     bool? writeCurrentProfileMarker,
     bool? injectMirrorExec,
     WorkspaceDistribution? workspaceDistribution,
-    bool? followLearnedWorkspaces,
+    bool? followProfileWorkspaceMap,
     String? mirrorScaling,
   }) {
     return KanshiWriteOptions(
@@ -65,8 +65,8 @@ class KanshiWriteOptions {
       injectMirrorExec: injectMirrorExec ?? this.injectMirrorExec,
       workspaceDistribution:
           workspaceDistribution ?? this.workspaceDistribution,
-      followLearnedWorkspaces:
-          followLearnedWorkspaces ?? this.followLearnedWorkspaces,
+      followProfileWorkspaceMap:
+          followProfileWorkspaceMap ?? this.followProfileWorkspaceMap,
       mirrorScaling: mirrorScaling ?? this.mirrorScaling,
     );
   }
@@ -327,7 +327,7 @@ class KanshiConfigWriter {
       // monitor may be keyed by its EDID descriptor — and an entry whose
       // target does not match a monitor here is dropped as unknown, which
       // would silently discard the very preference the mode exists to keep.
-      final learned = options.followLearnedWorkspaces
+      final learned = options.followProfileWorkspaceMap
           ? _rekeyWorkspaceMap(profile.workspaceMap, mons)
           : null;
       if (learned != null && learned.isNotEmpty) {
