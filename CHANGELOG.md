@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.2
+
+### Fixed
+
+- **The helper never picked up its own upgrade.** 2.1.1 taught it to exit when
+  its binary is replaced or removed, so systemd can start the new one — and
+  put that check at the top of the main loop, which sounds right and never
+  runs: the loop body blocks inside the sway event subscription for the entire
+  length of a session, so the top of the loop is reached about once per login.
+  Installing 2.1.1 over 2.1.0 left the previous process running with the
+  previous bugs, and the only thing that showed it was looking at the pid
+  afterwards. The check is on a timer of its own now. Verified by replacing
+  the binary under a running helper and watching it exit.
+
 ## 2.1.1
 
 ### Fixed

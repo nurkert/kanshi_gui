@@ -131,6 +131,7 @@ class _Daemon {
     }
 
     _watchTheFiles();
+    _watchMyself();
 
     // One process, many sway sessions: a user who logs out and back in keeps
     // the same systemd user manager, so the loop outlives any single socket.
@@ -202,11 +203,35 @@ class _Daemon {
   Process? _subscriber;
 
   void _closeSession() {
+    _selfCheck?.cancel();
+    _selfCheck = null;
     _settleTimer?.cancel();
     _settleTimer = null;
     _subscriber?.kill(ProcessSignal.sigterm);
     _subscriber = null;
   }
+
+  /// Notices an upgrade or a removal, on a timer of its own.
+  ///
+  /// This check used to live at the top of the main loop, which sounds right
+  /// and never ran: the loop body blocks inside [_session] for the entire
+  /// length of a sway session, so the top of the loop is reached roughly once
+  /// per login. Installing 2.1.1 over 2.1.0 left the previous binary running
+  /// with the previous bugs, and the only thing that revealed it was looking
+  /// at the pid afterwards.
+  ///
+  /// A minute is plenty: nothing goes wrong while the old process is still
+  /// running, it just is not the version the user installed.
+  void _watchMyself() {
+    _selfCheck = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!_ownBinaryChanged()) return;
+      _log('the binary under me changed; exiting so systemd can restart');
+      _closeSession();
+      exit(0);
+    });
+  }
+
+  Timer? _selfCheck;
 
   /// Re-plans when the app changes its mind.
   ///
