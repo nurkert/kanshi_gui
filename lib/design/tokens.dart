@@ -160,6 +160,11 @@ class AppColors {
 
   Color get accentSoft => accent.withValues(alpha: 0.16);
 
+  /// The accent as an outline on top of [accentSoft] — a filled chip that
+  /// still has to read as a distinct object next to its neighbours. Full
+  /// strength would make a row of them vibrate.
+  Color get accentLine => accent.withValues(alpha: 0.4);
+
   /// The accent comes from sway's `client.focused` when it can be read, so
   /// the app agrees with the window manager it sits next to. [fallback] is
   /// used when it cannot.

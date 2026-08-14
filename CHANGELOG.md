@@ -1,5 +1,64 @@
 # Changelog
 
+## 2.1.0
+
+### Added
+
+- **The workspaces are a picture of your desk now, not a dropdown.** A new
+  Workspaces sheet, one tap from the main window, draws your screens in their
+  real left-to-right order and proportions with the number keys sitting on
+  them. Drag a number to another screen, or tap it to send it one screen
+  right. There is nothing to understand first: the four patterns above the
+  screens are shortcuts, and choosing one moves the numbers where you can
+  watch them go.
+
+- **Any arrangement you like, not just the two patterns.** Moving a single
+  number switches to a new *My own* mode that keeps all nine exactly where the
+  grid shows them, per set of screens. It is the same overlay the "keep them
+  where I put them" mode uses — the difference is that nothing writes to it
+  behind your back, so one window opening in an odd place cannot undo nine
+  deliberate choices.
+
+- **An optional helper service, shipped with the .deb and installed switched
+  off.** `kanshi-gui-workspaces.service` places your workspaces at login, on
+  every hotplug, and — the part no config file can do — the instant a
+  workspace is created, so `$mod+9` lands on the right screen even the first
+  time you press it in a session. Turn it on under Workspaces → *Keep this up
+  with the app closed*; it is enabled per user with `systemctl --user`, never
+  system-wide, and it does nothing at all while workspace placement is off.
+
+  It exists because two gaps are not closable from a config file.
+  `kanshi(5)` runs `exec` commands asynchronously "and their order may not be
+  preserved", so on a cold boot the placement chain races sway's output
+  discovery and the target it cannot resolve is dropped without an error. And
+  sway's `cmd_workspace` appends to a workspace's output list and takes the
+  first entry that resolves, so a workspace bound to the laptop panel before
+  you docked keeps it for the rest of the session. Something that is *there*,
+  watching, fixes both.
+
+  `kanshi-gui-workspaced --dry-run` prints what it would do and changes
+  nothing.
+
+### Changed
+
+- **Advanced keeps a summary of where the numbers are and a way through to the
+  grid.** The dropdown it used to hold asked people to choose between
+  "interleaved" and "grouped"; the question they actually have is which screen
+  a number key takes them to, and that is a picture, not a list.
+
+- The helper and the app are compiled from the same domain code, so they
+  cannot disagree about where a workspace belongs. `AppSettings` no longer
+  reaches `dart:ui` through the config writer, which is what made a Flutter-free
+  build of that code possible.
+
+### Fixed
+
+- **A hand-made arrangement can no longer be lost to a crash mid-save.** The
+  mode was written to `settings.json` only after the kanshi config write had
+  finished. In the window between the two, the file on disk carried the custom
+  map while the settings still said `interleaved` — and on the next launch the
+  rule would win and the edit would be discarded without a word.
+
 ## 2.0.3
 
 ### Fixed

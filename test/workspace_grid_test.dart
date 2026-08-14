@@ -187,7 +187,7 @@ void main() {
     test('following the user keeps their map, and still fills the gaps',
         () async {
       final c = cfg(KanshiWriteOptions.swayDefaults
-          .copyWith(followLearnedWorkspaces: true));
+          .copyWith(followProfileWorkspaceMap: true));
       await c.saveProfiles([stale()]);
       final text = File('${tmp.path}/config').readAsStringSync();
 
@@ -220,7 +220,8 @@ void main() {
         config: config,
         mirrorRunner: FakeMirrorRunner(),
         workspaceDistribution: WorkspaceDistribution.interleaved,
-        followLearnedWorkspaces: follow,
+        followProfileWorkspaceMap: follow,
+        learnWorkspaceMapFromLive: follow,
       );
       await c.init();
       return c;
@@ -277,7 +278,7 @@ void main() {
       await c.init();
 
       expect(c.workspaceMode, WorkspaceManagementMode.learned);
-      expect(c.config.writeOptions.followLearnedWorkspaces, isTrue);
+      expect(c.config.writeOptions.followProfileWorkspaceMap, isTrue);
       expect(c.activeProfile?.workspaceMap, {1: 'DP-4', 2: 'eDP-1'});
     });
 
@@ -311,7 +312,7 @@ void main() {
         configPath: '${tmp.path}/config',
         backupPrefix: '${tmp.path}/backups/config.bak',
         writeOptions: KanshiWriteOptions.swayDefaults
-            .copyWith(followLearnedWorkspaces: true),
+            .copyWith(followProfileWorkspaceMap: true),
       );
       await writer.saveProfiles([
         Profile(
@@ -363,7 +364,7 @@ void main() {
         configPath: '${tmp.path}/config',
         backupPrefix: '${tmp.path}/backups/config.bak',
         writeOptions: KanshiWriteOptions.swayDefaults
-            .copyWith(followLearnedWorkspaces: true),
+            .copyWith(followProfileWorkspaceMap: true),
       );
       await broken();
       final c = KanshiController(
@@ -372,7 +373,8 @@ void main() {
         config: config,
         mirrorRunner: FakeMirrorRunner(),
         workspaceDistribution: WorkspaceDistribution.interleaved,
-        followLearnedWorkspaces: true,
+        followProfileWorkspaceMap: true,
+        learnWorkspaceMapFromLive: true,
       );
       addTearDown(c.dispose);
       await c.init();

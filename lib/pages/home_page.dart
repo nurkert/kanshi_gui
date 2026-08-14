@@ -21,6 +21,7 @@ import 'package:kanshi_gui/widgets/presets_bar.dart';
 import 'package:kanshi_gui/widgets/setup_title_bar.dart';
 import 'package:kanshi_gui/widgets/screen_strip.dart';
 import 'package:kanshi_gui/widgets/snap_lines_painter.dart';
+import 'package:kanshi_gui/widgets/workspace_sheet.dart';
 
 /// Top-level page: hosts the AppBar, the sliding sidebar, and the layout
 /// canvas. All business logic lives in [KanshiController]; this widget is
@@ -507,6 +508,11 @@ class _HomePageState extends State<HomePage> {
                   context,
                   controller: c,
                   onCreateFromCurrent: c.createProfileFromCurrentSetup,
+                ),
+                onWorkspaces: () => WorkspaceSheet.show(
+                  context,
+                  controller: c,
+                  settings: widget.settings,
                 ),
                 onAdvanced: () => AdvancedSheet.show(
                   context,
