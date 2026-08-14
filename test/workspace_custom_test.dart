@@ -214,6 +214,68 @@ void main() {
     });
   });
 
+  group('the file on disk agrees with the app', () {
+    test('dragging a workspace lands in settings.json, not just in memory',
+        () async {
+      // Found on a real desk: the kanshi config carried the user's own
+      // arrangement while settings.json still said `interleaved`, both
+      // written in the same second. Nothing looks wrong until the next
+      // launch, when the setting wins and nine hand-placed numbers snap back
+      // onto a pattern. The controller derives the mode and persists it
+      // itself now, so no UI path can forget.
+      final c = await boot(WorkspaceManagementMode.interleaved);
+      addTearDown(c.dispose);
+
+      await c.assignWorkspace(7, 'DP-5');
+
+      final onDisk =
+          await AppSettings.load(path: '${tmp.path}/settings.json');
+      expect(onDisk.workspaceManagement, WorkspaceManagementMode.custom,
+          reason: 'the next launch reads this file, not the running app');
+      expect(c.workspaceMode, WorkspaceManagementMode.custom);
+    });
+
+    test('and a pattern chosen afterwards lands there too', () async {
+      final c = await boot(WorkspaceManagementMode.interleaved);
+      addTearDown(c.dispose);
+      await c.assignWorkspace(7, 'DP-5');
+
+      await c.setWorkspaceMode(WorkspaceManagementMode.grouped);
+
+      final onDisk =
+          await AppSettings.load(path: '${tmp.path}/settings.json');
+      expect(onDisk.workspaceManagement, WorkspaceManagementMode.grouped);
+    });
+
+    test('relaunching with what was written keeps the arrangement', () async {
+      // The whole point: what the app wrote must survive being read back.
+      // Deliberately NOT via boot(), which rewrites the config from scratch —
+      // a relaunch reads the file that is already there.
+      final c = await boot(WorkspaceManagementMode.interleaved);
+      await c.assignWorkspace(7, 'DP-5');
+      c.dispose();
+
+      final again = KanshiController(
+        monitors: FakeMonitorService(
+            outputs: desk(), writeOptions: KanshiWriteOptions.swayDefaults),
+        config: ConfigService(
+          configPath: '${tmp.path}/config',
+          backupPrefix: '${tmp.path}/backups/config.bak',
+          writeOptions: KanshiWriteOptions.swayDefaults,
+        ),
+        mirrorRunner: FakeMirrorRunner(),
+      )..applyStartupSettings(
+          await AppSettings.load(path: '${tmp.path}/settings.json'),
+        );
+      addTearDown(again.dispose);
+      await again.init();
+
+      expect(again.workspaceMode, WorkspaceManagementMode.custom);
+      expect(again.currentWorkspaceMap()[7], 'DP-5',
+          reason: 'the drag has to survive a restart');
+    });
+  });
+
   group('the settings round trip', () {
     test('custom survives being written and read back', () async {
       final path = '${tmp.path}/settings.json';
