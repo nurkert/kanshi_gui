@@ -38,12 +38,25 @@ class WorkspacePlan {
 
   /// The command that puts one workspace where it belongs, or null if this
   /// plan has no opinion about that workspace.
-  String? moveOne(int workspace) {
+  ///
+  /// Moving a workspace in sway means focusing it first — there is no way to
+  /// relocate one you are not on. That is invisible when the workspace was
+  /// just created (it already has focus), and rude when it was not: a user
+  /// who pressed `$mod+8` and then immediately `$mod+1` would be yanked back
+  /// to 8 by a command that arrived a few milliseconds late. Pass
+  /// [returnFocusTo] with wherever the user actually is and the chain hands
+  /// focus back in the same atomic command.
+  String? moveOne(int workspace, {int? returnFocusTo}) {
     final target = map[workspace];
     if (target == null) return null;
     final c = criteria[target] ?? OutputCriteria.connector(target);
-    return 'workspace number $workspace; '
+    // Same gate as the full chain: a target that cannot be safely quoted
+    // means no command at all. See [buildWorkspaceDeclarations].
+    if (!c.isShellSafe) return null;
+    final move = 'workspace number $workspace; '
         'move workspace to output ${c.swayExecForm}';
+    if (returnFocusTo == null || returnFocusTo == workspace) return move;
+    return '$move; workspace number $returnFocusTo';
   }
 }
 
@@ -87,16 +100,24 @@ class SwayEventVerdict {
 SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   final change = event['change']?.toString();
 
-  // An output event is the docking case. Workspace events carry `current`
-  // instead, which is what tells the two apart — both name a `change`.
-  if (event.containsKey('output') && !event.containsKey('current')) {
-    return const SwayEventVerdict(SwayEventAction.replan);
-  }
-
-  // `swaymsg reload` throws away every workspace config sway holds — which is
-  // exactly why it is the documented way out of a workspace stuck on the
-  // wrong screen. It throws away ours too, so put them back.
-  if (change == 'reload') {
+  // An output event carries NOTHING but a change, and the change is always
+  // the string "unspecified":
+  //
+  //     { "change": "unspecified" }
+  //
+  // This looked for an `output` key, reasoning that an event about outputs
+  // would name one. It does not, and sway has never sent one — so the branch
+  // never ran and the daemon never replanned on a hotplug. Docking did
+  // nothing at all; the placement it had computed at session start simply
+  // stayed. Captured from a live sway rather than assumed a second time.
+  //
+  // `current` is what a workspace event carries, so its absence is the
+  // discriminator. That also catches the workspace `reload` event, which has
+  // no `current` either — and wants the same answer: `swaymsg reload` throws
+  // away every workspace config sway holds, which is exactly why it is the
+  // documented way out of a workspace stuck on the wrong screen. It throws
+  // away ours too, so put them back.
+  if (!event.containsKey('current') || change == 'reload') {
     return const SwayEventVerdict(SwayEventAction.replan);
   }
 
@@ -219,8 +240,15 @@ WorkspacePlan? planWorkspaces({
     // Descriptors as sway reports them, not as the config remembers them: the
     // daemon is talking to sway, and a stale descriptor is one sway silently
     // fails to resolve. Two panels of the same model share one, and
-    // [chooseOutputCriteria] drops that pair back to connector names.
-    criteria: chooseOutputCriteria(
+    // [chooseExecCriteria] drops that pair back to connector names.
+    //
+    // The exec chooser, not the config one, even though nothing here goes
+    // through a shell. It costs nothing — a connector is a perfectly good
+    // address over IPC — and it buys the guarantee that the app, the helper
+    // and the config file name each screen the same way. Three components
+    // that disagree about which screen `workspace 9` means is a bug nobody
+    // would find twice.
+    criteria: chooseExecCriteria(
       resolved.map((m) => m.id),
       (connector) => descriptors[connector],
     ),

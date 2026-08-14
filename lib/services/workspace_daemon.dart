@@ -63,6 +63,20 @@ class WorkspaceDaemon {
         : WorkspaceDaemonState.disabled;
   }
 
+  /// Whether the service is running *right now*, as opposed to merely being
+  /// switched on for future logins.
+  ///
+  /// The two come apart, and when they do the switch would otherwise lie: a
+  /// unit that is enabled but failed to start — no sway yet, a binary removed
+  /// by an upgrade — reads as "on" while nothing is placing anything. Worth
+  /// one extra call to be able to say so.
+  Future<bool> isRunning() async {
+    if (!isInstalled) return false;
+    if (!await runner.exists('systemctl')) return false;
+    final r = await runner.run('systemctl', ['--user', 'is-active', unit]);
+    return '${r.stdout}'.trim() == 'active';
+  }
+
   /// Turns the service on or off for this user, now and at every future
   /// login. Throws with systemd's own words on failure — the switch must not
   /// come back showing a state the system does not agree with.

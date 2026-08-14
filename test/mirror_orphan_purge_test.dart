@@ -157,8 +157,8 @@ notapid wl-mirror --fullscreen-output DP-5 eDP-1
     });
   });
 
-  group('mirror persistence uses the annotation, not exec', () {
-    test('writer never emits `exec wl-mirror` for a mirrored profile', () {
+  group('mirror persistence uses the annotation, and a shell-free exec', () {
+    test('the annotation persists it and a direct exec starts it', () {
       final p = Profile(
         name: 'Mirror',
         monitors: [
@@ -170,10 +170,17 @@ notapid wl-mirror --fullscreen-output DP-5 eDP-1
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      expect(rendered, isNot(contains('exec wl-mirror')),
-          reason: 'No exec hook → no kanshi-spawned wl-mirror duplicates.');
+      // The annotation is the canonical persistence — the parser reads
+      // `mirrorOf` back out of it. The exec is how the mirror comes up at
+      // boot with the GUI closed; it used to be a `sh -c` pipeline with a
+      // pgrep guard, which kanshi handed to /bin/sh with the `|` and `||`
+      // bare, so it never ran at all. Duplicates are MirrorRunner's job.
       expect(rendered, contains("# kanshi_gui:mirror 'B'='A'"),
           reason: 'Mirror state is persisted as a comment annotation.');
+      expect(rendered, contains('exec wl-mirror --scaling'),
+          reason: 'and kanshi can start it without the GUI.');
+      expect(rendered, isNot(contains('sh -c')),
+          reason: 'no shell operators: kanshi leaves them bare for /bin/sh.');
     });
 
     test('parser recovers `mirrorOf` from the annotation', () {

@@ -68,6 +68,16 @@ class FakeProcessRunner implements ProcessRunner {
     return fresh;
   }
 
+  /// Whether a subprocess started via [stream] is still running.
+  ///
+  /// `kill` drops its controller, so a key that is still present and open is
+  /// a child that was never reaped — which is exactly the shape of the
+  /// hotplug-watcher leak.
+  bool isStreamOpen(String key) {
+    final c = _streamControllers[key];
+    return c != null && !c.isClosed;
+  }
+
   /// Sequential pids handed out by `stream()` so tests that exercise
   /// the MirrorRunner's pid-aware logic can correlate kill calls to
   /// specific spawns.

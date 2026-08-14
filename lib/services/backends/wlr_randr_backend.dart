@@ -176,6 +176,9 @@ class WlrRandrBackend implements MonitorService {
   }
 
   @override
+  Future<void> shutdown() async {/* polls in-process; no child to reap */}
+
+  @override
   Stream<List<MonitorTileData>> watchOutputs() {
     // wlr-randr has no native subscribe. Poll every 2 s — coarser than the
     // Sway path but good enough for hot-plug awareness on Hyprland/Wayfire.

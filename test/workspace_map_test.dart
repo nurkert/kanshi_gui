@@ -81,14 +81,14 @@ void main() {
         ),
       ]);
       final text = File('${tmp.path}/config').readAsStringSync();
-      expect(text, contains("workspace 1 output 'B'"));
-      expect(text, contains("workspace 2 output 'B'"));
-      expect(text, contains("workspace 3 output 'A'"));
+      expect(text, contains('workspace 1 output \'"B"\''));
+      expect(text, contains('workspace 2 output \'"B"\''));
+      expect(text, contains('workspace 3 output \'"A"\''));
       // …and the rule still answers for the ones nobody observed. An
       // observation is a partial snapshot by construction: sway only reports
       // the workspaces that exist.
-      expect(text, contains("workspace 4 output 'B'"));
-      expect(text, contains("workspace 9 output 'A'"));
+      expect(text, contains('workspace 4 output \'"B"\''));
+      expect(text, contains('workspace 9 output \'"A"\''));
     });
   });
 

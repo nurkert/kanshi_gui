@@ -49,12 +49,18 @@ List<MonitorTileData> desk() => [
       _mon('eDP-1', 13192),
     ];
 
-/// Which workspace numbers the chain sends to [output], read back out of the
-/// emitted swaymsg text rather than out of the map that produced it.
-List<int> _workspacesOn(String chain, String output) {
+/// Which workspace numbers are sent to [output], read back out of the emitted
+/// swaymsg text rather than out of the map that produced it.
+///
+/// Handles both shapes on purpose: the `; `-joined chain that goes straight to
+/// the IPC socket, and the one-`exec`-per-line form the config file uses.
+/// Those differ in their quoting because they pass through different numbers
+/// of parsers — see OutputCriteria.kanshiExecForm.
+List<int> _workspacesOn(String text, String output) {
   final found = <int>[];
-  for (final part in chain.split('; ')) {
-    final m = RegExp(r"^workspace (\d+) output '(.+)'$").firstMatch(part);
+  for (final part in text.split(RegExp(r'; |\n'))) {
+    final m = RegExp(r"""^(?:\s*exec swaymsg )?workspace (\d+) output '"?(.+?)"?'$""")
+        .firstMatch(part.trim());
     if (m != null && m.group(2) == output) found.add(int.parse(m.group(1)!));
   }
   return found..sort();
@@ -169,7 +175,7 @@ void main() {
           workspaceMap: {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1', 8: 'eDP-1'},
         );
 
-    test('a rule mode writes nine bindings and drops the stale annotations',
+    test('a rule mode writes nine bindings and ignores the recorded map',
         () async {
       final c = cfg(KanshiWriteOptions.swayDefaults);
       await c.saveProfiles([stale()]);
@@ -179,9 +185,13 @@ void main() {
         expect(text, contains('workspace $ws output '),
             reason: 'workspace $ws would open under the cursor');
       }
-      expect(text, contains("workspace 8 output 'DP-5'"));
-      expect(text, isNot(contains('kanshi_gui:ws')),
-          reason: 'an annotation the chain contradicts is a lie in the file');
+      expect(text, contains('workspace 8 output \'"DP-5"\''),
+          reason: 'the rule decides while a rule is selected');
+      // The annotation stays. It is storage, not policy: erasing it because a
+      // pattern happens to be selected is how nine deliberate choices got
+      // thrown away for picking "left to right" once.
+      expect(text, contains("# kanshi_gui:ws '8'='eDP-1'"),
+          reason: 'what the user recorded outlives the mode they are in');
     });
 
     test('following the user keeps their map, and still fills the gaps',
@@ -191,8 +201,8 @@ void main() {
       await c.saveProfiles([stale()]);
       final text = File('${tmp.path}/config').readAsStringSync();
 
-      expect(text, contains("workspace 8 output 'eDP-1'"));
-      expect(text, contains("workspace 5 output 'DP-5'"),
+      expect(text, contains('workspace 8 output \'"eDP-1"\''));
+      expect(text, contains('workspace 5 output \'"DP-5"\''),
           reason: 'a workspace they never opened still needs a home');
       expect(text, contains("# kanshi_gui:ws '8'='eDP-1'"));
     });
@@ -243,15 +253,20 @@ void main() {
           {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1', 6: 'eDP-1'});
     });
 
-    test('leaving the following mode forgets the map', () async {
+    test('leaving the following mode keeps the map but stops obeying it',
+        () async {
       final c = await boot(follow: true);
       addTearDown(c.dispose);
-      expect(c.activeProfile?.workspaceMap, isNotNull);
+      final recorded = c.activeProfile?.workspaceMap;
+      expect(recorded, isNotNull);
 
       await c.setWorkspaceMode(WorkspaceManagementMode.interleaved);
-      expect(c.activeProfile?.workspaceMap, isNull,
-          reason: 'a stale observation must not outlive the mode that made it');
       expect(c.workspaceMode, WorkspaceManagementMode.interleaved);
+      expect(c.activeProfile?.workspaceMap, recorded,
+          reason: 'choosing a pattern must not destroy what was recorded');
+      // Kept, but not consulted: the rule answers for workspace 6 again.
+      expect(c.currentWorkspaceMap()[6], 'eDP-1');
+      expect(c.currentWorkspaceMap()[1], 'DP-4');
     });
 
     test('the settings file is what switches it on, the way the app does',
@@ -306,7 +321,14 @@ void main() {
     String onDisk() => File('${tmp.path}/config').readAsStringSync();
 
     /// Writes the exact shape the reporter had: an observed map that replaced
-    /// the rule, so only the workspaces that happened to be open got a home.
+    /// the rule, so only the workspaces that happened to be open got a home —
+    /// and all of it inside one `; `-joined `exec swaymsg "…"`, which kanshi
+    /// hands to /bin/sh where the semicolons separate shell commands.
+    ///
+    /// Written by post-processing the current writer's output rather than by
+    /// hand, so the geometry stays honest; the exec line itself has to be
+    /// forged because this version can no longer produce it, which is the
+    /// entire point of the migration under test.
     Future<ConfigService> broken({List<MonitorTileData>? monitors}) async {
       final writer = ConfigService(
         configPath: '${tmp.path}/config',
@@ -321,6 +343,24 @@ void main() {
           workspaceMap: {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1', 8: 'eDP-1'},
         ),
       ]);
+      final legacyChain = [
+        for (final e in {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1', 8: 'eDP-1'}.entries)
+          "workspace ${e.key} output '${e.value}'",
+        for (final e in {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1', 8: 'eDP-1'}.entries)
+          "workspace number ${e.key}; move workspace to output '${e.value}'",
+        'workspace number 1',
+      ].join('; ');
+      final file = File('${tmp.path}/config');
+      file.writeAsStringSync(
+        file
+            .readAsLinesSync()
+            .where((l) => !l.contains('exec swaymsg'))
+            .join('\n')
+            .replaceFirst(
+              '\n}',
+              '\n    exec swaymsg "$legacyChain"\n}',
+            ),
+      );
       return ConfigService(
         configPath: '${tmp.path}/config',
         backupPrefix: '${tmp.path}/backups/config.bak',
@@ -354,9 +394,10 @@ void main() {
         expect(onDisk(), contains('workspace $ws output '),
             reason: 'workspace $ws still has no home in the file');
       }
-      expect(onDisk(), contains("workspace 8 output 'DP-5'"),
+      expect(onDisk(), contains('workspace 8 output \'"DP-5"\''),
           reason: 'the stray observation must give way to the rule');
-      expect(onDisk(), isNot(contains('kanshi_gui:ws')));
+      // And the old, shell-broken chain is gone from the file.
+      expect(onDisk(), isNot(contains('exec swaymsg "')));
     });
 
     test('is left alone while the user asked to be followed', () async {
@@ -422,10 +463,15 @@ profile 'Office' {
       ));
       addTearDown(c.dispose);
 
-      final chains = RegExp('exec swaymsg "workspace')
-          .allMatches(onDisk())
-          .length;
-      expect(chains, 1, reason: 'two chains means sway is told two things');
+      // The old `;`-joined chain is replaced, not kept beside the new lines.
+      // Two exec blocks giving sway contradictory homes is worse than either.
+      expect(onDisk(), isNot(contains('exec swaymsg "workspace')),
+          reason: 'the old chain must be gone, not merely outnumbered');
+      expect(
+        RegExp(r'exec swaymsg workspace \d+ output').allMatches(onDisk()).length,
+        9,
+        reason: 'one binding per workspace, written once',
+      );
     });
   });
 

@@ -167,21 +167,24 @@ void main() {
         ],
         options: KanshiWriteOptions.swayDefaults,
       );
-      expect(rendered, contains("workspace 1 output '$_samsung'"));
-      expect(rendered, contains("move workspace to output '$_philips'"));
-      // A literal double quote here would terminate the `exec swaymsg "…"`
-      // string early and hand kanshi a mangled command.
-      expect(rendered, isNot(contains('output \'"')),
-          reason: 'no nested double quotes inside the exec string');
-      // The whole chain must still be one balanced double-quoted argument.
-      final execLine = rendered
+      // The nested `'"…"'` form, which is what kanshi(5) documents and what
+      // this test used to forbid. Three parsers strip one quote each: scfg
+      // takes the single quotes when it reads the config, kanshi escapes the
+      // double quotes so the shell hands them to swaymsg intact, and sway
+      // removes them last. Without them sway reads a description with spaces
+      // as several separate output names and silently drops the target.
+      expect(rendered, contains('workspace 1 output \'"$_samsung"\''));
+      expect(rendered, contains('workspace 2 output \'"$_philips"\''));
+      // One command per exec line, and nothing a shell would act on.
+      for (final line in rendered
           .split('\n')
-          .firstWhere((l) => l.trim().startsWith('exec swaymsg'));
-      expect('"'.allMatches(execLine).length, 2,
-          reason: 'the exec argument must open and close exactly once');
+          .where((l) => l.trim().startsWith('exec swaymsg'))) {
+        expect(line, isNot(contains(';')));
+        expect(line, isNot(contains(r'$')));
+      }
     });
 
-    test('a connector-addressed output keeps the single-quoted form', () {
+    test('a connector-addressed output is quoted the same way', () {
       final rendered = KanshiConfigWriter.render(
         [
           Profile(name: 'Desk', monitors: [
@@ -191,7 +194,7 @@ void main() {
         ],
         options: KanshiWriteOptions.swayDefaults,
       );
-      expect(rendered, contains("workspace 1 output 'DP-1'"));
+      expect(rendered, contains('workspace 1 output \'"DP-1"\''));
     });
   });
 

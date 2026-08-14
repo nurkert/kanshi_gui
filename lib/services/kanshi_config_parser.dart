@@ -718,12 +718,25 @@ class KanshiConfigParser {
   static String _stripComments(String content) {
     final out = StringBuffer();
     for (final raw in content.split('\n')) {
-      var inSingle = false;
+      // Both quote characters, and a quote inside the other kind is just a
+      // character. Only single quotes were tracked, so a `#` inside a
+      // DOUBLE-quoted output description — the form every stable EDID
+      // criteria is written in — looked like the start of a comment. The
+      // rest of the line was discarded, the `output` directive lost its
+      // arguments, and the display quietly disappeared from the setup on the
+      // next read. `Acme #1` is a perfectly ordinary thing for a monitor to
+      // call itself.
+      String? quote;
       var idx = 0;
       while (idx < raw.length) {
         final ch = raw[idx];
-        if (ch == "'") inSingle = !inSingle;
-        if (!inSingle && ch == '#') break;
+        if (quote == null && (ch == "'" || ch == '"')) {
+          quote = ch;
+        } else if (ch == quote) {
+          quote = null;
+        } else if (quote == null && ch == '#') {
+          break;
+        }
         out.write(ch);
         idx++;
       }

@@ -1,19 +1,38 @@
 [Unit]
 Description=kanshi_gui workspace placement helper
 Documentation=https://github.com/nurkert/kanshi_gui
-# Tied to the graphical session where there is one. Sway sessions started
-# without sway-systemd never activate that target, which is why the install
-# section below hangs off default.target instead — the helper waits for a sway
-# socket to appear rather than assuming systemd will tell it about one.
-PartOf=graphical-session.target
+# Ordered after the graphical session where there is one, but deliberately NOT
+# PartOf it. Sway sessions started without sway-systemd never activate that
+# target — and with PartOf, a target that stops (or was never properly started)
+# takes the helper down with it and nothing brings it back until the next
+# login. The helper waits for a sway socket to appear on its own, which works
+# in every arrangement, so tying its lifetime to a target that may not exist
+# buys nothing and costs a silently dead service.
 After=graphical-session.target
+# The enable symlink lives in the USER's ~/.config/systemd/user, and a package
+# removal runs as root and cannot reach it. Without this line the leftover
+# symlink turns into a failed unit at every subsequent login, complaining
+# about software the user uninstalled. With it, systemd finds nothing to run
+# and quietly skips it.
+ConditionPathExists=/usr/lib/kanshi_gui/kanshi-gui-workspaced
+# Do not fight forever if the binary really is gone.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/lib/kanshi_gui/kanshi-gui-workspaced
 # It is a watcher: if it dies it stops doing the one thing it is for, and
 # nothing tells the user. Come back.
-Restart=on-failure
+#
+# `always`, not `on-failure`, because the helper exits 0 on purpose when it
+# notices its own executable has been replaced or removed — a running process
+# keeps its old image alive through both, so an upgrade would otherwise go on
+# running the previous version until the next logout. Exiting cleanly and
+# being restarted is how it picks up the new one; after a removal there is
+# nothing left to start and the unit simply stays down. A stop requested
+# through systemctl is still a stop and is not restarted.
+Restart=always
 RestartSec=5
 # The namespacing options (ProtectSystem, PrivateNetwork, …) are deliberately
 # absent: they need privileges a --user unit does not have, and systemd fails
