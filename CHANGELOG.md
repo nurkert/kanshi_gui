@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.3
+
+### Fixed
+
+- **The app could disagree with its own settings file about where your
+  workspaces go.** Dragging a number in the grid switches the running app to
+  *My own* — and the setting on disk was written by the sheet, at each of the
+  places that can change a mode, one of which could be reached without it.
+  The result on a real desk: the kanshi config carried the user's own
+  arrangement while `settings.json` still said `interleaved`, both written in
+  the same second. Nothing looks wrong until the next launch, when the setting
+  wins and nine hand-placed numbers snap back onto a pattern.
+
+  The mode is now derived in one place and persisted from that same place, so
+  a caller can no longer forget — there is nothing left for a caller to
+  remember. Dragging a workspace also moves the fallback rule with it, which
+  it previously left behind.
+
 ## 2.1.2
 
 ### Fixed

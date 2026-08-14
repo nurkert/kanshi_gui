@@ -438,13 +438,11 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
 
   Future<void> Function() _setMode(WorkspaceManagementMode mode) => () async {
         if (mode == c.workspaceMode) return;
-        // Settings first, config second — the same ordering [_assign] needs
-        // and for the same reason: the config write is I/O, and a crash
-        // between the two would leave a file that places workspaces one way
-        // while settings.json says another. The controller is what actually
-        // moves them, so it still runs even if the settings write throws.
-        widget.settings.workspaceManagement = mode;
-        final saved = widget.settings.save();
+        // The sheet does not write settings.json any more. The controller
+        // derives the mode it is actually in and persists that itself, which
+        // is the only way the two cannot drift — a UI that remembers to save
+        // in three places will one day forget in one of them, and it did.
+        //
         // Turning placement on brings the helper with it, once. Without that,
         // the feature only works while the window is open and the thing that
         // fixes it is a second switch further down the same sheet — findable,
@@ -460,20 +458,12 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
           } catch (_) {/* the switch below says what happened */}
         }
         await c.setWorkspaceMode(mode);
-        await saved;
       };
 
-  /// The settings file is written BEFORE the config, not after it. Writing
-  /// the config takes real I/O, and a settings.json that still said
-  /// `interleaved` while the config already carried the user's hand-made map
-  /// would let the rule win on the next launch and quietly discard the edit.
-  Future<void> Function() _assign(int ws, String outputId) => () async {
-        if (!c.canAssignWorkspace(ws, outputId)) return;
-        widget.settings.workspaceManagement = WorkspaceManagementMode.custom;
-        final saved = widget.settings.save();
-        await c.assignWorkspace(ws, outputId);
-        await saved;
-      };
+  /// Moving one number is a mode change, and the controller records it —
+  /// including in settings.json. See [KanshiController.assignWorkspace].
+  Future<void> Function() _assign(int ws, String outputId) =>
+      () => c.assignWorkspace(ws, outputId);
 
   Future<void> Function() _setDaemon(bool on) => () async {
         await widget.daemon.setEnabled(on);
