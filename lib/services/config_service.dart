@@ -110,6 +110,24 @@ class ConfigService {
     return KanshiConfigParser.parse(content);
   }
 
+  /// Whether the file still holds workspace `exec` lines in a shape this
+  /// version knows does not work.
+  ///
+  /// The `; `-joined `exec swaymsg "…"` chain every release before 2.1.1
+  /// wrote is handed to `/bin/sh` by kanshi, which splits it on the
+  /// semicolons and — where a display's EDID carries a bracket — refuses the
+  /// whole line. A config in that shape places nothing at all with the app
+  /// closed, so it is worth one rewrite on launch.
+  Future<bool> carriesLegacyWorkspaceExec() async {
+    try {
+      final file = File(configPath);
+      if (!await file.exists()) return false;
+      return (await file.readAsString()).contains('exec swaymsg "');
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// True iff the live kanshi config contains an `include <pattern>`
   /// directive (kanshi's DSL feature for splitting profiles across
   /// files). Result is cached after the first call to keep the save

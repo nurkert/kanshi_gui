@@ -186,6 +186,7 @@ String? buildWorkspaceDeclarations(
   Map<String, OutputCriteria> criteria = const {},
 }) {
   if (map.isEmpty) return null;
+  if (!_allTargetsSafe(map, criteria)) return null;
   final numbers = map.keys.toList()..sort();
   return [
     // NO `number` keyword — see [buildWorkspaceChain] for why.
@@ -193,6 +194,51 @@ String? buildWorkspaceDeclarations(
       'workspace $ws output ${_execCriteria(map[ws]!, criteria)}',
   ].join('; ');
 }
+
+/// The `workspace N output X` bindings as ONE COMMAND PER LINE, for the
+/// kanshi config.
+///
+/// Not a chain, and that is the whole point. kanshi hands each `exec` line to
+/// `/bin/sh` after re-escaping only whitespace and quotes, so a `;` between
+/// commands is a shell separator: the first command ran, and every one after
+/// it was looked up as a program and reported `not found`. Nine bindings
+/// joined into one line meant eight of them never happened — which is exactly
+/// the "$mod+9 opens under the cursor" this feature exists to fix.
+///
+/// One command per line has no separator to be eaten, and the order of
+/// independent bindings does not matter, so kanshi's warning that exec
+/// commands "may not be preserved" in order costs nothing here.
+///
+/// Returns an empty list when any target cannot be expressed safely; see
+/// [isShellSafeCriteria].
+List<String> buildWorkspaceConfigExecs(
+  Map<int, String> map, {
+  Map<String, OutputCriteria> criteria = const {},
+}) {
+  if (map.isEmpty || !_allTargetsSafe(map, criteria)) return const [];
+  final numbers = map.keys.toList()..sort();
+  return [
+    for (final ws in numbers)
+      'swaymsg workspace $ws output '
+          '${(criteria[map[ws]!] ?? OutputCriteria.connector(map[ws]!)).kanshiExecForm}',
+  ];
+}
+
+/// Fails the whole chain closed if any target could not be safely quoted.
+///
+/// The chain is emitted as `exec swaymsg "…"` and kanshi hands that to a
+/// shell, so a target carrying shell syntax is a command, not a name. The
+/// criteria chooser already declines to use an unsafe EDID description, which
+/// leaves only a connector name that somehow contains shell syntax — a config
+/// edited by hand, or a compositor reporting something very strange. Emitting
+/// nothing costs the user their workspace placement and nothing else; the
+/// alternative costs them their session.
+bool _allTargetsSafe(
+  Map<int, String> map,
+  Map<String, OutputCriteria> criteria,
+) =>
+    map.values.every((id) =>
+        (criteria[id] ?? OutputCriteria.connector(id)).isShellSafe);
 
 /// How an output is spelled inside the `exec swaymsg \"…\"` chain.
 ///

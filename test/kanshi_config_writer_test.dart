@@ -100,13 +100,13 @@ void main() {
       // Binding form is "workspace N output X" without the `number`
       // keyword — see buildSwayWorkspaceChain doc for why.
       for (final ws in [1, 4, 7]) {
-        expect(out, contains("workspace $ws output 'L'"));
+        expect(out, contains('workspace $ws output \'"L"\''));
       }
       for (final ws in [2, 5, 8]) {
-        expect(out, contains("workspace $ws output 'M'"));
+        expect(out, contains('workspace $ws output \'"M"\''));
       }
       for (final ws in [3, 6, 9]) {
-        expect(out, contains("workspace $ws output 'R'"));
+        expect(out, contains('workspace $ws output \'"R"\''));
       }
     });
 
@@ -124,10 +124,10 @@ void main() {
       );
       // Left screen: 1/3/5/7/9, Right screen: 2/4/6/8.
       for (final ws in [1, 3, 5, 7, 9]) {
-        expect(out, contains("workspace $ws output 'Left'"));
+        expect(out, contains('workspace $ws output \'"Left"\''));
       }
       for (final ws in [2, 4, 6, 8]) {
-        expect(out, contains("workspace $ws output 'Right'"));
+        expect(out, contains('workspace $ws output \'"Right"\''));
       }
     });
 
@@ -151,19 +151,18 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      final chain = out
+      final execs = out
           .split('\n')
-          .firstWhere((l) => l.contains('exec swaymsg'));
-      // Every workspace declaration AND every move command must
-      // target A only.
+          .where((l) => l.contains('exec swaymsg'))
+          .map((l) => l.trim())
+          .toList();
       for (var ws = 1; ws <= 9; ws++) {
-        expect(chain, contains("workspace $ws output 'A'"));
+        expect(execs, contains('exec swaymsg workspace $ws output \'"A"\''));
       }
-      expect(chain, isNot(contains("output 'B'")),
-          reason: 'No workspace-target reference to B in the chain.');
-      expect(chain, isNot(contains("move workspace to output 'B'")),
-          reason: 'No active move targeting B in the chain.');
-      expect(chain, isNot(contains("mirror (B)")),
+      expect(execs.join('\n'), isNot(contains('"B"')),
+          reason: 'A mirror destination shows another screen and gets no '
+              'workspaces of its own.');
+      expect(out, isNot(contains("mirror (B)")),
           reason: 'No named-claim leakage into the user-visible bar.');
     });
 
@@ -219,27 +218,24 @@ void main() {
         options: KanshiWriteOptions.swayDefaults,
       );
       expect(out, contains("# kanshi_gui:rank 'L'=1"));
-      expect(out, contains("workspace 1 output 'R'"));
-      expect(out, contains("workspace 2 output 'L'"));
-      expect(out, contains("workspace 3 output 'R'"));
-      expect(out, contains("workspace 4 output 'L'"));
+      expect(out, contains('workspace 1 output \'"R"\''));
+      expect(out, contains('workspace 2 output \'"L"\''));
+      expect(out, contains('workspace 3 output \'"R"\''));
+      expect(out, contains('workspace 4 output \'"L"\''));
     });
 
-    test(
-        'workspace assignment is one chained swaymsg call with explicit '
-        'move-to-output for each workspace', () {
-      // Two coupled bugs forced this design:
+    test('workspace assignment is one exec per binding, with nothing a '
+        'shell can act on', () {
+      // This was one `exec swaymsg "…"` holding all nine bindings joined by
+      // `; `, plus a focus-and-move pass. It never ran. kanshi hands exec
+      // lines to /bin/sh after re-escaping only whitespace and the two
+      // quotes (kanshi 1.9 config.c:270-276), so each `;` separated SHELL
+      // commands: workspace 1 was bound and the other eight were looked up
+      // as programs. See kanshi_exec_test.dart, which runs the real output
+      // through the real algorithm rather than asserting on its shape.
       //
-      //  1. Multiple `exec swaymsg "..."` lines race because kanshi
-      //     spawns each in its own fork/exec; sway processes them
-      //     out-of-order. ONE chained invocation eliminates the race.
-      //
-      //  2. `workspace N output X` is passive — it sets the home for
-      //     newly-created workspaces but does NOT relocate ones that
-      //     already exist with windows. The user dockted with a window
-      //     on workspace 1 (laptop-only), then the docking layout
-      //     wasn't applied retroactively. Adding `workspace N; move
-      //     workspace to output X` actively moves existing workspaces.
+      // The race the chain existed to avoid does not apply to what is left:
+      // nine independent bindings have no order to preserve.
       final p = Profile(
         name: 'Triple',
         monitors: [
@@ -252,35 +248,23 @@ void main() {
         [p],
         options: KanshiWriteOptions.swayDefaults,
       );
-      // Exactly one `exec swaymsg` line in the workspace-assignment
-      // section. (The current-profile-marker uses `exec echo`, not
-      // swaymsg, so it doesn't count toward this assertion.)
       final swayMsgLines =
           out.split('\n').where((l) => l.contains('exec swaymsg')).toList();
-      expect(swayMsgLines, hasLength(1),
-          reason: 'Multiple exec swaymsg lines reintroduce the race that '
-              'leaked windows onto the wrong output during docking.');
-      final chained = swayMsgLines.single;
-      // Active relocation must be present for each workspace 1..9.
-      // Crucially we use `workspace number N` (not `workspace N`):
-      // bare `workspace N` would treat N as the workspace *name*, so
-      // a user with a named workspace like "1: code" would silently
-      // get a fresh empty "1" workspace alongside their existing one.
-      // The `number` keyword targets the numeric slot regardless of
-      // human-readable name.
-      for (var ws = 1; ws <= 9; ws++) {
-        expect(chained, contains("workspace number $ws"),
-            reason: 'Workspace $ws focus must use `number` to disambiguate '
-                'from any user-assigned workspace name.');
-        expect(chained, contains("move workspace to output"),
-            reason: 'Existing workspaces must be actively relocated.');
+      expect(swayMsgLines, hasLength(9),
+          reason: 'one line per workspace, so none can be eaten by a '
+              'separator the shell claims first');
+      for (final line in swayMsgLines) {
+        expect(line, isNot(contains(';')));
+        expect(line, isNot(contains('&')));
+        expect(line, isNot(contains('|')));
+        expect(line, isNot(contains(r'$')));
       }
-      // Final command lands focus on workspace number 1 — leftmost
-      // rank, typically the user's primary screen after docking.
-      expect(chained.trimRight().endsWith('workspace number 1"'), isTrue,
-          reason: 'Chain must end on `workspace number 1` to give the '
-              'user a predictable focus landing instead of dropping them '
-              'on ws 9.');
+      // The focus-and-move half is deliberately absent: it cannot be
+      // expressed without a separator, it is the visible half, and both the
+      // app and the helper service perform it over IPC where no shell is
+      // involved.
+      expect(out, isNot(contains('move workspace to output')));
+      expect(out, isNot(contains('workspace number')));
     });
 
     test('round-trips workspaceRank through writer → parser', () {
@@ -326,17 +310,19 @@ void main() {
       );
       final embedded = rendered
           .split('\n')
-          .firstWhere((l) => l.contains('exec swaymsg'));
-      // Strip the wrapping `    exec swaymsg "` and trailing `"`.
-      final inner = embedded
-          .trim()
-          .replaceFirst('exec swaymsg "', '')
-          .replaceFirst(RegExp(r'"$'), '');
+          .where((l) => l.contains('exec swaymsg'))
+          .map((l) => l.trim().replaceFirst('exec ', ''))
+          .toList();
       final ranked = resolveWorkspaceRanks([
         _mon(id: 'A', x: 0),
         _mon(id: 'B', x: 1920),
       ]);
-      expect(buildSwayWorkspaceChain(ranked), equals(inner));
+      // The writer embeds exactly what the domain layer produces — no
+      // second rendering of the same idea living in the writer.
+      expect(
+        embedded,
+        equals(buildWorkspaceConfigExecs(resolveWorkspaceMap(ranked))),
+      );
     });
 
     test('three monitors interleave 1/4/7, 2/5/8, 3/6/9 left to right', () {
@@ -548,17 +534,18 @@ void main() {
       );
       // Mirror persistence has two parts that must agree:
       //   1) the `# kanshi_gui:mirror` annotation (parser → `mirrorOf`)
-      //   2) a `pgrep`-guarded `exec wl-mirror` so kanshi spawns the
-      //      mirror at session start when the GUI isn't running yet.
-      // The guard is what makes this safe against `kanshictl reload`
-      // (a bare exec would stack duplicate wl-mirror processes).
+      //   2) a direct `exec wl-mirror` so kanshi spawns the mirror at
+      //      session start when the GUI isn't running yet.
+      // The pgrep guard this used to carry was a shell pipeline, and kanshi
+      // leaves `|` and `||` bare for /bin/sh — so the guard never ran and
+      // neither did wl-mirror. Duplicates are handled by MirrorRunner, which
+      // can actually see them.
       expect(rendered, contains("# kanshi_gui:mirror 'B'='A'"),
           reason: 'Mirror state is persisted as an annotation.');
-      expect(rendered, contains('pgrep -x wl-mirror -a'),
-          reason: 'Guard filters by process name so the shell running '
-              'the guard cannot self-match its own argv (the bug that '
+      expect(rendered, contains('exec wl-mirror'),
+          reason: 'kanshi has to be able to start the mirror without the '
               'made the boot-time spawn a no-op in 1.5.10).');
-      expect(rendered, contains('grep -qF -- "--fullscreen-output B "'),
+      expect(rendered, contains('--fullscreen-output "B" "A"'),
           reason: 'Literal substring + trailing space pins the destination, '
               'avoiding both regex metachars and prefix collisions.');
       expect(
@@ -567,8 +554,10 @@ void main() {
               'wl-mirror --scaling fit --fullscreen-output "B" "A"'),
           reason: 'Guarded fallback spawns the mirror with explicit '
               '`--scaling fit` so cropping cannot regress to cover-mode.');
-      expect(rendered, isNot(contains('pgrep -f "wl-mirror')),
-          reason: 'The old self-matching `pgrep -f` form must not regress.');
+      expect(rendered, isNot(contains('pgrep')),
+          reason: 'No shell pipeline: kanshi leaves | and || bare for sh, so '
+              'a guard written that way never runs and neither does the '
+              'command it was guarding.');
 
       final reparsed =
           KanshiConfigParser.parse(rendered).single.monitors;
@@ -580,11 +569,7 @@ void main() {
           reason: 'Destination tile must recover its mirror target.');
     });
 
-    test('guarded mirror exec is idempotent across kanshi reloads', () {
-      // Verify the structural guarantee: every mirror destination gets
-      // exactly one exec line, and the pgrep check pins on the
-      // destination's specific `--fullscreen-output` argv. Two mirrors
-      // in the same profile must produce two independent guards.
+    test('one mirror exec per destination, and no more', () {
       final p = Profile(
         name: 'TwoMirrors',
         monitors: [
@@ -603,8 +588,8 @@ void main() {
           .toList();
       expect(execLines, hasLength(2),
           reason: 'One exec per mirror destination, no more.');
-      expect(execLines[0], contains('--fullscreen-output B'));
-      expect(execLines[1], contains('--fullscreen-output C'));
+      expect(execLines[0], contains('--fullscreen-output "B"'));
+      expect(execLines[1], contains('--fullscreen-output "C"'));
     });
 
     test('neutral options do not emit wl-mirror exec lines', () {

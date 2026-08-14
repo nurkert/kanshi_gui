@@ -229,6 +229,37 @@ void main() {
           reason: 'the helper has no opinion about a workspace it does not manage');
     });
 
+    test('it hands focus back to wherever the user actually is', () {
+      // Moving a workspace in sway means focusing it first — there is no
+      // other way. The event that triggers this arrives milliseconds after
+      // the user pressed a key, and by the time the command lands they may
+      // have pressed another. Without the return leg the helper drags them
+      // back to a workspace they just left, which reads as the tool fighting
+      // them.
+      final plan = planWorkspaces(
+        profiles: [Profile(name: 'Office', monitors: desk())],
+        live: desk(),
+        distribution: WorkspaceDistribution.interleaved,
+      )!;
+      expect(plan.moveOne(8, returnFocusTo: 1), endsWith('; workspace number 1'));
+      // Nothing to hand back when they are still on the one being moved.
+      expect(plan.moveOne(8, returnFocusTo: 8),
+          isNot(contains('; workspace number 8; workspace')));
+      expect(plan.moveOne(8, returnFocusTo: null), isNot(endsWith('number 8')));
+    });
+
+    test('an unsafe target produces no command even with a focus return', () {
+      final mons = [_mon('DP-1', descriptor: r'Acme $(id) Corp')];
+      final plan = planWorkspaces(
+        profiles: [Profile(name: 'Odd', monitors: mons)],
+        live: mons,
+        distribution: WorkspaceDistribution.interleaved,
+      )!;
+      // The descriptor was refused, so the connector is used — which is safe.
+      expect(plan.moveOne(1, returnFocusTo: 2), contains("'DP-1'"));
+      expect(plan.moveOne(1), isNot(contains(r'$(id)')));
+    });
+
     test('a block per screen is the other pattern', () {
       final plan = planWorkspaces(
         profiles: [Profile(name: 'Office', monitors: desk())],
@@ -244,12 +275,17 @@ void main() {
 
   group('reading sway events', () {
     test('an output event means work it out again', () {
-      // Docking: the screens changed underneath the plan.
-      final v = classifySwayEvent({
-        'change': 'unspecified',
-        'output': {'name': 'DP-4'},
-      });
-      expect(v.action, SwayEventAction.replan);
+      // The exact payload a live sway sends. It carries NOTHING else — no
+      // output name, no rect. This code looked for an `output` key, which
+      // does not exist, so docking replanned nothing for a whole release.
+      expect(classifySwayEvent({'change': 'unspecified'}).action,
+          SwayEventAction.replan);
+    });
+
+    test('a malformed event with no change at all still replans', () {
+      // Failing towards "look again" is right here: the cost is one cheap
+      // recomputation, and the alternative is the daemon going deaf.
+      expect(classifySwayEvent(const {}).action, SwayEventAction.replan);
     });
 
     test('a reload means work it out again', () {
@@ -305,12 +341,16 @@ void main() {
       );
     });
 
-    test('a malformed event is ignored rather than guessed at', () {
-      expect(classifySwayEvent(const {}).action, SwayEventAction.none);
-      expect(classifySwayEvent({'change': 'init'}).action,
-          SwayEventAction.none);
+    test('a workspace event that says nothing usable moves nothing', () {
       expect(
         classifySwayEvent({'change': 'init', 'current': 'nonsense'}).action,
+        SwayEventAction.none,
+      );
+      expect(
+        classifySwayEvent({
+          'change': 'init',
+          'current': {'name': 'scratch'},
+        }).action,
         SwayEventAction.none,
       );
     });

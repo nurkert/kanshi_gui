@@ -342,6 +342,23 @@ class SwayBackend implements MonitorService {
     return '"$escaped"';
   }
 
+  /// Every long-lived subprocess this backend has started and not yet reaped.
+  final Set<ProcessStream> _watchers = {};
+
+  @override
+  Future<void> shutdown() async {
+    // Killing on the way out is the only thing that reliably reaps these:
+    // `onCancel` below fires when a listener goes away, and closing the
+    // window is not that — the process just ends. See [MonitorService.shutdown].
+    final open = _watchers.toList();
+    _watchers.clear();
+    for (final w in open) {
+      try {
+        await w.kill();
+      } catch (_) {/* already gone */}
+    }
+  }
+
   @override
   Stream<List<MonitorTileData>> watchOutputs() {
     final controller = StreamController<List<MonitorTileData>>.broadcast();
@@ -349,6 +366,7 @@ class SwayBackend implements MonitorService {
     () async {
       final bin = await _binary();
       sub = _runner.stream(bin, ['-t', 'subscribe', '-m', '["output"]']);
+      _watchers.add(sub!);
       // Emit the current state immediately so subscribers don't have to
       // wait for the first event.
       try {
@@ -364,7 +382,10 @@ class SwayBackend implements MonitorService {
       );
     }();
     controller.onCancel = () async {
-      await sub?.kill();
+      final s = sub;
+      if (s == null) return;
+      _watchers.remove(s);
+      await s.kill();
     };
     return controller.stream;
   }

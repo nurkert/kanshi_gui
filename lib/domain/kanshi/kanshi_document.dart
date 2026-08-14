@@ -212,7 +212,14 @@ class KanshiDocument {
     // workspace 1 does not contain — so the app failed to recognise its own
     // line, kept it, and wrote a second one beside it. Two exec chains giving
     // sway contradictory homes is worse than either of them.
-    return (body.contains('workspace number ') &&
+    // Since 2.1.1 the workspace bindings are one `exec swaymsg workspace N
+    // output …` per line instead of one `;`-joined chain — kanshi hands exec
+    // lines to /bin/sh, which ate the separators. Both shapes have to be
+    // recognised: the old one so an existing config gets replaced rather than
+    // doubled, the new one so the app keeps recognising what it wrote today.
+    return RegExp(r'^(?:exec\s+)?swaymsg\s+workspace\s+\d+\s+output\s')
+            .hasMatch(body) ||
+        (body.contains('workspace number ') &&
             body.contains('move workspace to output')) ||
         body.contains('workspace number 1') ||
         body.contains('.current_kanshi_profile') ||

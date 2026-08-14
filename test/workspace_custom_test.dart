@@ -98,8 +98,8 @@ void main() {
       await c.assignWorkspace(9, 'DP-4');
 
       final text = File('${tmp.path}/config').readAsStringSync();
-      expect(text, contains("workspace 9 output 'Make DP-4 SerialDP-4'"));
-      expect(text, contains("workspace 3 output 'Make eDP-1 SerialeDP-1'"));
+      expect(text, contains('workspace 9 output \'"Make DP-4 SerialDP-4"\''));
+      expect(text, contains('workspace 3 output \'"Make eDP-1 SerialeDP-1"\''));
       expect(text, contains("# kanshi_gui:ws '9'='DP-4'"));
     });
 
@@ -177,15 +177,25 @@ void main() {
       expect(c.currentWorkspaceMap()[1], 'DP-4');
     });
 
-    test('leaving it for a rule drops the map', () async {
+    test('a rule takes over without destroying what was chosen', () async {
+      // Nine deliberate choices must not evaporate because a pattern was
+      // tried on. The pattern wins while it is selected; "my own" finds the
+      // arrangement still there afterwards.
       final c = await boot(WorkspaceManagementMode.interleaved);
       addTearDown(c.dispose);
       await c.assignWorkspace(7, 'DP-5');
-      expect(c.activeProfile?.workspaceMap, isNotNull);
+      final mine = c.activeProfile?.workspaceMap;
+      expect(mine, isNotNull);
 
       await c.setWorkspaceMode(WorkspaceManagementMode.interleaved);
-      expect(c.activeProfile?.workspaceMap, isNull);
-      expect(c.currentWorkspaceMap()[7], 'DP-4');
+      expect(c.currentWorkspaceMap()[7], 'DP-4',
+          reason: 'the rule decides while the rule is selected');
+      expect(c.activeProfile?.workspaceMap, mine,
+          reason: 'and the choice is still on file');
+
+      await c.setWorkspaceMode(WorkspaceManagementMode.custom);
+      expect(c.currentWorkspaceMap()[7], 'DP-5',
+          reason: 'coming back finds it where it was left');
     });
 
     test('a map made by hand survives a switch to following and back',

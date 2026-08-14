@@ -119,6 +119,13 @@ class FakeMonitorService implements MonitorService {
   @override
   Stream<List<MonitorTileData>> watchOutputs() => _watchController.stream;
 
+  /// Recorded so a test can assert the app actually releases its children on
+  /// the way out — the real backend leaks a `swaymsg` per launch without it.
+  int shutdownCalls = 0;
+
+  @override
+  Future<void> shutdown() async => shutdownCalls++;
+
   /// Per-output identify-banner spawn calls recorded for tests. Set
   /// [identifyBannerSupported] to true to make this fake act like Sway and
   /// return a fake [ProcessStream]; otherwise it returns null so the

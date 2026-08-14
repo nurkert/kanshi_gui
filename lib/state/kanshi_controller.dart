@@ -493,8 +493,8 @@ class KanshiController extends ChangeNotifier {
     // first edit silently fails to land.
     await _saves.inspect();
     // BEFORE ensureCurrentSetupMatches, which may add an in-memory scratch
-    // setup that must not reach the file. See [_migrateStaleWorkspaceMaps].
-    await _migrateStaleWorkspaceMaps();
+    // setup that must not reach the file. See [_migrateStaleWorkspaceExecs].
+    await _migrateStaleWorkspaceExecs();
     // persist: false — opening the app must never rewrite (and risk
     // re-applying) the user's working config. See [ensureCurrentSetupMatches].
     await ensureCurrentSetupMatches(persist: false);
@@ -522,19 +522,26 @@ class KanshiController extends ChangeNotifier {
     }
   }
 
-  /// Clears `# kanshi_gui:ws` annotations a rule mode would never write.
+  /// Rewrites a config whose `exec` lines this version can no longer stand
+  /// behind.
   ///
-  /// A config written between M9 and now carries an observed map that
-  /// REPLACED the distribution rule rather than overlaying it, which left
-  /// most of 1..9 with no `workspace N output X` line at all. The GUI's own
-  /// startup pass repairs the running sway session, but the file is what
-  /// kanshi replays on the next dock — and with the GUI closed, that is the
-  /// only thing there is.
+  /// Two shapes qualify. A config written between M9 and 2.0.2 carries an
+  /// observed map that REPLACED the distribution rule instead of overlaying
+  /// it, so most of 1..9 had no binding at all. And every config written
+  /// before 2.1.1 carries the `;`-joined `exec swaymsg "…"` chain, which
+  /// kanshi hands to /bin/sh — where the semicolons separate shell commands
+  /// and a bracket in an EDID description aborts the line outright. Either
+  /// way the file on disk does nothing useful, and the file is the only thing
+  /// there is with the app closed.
+  ///
+  /// It no longer nulls anyone's map: that field can now hold nine deliberate
+  /// choices, and the writer keeps them as an annotation whatever mode is
+  /// active. Re-rendering is enough — the new writer simply does not emit the
+  /// old shape.
   ///
   /// Not routed through [_scheduleSave]: this is the app correcting its own
   /// bookkeeping, not the user editing a layout, so it must not light up
-  /// "Not applied yet" on a window nobody has touched. Self-clearing — once
-  /// the annotations are gone the condition never holds again.
+  /// "Not applied yet" on a window nobody has touched.
   ///
   /// Two things make this an immediate, awaited write over an explicit copy
   /// rather than a scheduled save of `_profiles`:
@@ -547,13 +554,9 @@ class KanshiController extends ChangeNotifier {
   ///  * `dispose()` cancels a pending timer without flushing it, so a launch
   ///    short enough would drop the repair on the floor and leave the user
   ///    with the broken config they opened the app to fix.
-  Future<void> _migrateStaleWorkspaceMaps() async {
+  Future<void> _migrateStaleWorkspaceExecs() async {
     if (!config.writeOptions.injectSwayWorkspaceExec) return;
-    if (_followsWorkspaceMap) return;
-    if (!_profiles.any((p) => p.workspaceMap != null)) return;
-    for (final p in _profiles) {
-      p.workspaceMap = null;
-    }
+    if (!await config.carriesLegacyWorkspaceExec()) return;
     await _saves.flush(List<Profile>.of(_profiles));
   }
 
@@ -773,11 +776,24 @@ class KanshiController extends ChangeNotifier {
     return true;
   }
 
+  /// Releases what would outlive the process, and waits for it.
+  ///
+  /// Separate from [dispose] because it has to be awaited and [dispose] is a
+  /// synchronous ChangeNotifier override. Called from the app's exit hook;
+  /// see [MonitorService.shutdown] for what leaks without it.
+  Future<void> shutdown() async {
+    try {
+      await monitors.shutdown();
+    } catch (_) {/* best effort — we are on the way out */}
+    dispose();
+  }
+
   @override
   void dispose() {
     // Set the dispose flag FIRST so any in-flight async body that's
     // about to call `notifyListeners` or fire a callback bails out
     // before touching the post-dispose controller.
+    if (_isDisposed) return;
     _isDisposed = true;
     _saves.dispose();
     _driftAutoReapplyTimer?.cancel();
@@ -1718,16 +1734,22 @@ class KanshiController extends ChangeNotifier {
         _learnsWorkspaceMap == mode.learns) {
       return;
     }
-    final seed =
-        mode == WorkspaceManagementMode.custom ? currentWorkspaceMap() : null;
+    // Seed "my own" from the picture on screen — but only when this setup has
+    // nothing recorded yet. With a map already on file, seeding would
+    // overwrite the user's own arrangement with whatever pattern they had
+    // stepped through on the way back to it.
+    final seed = mode == WorkspaceManagementMode.custom &&
+            (activeProfile?.workspaceMap?.isEmpty ?? true)
+        ? currentWorkspaceMap()
+        : null;
     _workspaceDistribution = dist;
     _followsWorkspaceMap = mode.followsMap;
     _learnsWorkspaceMap = mode.learns;
-    if (!mode.followsMap) {
-      for (final p in _profiles) {
-        p.workspaceMap = null;
-      }
-    }
+    // Nothing is thrown away. Leaving a map-backed mode used to null every
+    // setup's map, which was defensible while the only way to get one was to
+    // be observed — and indefensible the moment a map could be nine
+    // deliberate choices. A pattern takes precedence while it is selected;
+    // choosing "my own" again finds the arrangement still there.
     final idx = _activeProfileIndex;
     if (seed != null && seed.isNotEmpty && idx != null) {
       _profiles[idx].workspaceMap = seed;
