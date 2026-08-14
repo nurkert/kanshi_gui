@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:kanshi_gui/services/kanshi_config_writer.dart';
+// The domain module directly, not the writer that re-exports it. The writer
+// reaches `dart:ui` through layout_math, and `dart:ui` exists only inside a
+// Flutter engine — which would make this file, and everything that reads a
+// setting, impossible to compile into the standalone helper binary.
+import 'package:kanshi_gui/domain/workspace_layout.dart';
 
 /// User-facing choice for the (Sway-only) workspace-management feature.
 /// [off] is the default for fresh installs so a first launch never reshuffles
@@ -22,7 +26,20 @@ enum WorkspaceManagementMode {
   /// reports the workspaces that exist, so what got learned was a fragment;
   /// and once a fragment replaced the rule, every workspace outside it lost
   /// its home. It is a real preference, so it stays — as a preference.
-  learned;
+  learned,
+
+  /// Nine deliberate choices, one per workspace, made in the grid and kept in
+  /// the setup's own map.
+  ///
+  /// Mechanically the same overlay as [learned]; the difference is who writes
+  /// it. [learned] copies down wherever the workspaces happen to be, which
+  /// means it also copies down accidents. This one only ever changes when the
+  /// user changes it.
+  ///
+  /// The map is per setup, because "the middle screen" is not a thing that
+  /// survives unplugging it. A setup that has never been edited falls back to
+  /// [interleaved] until it is.
+  custom;
 
   /// Parses the JSON string written by [AppSettings.save]. Anything
   /// unrecognised (including null) falls back to [off].
@@ -34,6 +51,8 @@ enum WorkspaceManagementMode {
         return WorkspaceManagementMode.grouped;
       case 'learned':
         return WorkspaceManagementMode.learned;
+      case 'custom':
+        return WorkspaceManagementMode.custom;
       default:
         return WorkspaceManagementMode.off;
     }
@@ -43,20 +62,30 @@ enum WorkspaceManagementMode {
 
   bool get enabled => this != WorkspaceManagementMode.off;
 
-  /// Whether a setup's observed map overlays the rule.
+  /// Whether the app copies down where the workspaces currently are. Only
+  /// [learned] does; [custom] holds a map too, but one the user wrote.
   bool get learns => this == WorkspaceManagementMode.learned;
+
+  /// Whether the setup's own `workspace → screen` map is honoured at all.
+  /// Both map-backed modes answer yes; the rule modes deliberately ignore it
+  /// so a stale observation cannot outvote the rule the user picked.
+  bool get followsMap =>
+      this == WorkspaceManagementMode.learned ||
+      this == WorkspaceManagementMode.custom;
 
   /// The writer-level distribution this mode maps to, or null when
   /// management is [off]. The controller uses this to gate the Sway
-  /// workspace exec injection. [learned] still needs one: an observation
-  /// covers only the workspaces that existed when it was taken, and the
-  /// rule is what fills in the rest.
+  /// workspace exec injection. The map-backed modes still need one: a map
+  /// covers only the workspaces it names — an observation covers only those
+  /// that existed when it was taken, and a setup you have not edited yet has
+  /// none at all — and the rule is what fills in the rest.
   WorkspaceDistribution? get distribution {
     switch (this) {
       case WorkspaceManagementMode.off:
         return null;
       case WorkspaceManagementMode.interleaved:
       case WorkspaceManagementMode.learned:
+      case WorkspaceManagementMode.custom:
         return WorkspaceDistribution.interleaved;
       case WorkspaceManagementMode.grouped:
         return WorkspaceDistribution.grouped;

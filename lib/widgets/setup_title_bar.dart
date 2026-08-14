@@ -17,6 +17,10 @@ class SetupTitleBar extends StatelessWidget {
   /// Opens the list of remembered setups.
   final VoidCallback onOpenSetups;
   final VoidCallback onIdentify;
+
+  /// Opens the workspace grid. Shown only on backends that can place
+  /// workspaces at all.
+  final VoidCallback onWorkspaces;
   final VoidCallback onAdvanced;
 
   /// Shown only while live apply is off, which is the only state in which
@@ -29,6 +33,7 @@ class SetupTitleBar extends StatelessWidget {
     required this.controller,
     required this.onOpenSetups,
     required this.onIdentify,
+    required this.onWorkspaces,
     required this.onAdvanced,
     required this.showApply,
     required this.onApply,
@@ -115,6 +120,16 @@ class SetupTitleBar extends StatelessWidget {
               onPressed: onIdentify,
               icon: const Icon(Icons.lightbulb_outline, size: 20),
             ),
+            // Only where it can do anything, and in the bar rather than
+            // inside Advanced: on a three-screen desk this is the second
+            // thing people want after the screens are in the right order,
+            // and it was previously four clicks and a dropdown away.
+            if (controller.supportsWorkspaceManagement)
+              IconButton(
+                tooltip: r'Where the $mod+number keys go',
+                onPressed: onWorkspaces,
+                icon: const Icon(Icons.dialpad_outlined, size: 20),
+              ),
             IconButton(
               tooltip: 'Advanced',
               onPressed: onAdvanced,

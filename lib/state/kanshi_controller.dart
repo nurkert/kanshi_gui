@@ -227,11 +227,21 @@ class KanshiController extends ChangeNotifier {
   /// [setWorkspaceDistribution] can flip it at runtime.
   WorkspaceDistribution? _workspaceDistribution;
 
-  /// Whether a setup's observed [Profile.workspaceMap] overlays the rule.
-  /// False means the rule alone decides — and that nothing is learned, so an
-  /// accident of where a workspace happened to open cannot be recorded as a
-  /// preference. See [WorkspaceManagementMode.learned].
-  bool _followLearnedWorkspaces = false;
+  /// Whether the setup's own [Profile.workspaceMap] overlays the rule. False
+  /// means the rule alone decides, so a map left over from another mode
+  /// cannot outvote the rule the user picked.
+  bool _followsWorkspaceMap = false;
+
+  /// Whether the app writes that map itself, by copying down where the
+  /// workspaces currently are.
+  ///
+  /// Separate from [_followsWorkspaceMap] because
+  /// [WorkspaceManagementMode.custom] follows a map without ever recording
+  /// one: the nine choices in the grid are the user's, and an observation
+  /// taken behind their back would quietly overwrite them with wherever a
+  /// window happened to open. Only [WorkspaceManagementMode.learned] sets
+  /// this.
+  bool _learnsWorkspaceMap = false;
 
   /// Whether scale-slider release rasters onto the common HiDPI snap
   /// values. Always on; Alt suppresses it during a drag.
@@ -282,12 +292,15 @@ class KanshiController extends ChangeNotifier {
     MirrorRunner? mirrorRunner,
     double snapThreshold = 60.0,
     WorkspaceDistribution? workspaceDistribution,
-    bool followLearnedWorkspaces = false,
+    bool followProfileWorkspaceMap = false,
+    bool learnWorkspaceMapFromLive = false,
     ProcessRunner? processRunner,
   })  : mirrorRunner = mirrorRunner ?? MirrorRunner(),
         _snapThreshold = snapThreshold,
         _workspaceDistribution = workspaceDistribution,
-        _followLearnedWorkspaces = followLearnedWorkspaces,
+        _followsWorkspaceMap =
+            followProfileWorkspaceMap || learnWorkspaceMapFromLive,
+        _learnsWorkspaceMap = learnWorkspaceMapFromLive,
         _processRunner = processRunner ?? const DefaultProcessRunner() {
     config.writeOptions = _effectiveWriteOptions();
     safetyNet.onChange((prompt) {
@@ -361,7 +374,7 @@ class KanshiController extends ChangeNotifier {
     return base.copyWith(
       injectSwayWorkspaceExec: true,
       workspaceDistribution: dist,
-      followLearnedWorkspaces: _followLearnedWorkspaces,
+      followProfileWorkspaceMap: _followsWorkspaceMap,
     );
   }
 
@@ -504,8 +517,7 @@ class KanshiController extends ChangeNotifier {
     // Notice where the user's workspaces are, once the repair pass above has
     // settled the layout. Only records what it can attribute to this setup;
     // see [learnWorkspaceMap] for why it is cautious about the moment.
-    if (config.writeOptions.injectSwayWorkspaceExec &&
-        _followLearnedWorkspaces) {
+    if (config.writeOptions.injectSwayWorkspaceExec && _learnsWorkspaceMap) {
       await learnWorkspaceMap();
     }
   }
@@ -537,7 +549,7 @@ class KanshiController extends ChangeNotifier {
   ///    with the broken config they opened the app to fix.
   Future<void> _migrateStaleWorkspaceMaps() async {
     if (!config.writeOptions.injectSwayWorkspaceExec) return;
-    if (_followLearnedWorkspaces) return;
+    if (_followsWorkspaceMap) return;
     if (!_profiles.any((p) => p.workspaceMap != null)) return;
     for (final p in _profiles) {
       p.workspaceMap = null;
@@ -582,7 +594,9 @@ class KanshiController extends ChangeNotifier {
   ///   * every workspace it can see sits on an output this setup knows.
   /// Anything else means the observation describes a transient state.
   Future<bool> learnWorkspaceMap() async {
-    if (!_followLearnedWorkspaces) return false;
+    // Not [_followsWorkspaceMap]: a custom map is nine deliberate choices, and
+    // copying the live layout over them would let one stray window undo them.
+    if (!_learnsWorkspaceMap) return false;
     if (!monitors.isLive) return false;
     final idx = _activeProfileIndex;
     if (idx == null) return false;
@@ -641,7 +655,7 @@ class KanshiController extends ChangeNotifier {
       liveOutputs: _currentMonitors,
       distribution: config.writeOptions.workspaceDistribution,
       resolveConnector: _resolveOutputName,
-      learnedMap: _followLearnedWorkspaces
+      learnedMap: _followsWorkspaceMap
           ? _profiles[activeIdx].workspaceMap
           : null,
       force: force,
@@ -1590,7 +1604,8 @@ class KanshiController extends ChangeNotifier {
     autoReapplyOnDrift = s.autoReapplyOnDrift;
     _mirrorScaling = s.mirrorScaling.arg;
     _workspaceDistribution = s.workspaceManagement.distribution;
-    _followLearnedWorkspaces = s.workspaceManagement.learns;
+    _followsWorkspaceMap = s.workspaceManagement.followsMap;
+    _learnsWorkspaceMap = s.workspaceManagement.learns;
     mirrorRunner.scaling = _mirrorScaling;
     config.writeOptions = _effectiveWriteOptions();
   }
@@ -1685,24 +1700,37 @@ class KanshiController extends ChangeNotifier {
   /// restore to, so the current placement simply stays put until the user
   /// rearranges it themselves. No-op on backends that don't support it.
   ///
-  /// Leaving [WorkspaceManagementMode.learned] also drops each setup's
-  /// recorded map, so the file stops carrying `# kanshi_gui:ws` lines that
-  /// contradict the chain printed right below them. The map is an
-  /// observation, not user data — but only the setup you are ON is re-observed
-  /// when you switch back, so the others start from the rule again until you
-  /// next plug them in.
+  /// Leaving a map-backed mode for a rule drops each setup's map, so the file
+  /// stops carrying `# kanshi_gui:ws` lines that contradict the chain printed
+  /// right below them. Moving BETWEEN the two map-backed modes keeps it: what
+  /// was learned is the obvious starting point for editing by hand, and what
+  /// was edited by hand is a perfectly good thing to go on following.
+  ///
+  /// Entering [WorkspaceManagementMode.custom] writes the picture the user
+  /// was just looking at into the active setup's map. Without that, "my own"
+  /// would start by silently resetting a `grouped` desk to the interleaved
+  /// fallback — the one moment the mode has no opinion of its own is the one
+  /// moment it must not invent one.
   Future<void> setWorkspaceMode(WorkspaceManagementMode mode) async {
     final dist = mode.distribution;
     if (_workspaceDistribution == dist &&
-        _followLearnedWorkspaces == mode.learns) {
+        _followsWorkspaceMap == mode.followsMap &&
+        _learnsWorkspaceMap == mode.learns) {
       return;
     }
+    final seed =
+        mode == WorkspaceManagementMode.custom ? currentWorkspaceMap() : null;
     _workspaceDistribution = dist;
-    _followLearnedWorkspaces = mode.learns;
-    if (!mode.learns) {
+    _followsWorkspaceMap = mode.followsMap;
+    _learnsWorkspaceMap = mode.learns;
+    if (!mode.followsMap) {
       for (final p in _profiles) {
         p.workspaceMap = null;
       }
+    }
+    final idx = _activeProfileIndex;
+    if (seed != null && seed.isNotEmpty && idx != null) {
+      _profiles[idx].workspaceMap = seed;
     }
     config.writeOptions = _effectiveWriteOptions();
     // Learn BEFORE anything is applied. Entering "keep them where I put them"
@@ -1719,14 +1747,94 @@ class KanshiController extends ChangeNotifier {
   }
 
   /// The mode the controller is running in, for the settings UI to show as
-  /// selected. Derived rather than stored so it cannot drift from the two
+  /// selected. Derived rather than stored so it cannot drift from the three
   /// fields that actually decide behaviour.
   WorkspaceManagementMode get workspaceMode {
     if (_workspaceDistribution == null) return WorkspaceManagementMode.off;
-    if (_followLearnedWorkspaces) return WorkspaceManagementMode.learned;
+    if (_learnsWorkspaceMap) return WorkspaceManagementMode.learned;
+    if (_followsWorkspaceMap) return WorkspaceManagementMode.custom;
     return _workspaceDistribution == WorkspaceDistribution.grouped
         ? WorkspaceManagementMode.grouped
         : WorkspaceManagementMode.interleaved;
+  }
+
+  /// The screens the numeric workspaces are spread across, left to right.
+  ///
+  /// The active setup's screens rather than the live ones, because the setup
+  /// is what gets written to the config and replayed on the next dock. Falls
+  /// back to what is plugged in when no setup is active yet, so the grid can
+  /// still show something on a first launch.
+  List<WorkspaceRankEntry> workspaceScreens() {
+    final source = activeMonitors.isNotEmpty ? activeMonitors : _currentMonitors;
+    return resolveWorkspaceRanks([
+      for (final m in source)
+        if (m.enabled && m.mirrorOf == null) m,
+    ]);
+  }
+
+  /// Where each workspace 1..9 lands right now, keyed by the output id the
+  /// active setup spells it with — the same key space [Profile.workspaceMap]
+  /// and the writer use, so a value handed back to [assignWorkspace] round
+  /// trips.
+  ///
+  /// Empty when management is off or there are no screens: both are states
+  /// where the app has no answer, and a made-up one would be rendered as if
+  /// it were in force.
+  Map<int, String> currentWorkspaceMap() {
+    final dist = _workspaceDistribution;
+    if (dist == null) return const {};
+    final ranked = workspaceScreens();
+    if (ranked.isEmpty) return const {};
+    return resolveWorkspaceMap(
+      ranked,
+      maxWorkspaces: WorkspacePlacement.maxWorkspaces,
+      distribution: dist,
+      learned: _followsWorkspaceMap ? activeProfile?.workspaceMap : null,
+    );
+  }
+
+  /// Puts one workspace on one screen, and switches to
+  /// [WorkspaceManagementMode.custom] if a rule was in force.
+  ///
+  /// Moving a single number out of a pattern means the pattern no longer
+  /// describes the desk, so the app stops pretending it does. The other eight
+  /// are written down exactly where they already were — the switch is
+  /// invisible in the grid, which is the point: the user moved one number and
+  /// exactly one number moved.
+  ///
+  /// Whether [assignWorkspace] would do anything.
+  ///
+  /// Separate so a caller can decide, without awaiting, whether this move is
+  /// going to happen. The settings file has to record "custom" *before* the
+  /// config write starts, not after it finishes: the write is I/O, and a
+  /// settings.json that still said `interleaved` while the config already
+  /// carried a hand-made map would let the rule win on the next launch and
+  /// discard the user's edit without a word.
+  bool canAssignWorkspace(int ws, String outputId) {
+    if (ws < 1 || ws > WorkspacePlacement.maxWorkspaces) return false;
+    if (_activeProfileIndex == null) return false;
+    if (!workspaceScreens().any((e) => e.id == outputId)) return false;
+    final current = currentWorkspaceMap();
+    return current.isNotEmpty && current[ws] != outputId;
+  }
+
+  /// Returns false when the move was refused (no active setup, management
+  /// off, unknown screen) or was already true.
+  Future<bool> assignWorkspace(int ws, String outputId) async {
+    if (!canAssignWorkspace(ws, outputId)) return false;
+    final idx = _activeProfileIndex!;
+    final current = currentWorkspaceMap();
+
+    _profiles[idx].workspaceMap = Map<int, String>.of(current)..[ws] = outputId;
+    _followsWorkspaceMap = true;
+    _learnsWorkspaceMap = false;
+    config.writeOptions = _effectiveWriteOptions();
+    await _flushSaveAndReload();
+    if (supportsWorkspaceManagement) {
+      await _verifyAndFixWorkspacePlacement(force: true);
+    }
+    notifyListeners();
+    return true;
   }
 
   // ── Workspace rank ─────────────────────────────────────────────────────

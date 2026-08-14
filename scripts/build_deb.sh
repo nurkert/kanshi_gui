@@ -10,8 +10,17 @@ command -v dpkg-deb >/dev/null 2>&1 || { echo "dpkg-deb not found (install dpkg-
 # Determine architectures
 BUNDLE_DIR_OVERRIDE=""
 ARCH_OVERRIDE=""
+DAEMON_BIN_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --daemon-bin)
+      if [[ -z ${2:-} ]]; then
+        echo "Missing value for --daemon-bin" >&2
+        exit 1
+      fi
+      DAEMON_BIN_OVERRIDE="$2"
+      shift 2
+      ;;
     --bundle-dir)
       if [[ -z ${2:-} ]]; then
         echo "Missing value for --bundle-dir" >&2
@@ -114,6 +123,7 @@ rm -rf "$PKG_DIR"
 mkdir -p \
   "$PKG_DIR/DEBIAN" \
   "$PKG_DIR/usr/lib/$APP_NAME" \
+  "$PKG_DIR/usr/lib/systemd/user" \
   "$PKG_DIR/usr/bin" \
   "$PKG_DIR/usr/share/applications" \
   "$PKG_DIR/usr/share/pixmaps" \
@@ -131,6 +141,46 @@ cat > "$PKG_DIR/usr/bin/$APP_NAME" <<'EOS'
 exec /usr/lib/kanshi_gui/kanshi_gui "$@"
 EOS
 chmod 755 "$PKG_DIR/usr/bin/$APP_NAME"
+
+# ── Workspace helper ───────────────────────────────────────────────────────
+# A standalone Dart executable, not a mode of the GUI: the Flutter binary
+# drags a GTK window and a rendering engine behind it, and this thing has to
+# run for the whole session without one. It shares the app's domain code, so
+# the two cannot disagree about where a workspace belongs.
+#
+# The unit file ships DISABLED. A package that starts rearranging a stranger's
+# workspaces the moment it is installed is exactly what got this app deleted
+# off a colleague's laptop once; the switch lives in the app, per user.
+DAEMON_DEST="$PKG_DIR/usr/lib/$APP_NAME/kanshi-gui-workspaced"
+if [[ -n "$DAEMON_BIN_OVERRIDE" ]]; then
+  if [[ ! -x "$DAEMON_BIN_OVERRIDE" ]]; then
+    echo "Provided daemon binary is not executable: $DAEMON_BIN_OVERRIDE" >&2
+    exit 1
+  fi
+  echo "Using prebuilt workspace helper from $DAEMON_BIN_OVERRIDE"
+  cp "$DAEMON_BIN_OVERRIDE" "$DAEMON_DEST"
+else
+  # `dart compile exe` produces a binary for the HOST, so cross-packaging has
+  # to be handed one that was built on the target — the same constraint the
+  # Flutter bundle above lives under.
+  if [[ "$HOST_ARCH_NORM" != "$DEB_ARCH" ]]; then
+    echo "Cross-packaging for $DEB_ARCH needs --daemon-bin with a helper built on that architecture." >&2
+    exit 1
+  fi
+  command -v dart >/dev/null 2>&1 || { echo "dart not found in PATH (needed for the workspace helper)." >&2; exit 1; }
+  echo "Compiling the workspace helper…"
+  dart compile exe "$ROOT_DIR/bin/kanshi_gui_workspaced.dart" -o "$DAEMON_DEST"
+fi
+chmod 755 "$DAEMON_DEST"
+
+cat > "$PKG_DIR/usr/bin/kanshi-gui-workspaced" <<'EOS'
+#!/bin/sh
+exec /usr/lib/kanshi_gui/kanshi-gui-workspaced "$@"
+EOS
+chmod 755 "$PKG_DIR/usr/bin/kanshi-gui-workspaced"
+
+cp "$ROOT_DIR/debian/systemd/kanshi-gui-workspaces.service" \
+  "$PKG_DIR/usr/lib/systemd/user/"
 
 # Desktop file and icons
 cp "$ROOT_DIR/debian/gui/kanshi_gui.desktop" "$PKG_DIR/usr/share/applications/"
@@ -150,6 +200,10 @@ Depends: kanshi, libc6, libstdc++6, libgcc-s1, libgtk-3-0, libglib2.0-0, libgdk-
 Recommends: wl-mirror, wlr-randr
 Description: A simple GUI for kanshi.
  A Flutter-based GUI to create, edit and switch kanshi monitor profiles.
+ .
+ Includes an optional per-user helper service that keeps sway workspaces on
+ the screens you assigned them to, at login and on every hotplug. It is
+ installed switched off; turn it on under Workspaces in the app.
 EOS
 
 cat > "$PKG_DIR/DEBIAN/postinst" <<'EOS'
