@@ -116,8 +116,20 @@ void main() {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester
-        .pumpWidget(MaterialApp(home: HomePage(controller: c, settings: s)));
+    await tester.pumpWidget(MaterialApp(
+      home: HomePage(
+        controller: c,
+        settings: s,
+        // Hermetic: the default one asks the real systemctl about a real unit
+        // file, so these tests would pass or fail depending on whether the
+        // machine running them happens to have the .deb installed — and the
+        // subprocess's timeout timer would still be pending at test end.
+        workspaceDaemon: WorkspaceDaemon(
+          runner: FakeProcessRunner(),
+          searchPaths: const [],
+        ),
+      ),
+    ));
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pump(const Duration(seconds: 6));
   }
@@ -356,6 +368,73 @@ void main() {
         ])),
       );
       expect(tester.widget<Switch>(find.byType(Switch).last).value, isTrue);
+    });
+
+    testWidgets('turning placement on brings the helper with it',
+        (tester) async {
+      // "It just works": the feature is opt-in, but once someone has opted in,
+      // the thing that makes it survive a reboot should not be a second
+      // switch they have to find. It stays visible and one tap from off.
+      final unit = File('${tmp.path}/kanshi-gui-workspaces.service')
+        ..writeAsStringSync('[Unit]\n');
+      final runner = FakeProcessRunner(
+        installed: {'systemctl'},
+        responses: {
+          'systemctl --user is-enabled kanshi-gui-workspaces.service':
+              ProcessResult(0, 1, 'disabled\n', ''),
+        },
+        fallback: ProcessResult(0, 0, '', ''),
+      );
+      final (c, s) = await boot(tester, mode: WorkspaceManagementMode.off);
+      addTearDown(c.dispose);
+      await pumpSheet(tester, c, s,
+          WorkspaceDaemon(runner: runner, searchPaths: [unit.path]));
+
+      runner.responses['systemctl --user is-enabled '
+          'kanshi-gui-workspaces.service'] = ProcessResult(0, 0, 'enabled\n', '');
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+
+      expect(c.workspaceMode.enabled, isTrue);
+      expect(
+        runner.calls,
+        contains(equals([
+          'systemctl',
+          '--user',
+          'enable',
+          '--now',
+          'kanshi-gui-workspaces.service',
+        ])),
+        reason: 'placement that stops at the window edge is half a feature',
+      );
+    });
+
+    testWidgets('and turning it on again does not re-enable what was turned '
+        'off on purpose', (tester) async {
+      final unit = File('${tmp.path}/kanshi-gui-workspaces.service')
+        ..writeAsStringSync('[Unit]\n');
+      final runner = FakeProcessRunner(
+        installed: {'systemctl'},
+        responses: {
+          'systemctl --user is-enabled kanshi-gui-workspaces.service':
+              ProcessResult(0, 0, 'enabled\n', ''),
+        },
+        fallback: ProcessResult(0, 0, '', ''),
+      );
+      final (c, s) = await boot(tester, mode: WorkspaceManagementMode.off);
+      addTearDown(c.dispose);
+      await pumpSheet(tester, c, s,
+          WorkspaceDaemon(runner: runner, searchPaths: [unit.path]));
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+
+      // Already enabled, so nothing to do — and no second enable call.
+      expect(
+        runner.calls.where((c) => c.contains('enable')).length,
+        0,
+        reason: 'a service already running must not be poked',
+      );
     });
 
     testWidgets('systemd refusing it is said out loud', (tester) async {

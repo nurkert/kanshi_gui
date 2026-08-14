@@ -62,6 +62,17 @@ abstract class MonitorService {
   /// listeners are safe.
   Stream<List<MonitorTileData>> watchOutputs();
 
+  /// Releases anything this backend spawned that would outlive the app.
+  ///
+  /// [watchOutputs] runs a long-lived `swaymsg -t subscribe` subprocess, and
+  /// its stream controller only kills it in `onCancel` — which nothing calls
+  /// when the window is closed and the process simply exits. Dart does not
+  /// take child processes down with it, so every launch left one behind. It
+  /// dies on its own at the next output event (its stdout pipe is gone, so
+  /// the write fails), which is why nobody noticed: the strays only pile up
+  /// on a machine whose screens never change.
+  Future<void> shutdown();
+
   /// Spawn an on-screen banner that displays [label] (typically a single
   /// digit) on the physical [output]. Used by "Identify Displays" so the
   /// user can map a tile in the GUI to the actual screen in front of

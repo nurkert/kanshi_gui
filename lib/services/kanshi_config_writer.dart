@@ -90,8 +90,24 @@ class KanshiConfigWriter {
   /// daemon then stops managing displays altogether and the GUI can no
   /// longer read its own profiles back — from one apostrophe in a rename
   /// box. [KanshiConfigParser] performs the inverse.
-  static String escapeProfileName(String name) =>
-      name.replaceAll('\\', r'\\').replaceAll("'", r"\'");
+  /// Sanitises a value going into a `# kanshi_gui:…` annotation.
+  ///
+  /// These are comments — kanshi never executes them — but they are still
+  /// *lines*. A newline inside one ends the comment and whatever follows
+  /// becomes a config directive in its own right, which is a way to smuggle
+  /// an `exec` into the file from an EDID string or a hand-edited value.
+  /// Control characters out, apostrophes escaped for the parser that reads
+  /// these back.
+  static String _annotationValue(String value) => value
+      .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
+      .replaceAll("'", r"\'");
+
+  /// Control characters go first: a newline in a name would end the
+  /// `profile '…' {` line and turn the rest into config directives.
+  static String escapeProfileName(String name) => name
+      .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
+      .replaceAll('\\', r'\\')
+      .replaceAll("'", r"\'");
 
   static String render(
     List<Profile> profiles, {
@@ -168,13 +184,19 @@ class KanshiConfigWriter {
     // display supplied one and it is unique inside this profile; see
     // [chooseOutputCriteria]. Outputs whose EDID we have never observed keep
     // the connector name — the descriptor is never guessed, only recorded.
-    final criteria = chooseOutputCriteria(
-      mons.map((m) => m.id),
-      (connector) {
-        final m = mons.firstWhere((e) => e.id == connector);
-        return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
-      },
-    );
+    String? descriptorOf(String connector) {
+      final m = mons.firstWhere((e) => e.id == connector);
+      return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
+    }
+
+    final criteria = chooseOutputCriteria(mons.map((m) => m.id), descriptorOf);
+    // A second, narrower answer for the `exec` lines. The `output` directive
+    // above is read by kanshi itself and must keep the stable description
+    // whatever it contains — that is how a profile is recognised. An `exec`
+    // line goes to a shell, where the same description can be a syntax error.
+    // See [chooseExecCriteria].
+    final execCriteria =
+        chooseExecCriteria(mons.map((m) => m.id), descriptorOf);
 
     buffer.writeln("profile '${escapeProfileName(profile.name)}' {");
 
@@ -223,7 +245,7 @@ class KanshiConfigWriter {
       final crit = criteria[m.id];
       if (crit == null || !crit.isDescription) continue;
       buffer.writeln(
-        "    # kanshi_gui:port '${crit.value.replaceAll("'", r"\'")}'"
+        "    # kanshi_gui:port '${_annotationValue(crit.value)}'"
         "='${m.id}'",
       );
     }
@@ -254,9 +276,9 @@ class KanshiConfigWriter {
       // manufacturer-fallback matching byte-compares against the
       // unstripped live data, so a manufacturer like `L'Hôtel`
       // would silently drop out of matching after a save+load.
-      final safeManuf = m.manufacturer.replaceAll("'", r"\'");
+      final safeManuf = _annotationValue(m.manufacturer);
       buffer.writeln(
-        "    # kanshi_gui:edid '${m.id}'='$safeManuf'",
+        "    # kanshi_gui:edid '${_annotationValue(m.id)}'='$safeManuf'",
       );
     }
 
@@ -281,28 +303,35 @@ class KanshiConfigWriter {
       // owner (kanshi's exec) covers the boot window.
       for (final m in mons.where((m) => m.enabled && m.mirrorOf != null)) {
         buffer.writeln(
-          "    # kanshi_gui:mirror '${m.id}'='${m.mirrorOf}'",
+          "    # kanshi_gui:mirror '${_annotationValue(m.id)}'"
+          "='${_annotationValue(m.mirrorOf!)}'",
         );
-        // Pgrep guard. Two pitfalls avoided here:
-        //   * `pgrep -f` matches against the FULL argv of every
-        //     process — including the very shell running this guard,
-        //     whose argv literally contains our pattern. That shell
-        //     self-match meant the guard ALWAYS reported "running" and
-        //     wl-mirror was never spawned at boot.
-        //   * `pgrep -fF` doesn't exist; we want a literal substring
-        //     check, not a regex one (output names don't have regex
-        //     metachars today, but the `-` in `eDP-1` is a footgun if
-        //     anyone ever puts ranges in `[...]`).
-        // Solution: `pgrep -x wl-mirror -a` filters by *process name*
-        // (so the shell can't match), then `grep -qF` does a literal
-        // substring check against the cmdline. Trailing space pins the
-        // destination so e.g. `eDP-1` doesn't accidentally match a
-        // hypothetical `eDP-10`.
+        // The annotation above is a comment and harmless. The command below
+        // is not: both names land inside a single-quoted `sh -c '…'`, where
+        // one apostrophe ends the quoting and the rest of the string becomes
+        // shell code. Connector names come from the kernel and never contain
+        // one — but this config is a text file the user can edit, and a
+        // mirror that silently does not start is a far better outcome than a
+        // config that runs something.
+        if (!isShellSafeCriteria(m.id) ||
+            !isShellSafeCriteria(m.mirrorOf!)) {
+          continue;
+        }
+        // No shell. This was `exec sh -c 'pgrep … | grep -qF … || wl-mirror … &'`
+        // — a pipeline guarding against spawning a second wl-mirror for the
+        // same destination. It never ran: kanshi hands exec lines to /bin/sh
+        // after escaping only whitespace and quotes, so the `|`, `||` and `&`
+        // stayed bare at the OUTER level and the shell tried to run the words
+        // after them as commands. `grep -qF -- …: not found`, every time, and
+        // wl-mirror was never started by kanshi at all.
+        //
+        // A guard cannot be expressed without shell operators, so it is gone
+        // and the invocation is direct. Duplicates are handled where they can
+        // actually be seen: MirrorRunner kills any externally-spawned mirror
+        // for a destination before taking ownership of it.
         buffer.writeln(
-          "    exec sh -c 'pgrep -x wl-mirror -a | "
-          "grep -qF -- \"--fullscreen-output ${m.id} \" || "
-          "wl-mirror --scaling ${options.mirrorScaling} --fullscreen-output "
-          "\"${m.id}\" \"${m.mirrorOf}\" &'",
+          '    exec wl-mirror --scaling ${options.mirrorScaling} '
+          '--fullscreen-output "${m.id}" "${m.mirrorOf}"',
         );
       }
     }
@@ -327,43 +356,70 @@ class KanshiConfigWriter {
       // monitor may be keyed by its EDID descriptor — and an entry whose
       // target does not match a monitor here is dropped as unknown, which
       // would silently discard the very preference the mode exists to keep.
-      final learned = options.followProfileWorkspaceMap
-          ? _rekeyWorkspaceMap(profile.workspaceMap, mons)
-          : null;
-      if (learned != null && learned.isNotEmpty) {
-        // Round-trip the OBSERVATION, not the resolved map: writing the
-        // resolved one back would make every setup look like it had been
-        // observed, and the rule would be indistinguishable from a choice.
-        for (final entry in (learned.keys.toList()..sort())) {
-          buffer.writeln(
-              "    # kanshi_gui:ws '$entry'='${learned[entry]}'");
+      final saved = _rekeyWorkspaceMap(profile.workspaceMap, mons);
+      if (saved != null && saved.isNotEmpty) {
+        // Written whatever mode is active, because the annotation is STORAGE
+        // and the mode is POLICY. It used to be written only while a map was
+        // being followed, which meant switching to a pattern erased a
+        // hand-made arrangement from the file — nine deliberate choices gone
+        // for choosing "left to right" once, with no warning and no undo.
+        // Now the pattern simply takes precedence while it is selected, and
+        // "my own" still has something to come back to.
+        //
+        // Round-trip the RECORDED map, not the resolved one: writing the
+        // resolved one back would make every setup look edited, and a rule
+        // would be indistinguishable from a choice.
+        for (final entry in (saved.keys.toList()..sort())) {
+          buffer.writeln("    # kanshi_gui:ws '$entry'='${saved[entry]}'");
         }
       }
-      final chain = buildSwayWorkspaceChain(
-        ranked,
-        distribution: options.workspaceDistribution,
-        learned: learned,
-        criteria: criteria,
+      final learned = options.followProfileWorkspaceMap ? saved : null;
+      // One `exec` per binding, and criteria chosen for a shell rather than
+      // for kanshi's own parser. Both of those are corrections.
+      //
+      // This used to be a single `exec swaymsg "…"` holding all nine bindings
+      // joined with `; `, plus a focus-and-move pass. kanshi 1.9 hands that
+      // line to `/bin/sh` after re-escaping only whitespace and quotes, so the
+      // semicolons separated shell commands: workspace 1 was bound and the
+      // other eight were looked up as programs. And where a display's EDID
+      // carried a bracket, the shell refused the whole line with a syntax
+      // error and NOTHING was bound at all. Four releases of this feature
+      // never did anything on a machine with kanshi 1.9.
+      //
+      // The focus-and-move half is gone from the config with it: it cannot be
+      // expressed without a separator, it is the visible half, and both the
+      // app and the helper service already do it properly over the IPC socket
+      // where no shell is involved. What belongs in the file is the quiet half
+      // — where each workspace lives — and that is what survives a cold boot.
+      final execs = buildWorkspaceConfigExecs(
+        resolveWorkspaceMap(
+          ranked,
+          distribution: options.workspaceDistribution,
+          learned: learned,
+        ),
+        criteria: execCriteria,
       );
-      if (chain != null) {
-        // Earlier (1.5.12) we tried to claim a named workspace per
-        // mirror destination so sway wouldn't auto-create an
-        // unreachable numbered one (typically 10 on a 1..9 setup).
-        // The name "mirror (X)" then showed up in the user's
-        // swaybar, which is just a different flavour of the same
-        // annoyance ("a workspace label I can't $mod-jump to").
-        // The orphan-displacement is now handled in the controller's
-        // verify step via the regular chain — the chain visits every
-        // workspace 1..N which displaces any visible orphan, and
-        // sway garbage-collects empty non-visible workspaces.
-        buffer.writeln("    exec swaymsg \"$chain\"");
+      for (final line in execs) {
+        buffer.writeln('    exec $line');
       }
     }
 
     if (options.writeCurrentProfileMarker) {
-      buffer.writeln(
-        "    exec echo \"${profile.name}\" > ~/.current_kanshi_profile",
-      );
+      // The name went in raw between double quotes, and kanshi runs this line
+      // through a shell — so a setup called `home $(rm -rf ~) office` executed
+      // on every activation. Quoting cannot fix it: scfg eats our quotes
+      // before the shell ever sees them. See [shellSafeText].
+      //
+      // The marker is a convenience for status bars and for the helper
+      // service's tie-break, so a name reduced to its printable part is a
+      // perfectly good marker; a name with nothing printable left gets no
+      // line at all.
+      final marker = shellSafeText(profile.name);
+      if (marker.isNotEmpty) {
+        buffer.writeln(
+          '    exec echo "$marker" > ~/.current_kanshi_profile',
+        );
+      }
     }
 
     buffer.writeln("}\n");

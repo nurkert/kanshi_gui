@@ -104,7 +104,7 @@ class WorkspacePlacement {
       // inline skipped the fallback, so both screens' workspaces resolved onto
       // whichever one sway found first. This pass now runs on every launch,
       // which would have turned a rare bug into a reliable one.
-      final criteria = chooseOutputCriteria(
+      final criteria = chooseExecCriteria(
         resolved.map((m) => m.id),
         (connector) {
           final m = resolved.firstWhere((e) => e.id == connector);

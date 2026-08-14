@@ -82,9 +82,16 @@ kanshi_gui
 sudo dpkg -i build/kanshi-gui_*_$(dpkg --print-architecture).deb
 ```
    After installation the `kanshi_gui` command is available globally. To
-   remove the package again use:
+   remove the package again use its **package** name — `kanshi-gui`, with a
+   hyphen; `dpkg -r kanshi_gui` reports "package not installed" and removes
+   nothing:
 ```bash
-sudo dpkg -r kanshi_gui
+sudo apt remove kanshi-gui
+```
+   If you had switched the workspace helper on, turn it off first — a package
+   removal runs as root and cannot reach the per-user service:
+```bash
+systemctl --user disable --now kanshi-gui-workspaces.service
 ```
 
 # License

@@ -69,6 +69,10 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
 
   WorkspaceDaemonState _daemon = WorkspaceDaemonState.unavailable;
 
+  /// Whether it is actually running, which is not the same as being switched
+  /// on — see [WorkspaceDaemon.isRunning].
+  bool _daemonRunning = false;
+
   @override
   void initState() {
     super.initState();
@@ -77,8 +81,14 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
 
   Future<void> _refreshDaemon() async {
     final state = await widget.daemon.state();
+    final running = state == WorkspaceDaemonState.enabled
+        ? await widget.daemon.isRunning()
+        : false;
     if (!mounted) return;
-    setState(() => _daemon = state);
+    setState(() {
+      _daemon = state;
+      _daemonRunning = running;
+    });
   }
 
   KanshiController get c => widget.controller;
@@ -363,13 +373,10 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
                   style: T.label.copyWith(color: col.textPrimary)),
               const SizedBox(height: Sp.x1),
               Text(
-                on
-                    ? 'A helper service places your workspaces at login, on '
-                        'every dock, and as each one opens.'
-                    : 'Without it, workspaces are placed when kanshi switches '
-                        'setups and when you open this app — which is late, '
-                        'on a cold boot.',
-                style: T.caption.copyWith(color: col.textSecondary),
+                _daemonCaption(on),
+                style: T.caption.copyWith(
+                  color: on && !_daemonRunning ? col.attention : col.textSecondary,
+                ),
               ),
             ],
           ),
@@ -377,10 +384,25 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
         const SizedBox(width: Sp.x4),
         Switch(
           value: on,
-          onChanged: (v) => _run(_setDaemon(v)),
+          onChanged: _busy != null ? null : (v) => _run(_setDaemon(v)),
         ),
       ],
     );
+  }
+
+  String _daemonCaption(bool on) {
+    if (!on) {
+      return 'Without it, your workspaces are placed when you open this '
+          'window — which is late, on a cold boot.';
+    }
+    if (!_daemonRunning) {
+      // Enabled but not running: the switch would otherwise claim something
+      // is happening when nothing is. Name the command that explains it.
+      return 'Switched on, but not running right now. '
+          'systemctl --user status kanshi-gui-workspaces';
+    }
+    return 'Running. Your workspaces are placed at login, on every dock, and '
+        'as each one opens.';
   }
 
   // ── Actions ────────────────────────────────────────────────────────────
@@ -416,11 +438,29 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
 
   Future<void> Function() _setMode(WorkspaceManagementMode mode) => () async {
         if (mode == c.workspaceMode) return;
+        // Settings first, config second — the same ordering [_assign] needs
+        // and for the same reason: the config write is I/O, and a crash
+        // between the two would leave a file that places workspaces one way
+        // while settings.json says another. The controller is what actually
+        // moves them, so it still runs even if the settings write throws.
         widget.settings.workspaceManagement = mode;
-        // The controller first: it is what actually places the workspaces, and
-        // a settings.json that cannot be written must not stop that.
+        final saved = widget.settings.save();
+        // Turning placement on brings the helper with it, once. Without that,
+        // the feature only works while the window is open and the thing that
+        // fixes it is a second switch further down the same sheet — findable,
+        // but nobody should have to.
+        //
+        // Before the config write, not after: that write is real I/O, and the
+        // switch beneath must not sit at "off" for the length of it while the
+        // service is already coming up.
+        if (mode.enabled && _daemon == WorkspaceDaemonState.disabled) {
+          try {
+            await widget.daemon.setEnabled(true);
+            await _refreshDaemon();
+          } catch (_) {/* the switch below says what happened */}
+        }
         await c.setWorkspaceMode(mode);
-        await widget.settings.save();
+        await saved;
       };
 
   /// The settings file is written BEFORE the config, not after it. Writing

@@ -1,5 +1,90 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed
+
+- **The workspace placement in the config file never ran on kanshi 1.9 or
+  newer.** kanshi stopped reading `exec` lines as raw text in 1.9: it parses
+  the config with scfg and then re-escapes exactly five characters — space,
+  tab, backslash and the two quotes — before handing the line to `/bin/sh`
+  (`config.c:270-276`, `main.c:118`). Everything else arrives at the shell
+  meaning what the shell says it means. So the `; `-joined chain this app had
+  written for four releases was split into shell commands: workspace 1 was
+  bound and the other eight were looked up as programs. And on a desk whose
+  display reports a bracket in its EDID — `InfoVision Optoelectronics
+  (Kunshan) Co.,Ltd China 0x057D Unknown`, a perfectly ordinary laptop panel —
+  the shell refused the whole line with `Syntax error: "(" unexpected` and
+  **nothing at all** was bound. That is the "$mod+9 opens under the cursor"
+  complaint, in the file, unnoticed, since the feature shipped.
+
+  The bindings are now one `exec swaymsg workspace N output '"…"'` per line,
+  with no separator to be eaten and no character a shell would act on; where
+  an EDID description cannot survive a shell, the connector name is used for
+  that line while the `output` directive keeps the stable description that
+  kanshi matches profiles on. The nested quoting is the form `kanshi(5)`
+  documents, and now the form the app actually writes.
+
+  `test/support/kanshi_exec.dart` reproduces scfg, kanshi's re-escaping and a
+  real `/bin/sh`, so exec lines are measured rather than argued about. On the
+  desk this was found on: 4 profiles, 36 of 36 bindings now reach sway.
+
+- **The helper service never noticed a hotplug.** sway's output event is
+  `{ "change": "unspecified" }` and carries nothing else; the code looked for
+  an `output` key that has never existed, so the replan branch was dead. The
+  helper planned once at session start and then ignored docking entirely.
+
+- **A `#` in a display's name made the screen disappear.** The config's
+  comment stripper tracked single quotes only, so a hash inside a
+  double-quoted `output "Acme #1 24"` looked like the start of a comment and
+  the rest of the directive was discarded on the next read.
+
+- **Shell injection through EDID and setup names.** A display reporting
+  `Acme $(…) Corp`, or a setup named with the same, executed on every profile
+  activation. Quoting cannot fix this — scfg removes our quotes before the
+  shell sees them — so unsafe values are declined rather than escaped: an
+  output falls back to its connector name, a setup name is reduced to its
+  printable part, and a binding that cannot be expressed safely is not
+  written at all.
+
+- **Choosing a pattern no longer destroys a hand-made arrangement.** The map
+  is storage and the mode is policy: a pattern takes precedence while it is
+  selected, and *My own* finds the nine choices still there afterwards.
+
+- **The mirror command never ran either**, for the same reason — its `pgrep`
+  guard was a shell pipeline. It is a direct invocation now; duplicates are
+  handled by the mirror runner, which can actually see them.
+
+- The app leaked one `swaymsg -t subscribe` process per launch: the watcher is
+  a child process, and closing the window does not take children with it.
+
+- The helper: no timeout on `swaymsg` (a hung compositor queued subprocesses
+  forever), an unguarded `Process.start` that turned a missing `swaymsg` into
+  a crash loop, a hot spin against a stale socket file left by a crashed sway,
+  overlapping applies, and a focus jump when a placement command landed after
+  the user had already moved on.
+
+- The helper now exits when its own binary is replaced or removed, so an
+  upgrade takes effect and an `apt remove` does not leave the old one running
+  until logout. `ConditionPathExists` keeps a left-over per-user enable from
+  turning into a failed unit at every login.
+
+### Changed
+
+- Turning workspace placement on now brings the helper service with it, once,
+  with the switch still one tap from off. Placement that stops working when
+  the window closes is half a feature.
+- The helper's switch says whether the service is actually *running*, not just
+  whether it is switched on, and names the command that explains it when the
+  two disagree.
+- The helper follows a change made in the app immediately, by watching the two
+  config files, instead of waiting for the next sway event.
+- `PartOf=graphical-session.target` is gone from the unit: a target that never
+  properly started took the helper down with it and nothing brought it back.
+- The package now recommends `sway`, and the README's removal instructions name
+  the actual package (`kanshi-gui`, with a hyphen) and mention switching the
+  per-user service off first.
+
 ## 2.1.0
 
 ### Added

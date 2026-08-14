@@ -6,6 +6,7 @@ import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/advanced_sheet.dart';
@@ -36,12 +37,22 @@ class HomePage extends StatefulWidget {
   /// Invoked when the settings page changes a theme/accent setting so the
   /// app shell (MaterialApp) can rebuild. Optional so tests can omit it.
   final VoidCallback? onAppearanceChanged;
+
+  /// The systemd opt-in for the workspace helper. Injectable because the
+  /// default one asks the real `systemctl` about a real unit file, which
+  /// makes every widget test that opens the Workspaces sheet depend on
+  /// whether the machine running the test happens to have the .deb
+  /// installed — and leaves that subprocess's timeout timer pending when
+  /// the test ends.
+  final WorkspaceDaemon? workspaceDaemon;
+
   const HomePage({
     super.key,
     required this.controller,
     required this.settings,
     this.activeAccent,
     this.onAppearanceChanged,
+    this.workspaceDaemon,
   });
 
   @override
@@ -513,12 +524,14 @@ class _HomePageState extends State<HomePage> {
                   context,
                   controller: c,
                   settings: widget.settings,
+                  daemon: widget.workspaceDaemon,
                 ),
                 onAdvanced: () => AdvancedSheet.show(
                   context,
                   controller: c,
                   settings: widget.settings,
                   onAppearanceChanged: widget.onAppearanceChanged,
+                  workspaceDaemon: widget.workspaceDaemon,
                 ),
               ),
             ),

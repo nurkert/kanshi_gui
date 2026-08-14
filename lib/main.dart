@@ -1,5 +1,7 @@
 // lib/main.dart
 
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanshi_gui/design/app_theme.dart';
@@ -83,6 +85,30 @@ class KanshiApp extends StatefulWidget {
 }
 
 class _KanshiAppState extends State<KanshiApp> {
+  /// Closing the window ends the process, and Dart takes none of its child
+  /// processes with it. The `swaymsg -t subscribe` that watches for hotplugs
+  /// was therefore left behind by every launch — it dies at the next output
+  /// event, so on a desk whose screens never change they simply accumulate.
+  /// This is the one hook the window manager gives us before the exit.
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onExitRequested: () async {
+      await widget.controller.shutdown();
+      return AppExitResponse.exit;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle; // constructed lazily; touch it so it registers.
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
   ThemeMode get _themeMode {
     switch (widget.settings.themeChoice) {
       case AppThemeChoice.system:

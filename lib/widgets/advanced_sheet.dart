@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
+import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 import 'package:kanshi_gui/widgets/workspace_sheet.dart';
 
@@ -26,11 +27,15 @@ class AdvancedSheet extends StatefulWidget {
   /// Called after a change that the app shell has to rebuild for.
   final VoidCallback? onAppearanceChanged;
 
+  /// Passed straight through to the Workspaces sheet; see [HomePage].
+  final WorkspaceDaemon? workspaceDaemon;
+
   const AdvancedSheet({
     super.key,
     required this.controller,
     required this.settings,
     this.onAppearanceChanged,
+    this.workspaceDaemon,
   });
 
   static Future<void> show(
@@ -38,6 +43,7 @@ class AdvancedSheet extends StatefulWidget {
     required KanshiController controller,
     required AppSettings settings,
     VoidCallback? onAppearanceChanged,
+    WorkspaceDaemon? workspaceDaemon,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -46,6 +52,7 @@ class AdvancedSheet extends StatefulWidget {
         controller: controller,
         settings: settings,
         onAppearanceChanged: onAppearanceChanged,
+        workspaceDaemon: workspaceDaemon,
       ),
     );
   }
@@ -129,6 +136,7 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
                       context,
                       controller: widget.controller,
                       settings: s,
+                      daemon: widget.workspaceDaemon,
                     ),
                     child: const Text('Arrange'),
                   ),
