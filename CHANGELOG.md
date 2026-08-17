@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A comment in the event classifier claimed sway's workspace `reload` event
+  carries no `current` field, and that the missing-`current` rule was what
+  caught it. Measured against a live sway: it emits
+  `{change: reload, current: null, old: null}`, plus two `{change:
+  unspecified}` output events. The explicit branch is what catches it. Pinned
+  with a test carrying the real payload.
+
+### Known
+
+- The claim that `swaymsg reload` discards sway's workspace configs is still
+  **unverified**. An attempt to check it on a live desk was confounded: the
+  reload also wakes the app, which re-declares the bindings within the second.
+  Nothing depends on the claim being true — at worst the helper re-declares
+  bindings that were still valid — but it should not be read as measured.
+
 ## 2.2.0
 
 ### Added

@@ -288,6 +288,20 @@ void main() {
           SwayEventAction.replan);
     });
 
+    test('the reload event is caught by name, because it has a current', () {
+      // Captured from a live sway, not assumed: `swaymsg reload` emits
+      // {change: reload, current: null, old: null} — and two
+      // {change: unspecified} output events besides. An earlier comment here
+      // claimed reload carried no `current` and was caught by the
+      // missing-`current` rule. It is not; the explicit branch is what
+      // catches it, and this pins that.
+      expect(
+        classifySwayEvent({'change': 'reload', 'current': null, 'old': null})
+            .action,
+        SwayEventAction.replan,
+      );
+    });
+
     test('a workspace being born is NOT acted on', () {
       // This used to move it, and moving a workspace means focusing it —
       // which leaves the previous one empty, which sway garbage-collects,
