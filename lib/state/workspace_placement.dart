@@ -3,6 +3,7 @@ import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
+import 'package:kanshi_gui/services/workspace_apply_lock.dart';
 
 /// Keeps the sway workspaces on the screens the active setup says they belong
 /// on.
@@ -22,10 +23,16 @@ import 'package:kanshi_gui/services/monitor_service.dart';
 class WorkspacePlacement {
   final MonitorService monitors;
 
+  /// Taken around the send. The helper takes the same one, so a hotplug while
+  /// this window is open cannot have both walking the workspaces at once —
+  /// two interleaved walks end wherever the last one happened to land.
+  /// Injectable so widget tests need no filesystem.
+  final Future<bool> Function(Future<void> Function())? withApplyLock;
+
   /// Highest numeric workspace the chain manages.
   static const int maxWorkspaces = 9;
 
-  WorkspacePlacement(this.monitors);
+  WorkspacePlacement(this.monitors, {this.withApplyLock});
 
   /// Runs the repair pass.
   ///
@@ -121,14 +128,30 @@ class WorkspacePlacement {
       // that is simply closed. Declaring all of them every time is what stops
       // `$mod+9` opening under the cursor. See [buildWorkspaceDeclarations]
       // for what a declaration can and cannot change.
+      // The walk hands focus back where it found it. Ending on workspace 1 —
+      // "a predictable landing" — is fine right after docking and rude at
+      // every other moment: open the app while working on workspace 6 and it
+      // took the screen away for no reason the user could see. The helper was
+      // taught this in 2.1.5; the app was not, and does the same thing.
       final chain = force || needsRepair(want, actual)
-          ? buildWorkspaceChain(want, criteria: criteria)
+          ? buildWorkspaceChain(want,
+              criteria: criteria,
+              returnFocusTo: await monitors.focusedWorkspace())
           : buildWorkspaceDeclarations(want, criteria: criteria);
       if (chain == null) return;
-      try {
-        await monitors.applyWorkspaceChain(chain);
-      } catch (e) {
-        debugPrint('workspace placement: applyWorkspaceChain failed: $e');
+      Future<void> send() async {
+        try {
+          await monitors.applyWorkspaceChain(chain);
+        } catch (e) {
+          debugPrint('workspace placement: applyWorkspaceChain failed: $e');
+        }
+      }
+
+      final lock = withApplyLock ??
+          (Future<void> Function() a) =>
+              WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guard(a);
+      if (!await lock(send)) {
+        debugPrint('workspace placement: the helper is mid-apply; leaving it');
       }
     } catch (e, st) {
       debugPrint('workspace placement failed: $e\n$st');
