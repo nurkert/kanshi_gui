@@ -92,12 +92,16 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   // nothing at all; the placement it had computed at session start simply
   // stayed. Captured from a live sway rather than assumed a second time.
   //
-  // `current` is what a workspace event carries, so its absence is the
-  // discriminator. That also catches the workspace `reload` event, which has
-  // no `current` either — and wants the same answer: `swaymsg reload` throws
-  // away every workspace config sway holds, which is exactly why it is the
-  // documented way out of a workspace stuck on the wrong screen. It throws
-  // away ours too, so put them back.
+  // `current` is what an ordinary workspace event carries, so its absence is
+  // the discriminator for an output event.
+  //
+  // The workspace `reload` event is checked separately and by name, because
+  // it DOES carry a `current` key — a null one. Measured against a live sway
+  // rather than assumed: `swaymsg reload` emits
+  // `{change: reload, current: null, old: null}` and, on top of that, two
+  // `{change: unspecified}` output events. An earlier comment here claimed
+  // reload had no `current` and that the missing-`current` rule caught it;
+  // it does not, and the explicit branch below is what does.
   // Narrow, and deliberately so: the two shapes sway actually sends, rather
   // than "anything without a `current`". A malformed or future event should
   // mean "do nothing", not "go and rearrange the desk".
