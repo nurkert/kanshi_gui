@@ -217,49 +217,6 @@ void main() {
       expect(plan.chain, contains('move workspace to output'));
     });
 
-    test('moveOne is the focus-and-move pair for one workspace', () {
-      final plan = planWorkspaces(
-        profiles: [Profile(name: 'Office', monitors: desk())],
-        live: desk(),
-        distribution: WorkspaceDistribution.interleaved,
-      )!;
-      expect(plan.moveOne(9),
-          "workspace number 9; move workspace to output 'Make eDP-1 SerialeDP-1'");
-      expect(plan.moveOne(11), isNull,
-          reason: 'the helper has no opinion about a workspace it does not manage');
-    });
-
-    test('it hands focus back to wherever the user actually is', () {
-      // Moving a workspace in sway means focusing it first — there is no
-      // other way. The event that triggers this arrives milliseconds after
-      // the user pressed a key, and by the time the command lands they may
-      // have pressed another. Without the return leg the helper drags them
-      // back to a workspace they just left, which reads as the tool fighting
-      // them.
-      final plan = planWorkspaces(
-        profiles: [Profile(name: 'Office', monitors: desk())],
-        live: desk(),
-        distribution: WorkspaceDistribution.interleaved,
-      )!;
-      expect(plan.moveOne(8, returnFocusTo: 1), endsWith('; workspace number 1'));
-      // Nothing to hand back when they are still on the one being moved.
-      expect(plan.moveOne(8, returnFocusTo: 8),
-          isNot(contains('; workspace number 8; workspace')));
-      expect(plan.moveOne(8, returnFocusTo: null), isNot(endsWith('number 8')));
-    });
-
-    test('an unsafe target produces no command even with a focus return', () {
-      final mons = [_mon('DP-1', descriptor: r'Acme $(id) Corp')];
-      final plan = planWorkspaces(
-        profiles: [Profile(name: 'Odd', monitors: mons)],
-        live: mons,
-        distribution: WorkspaceDistribution.interleaved,
-      )!;
-      // The descriptor was refused, so the connector is used — which is safe.
-      expect(plan.moveOne(1, returnFocusTo: 2), contains("'DP-1'"));
-      expect(plan.moveOne(1), isNot(contains(r'$(id)')));
-    });
-
     test('a block per screen is the other pattern', () {
       final plan = planWorkspaces(
         profiles: [Profile(name: 'Office', monitors: desk())],
@@ -296,49 +253,38 @@ void main() {
           SwayEventAction.replan);
     });
 
-    test('a workspace being born is the one to place', () {
-      final v = classifySwayEvent({
-        'change': 'init',
-        'current': {'num': 8, 'name': '8', 'output': 'eDP-1'},
-      });
-      expect(v.action, SwayEventAction.placeOne);
-      expect(v.workspace, 8);
-      expect(v.on, 'eDP-1');
-    });
-
-    test('a workspace you moved yourself is left alone', () {
-      // Dragging a workspace to another screen is the user saying something.
-      // A helper that dragged it back would be unusable.
+    test('a workspace being born is NOT acted on', () {
+      // This used to move it, and moving a workspace means focusing it —
+      // which leaves the previous one empty, which sway garbage-collects,
+      // which the next command recreates. 975 workspace events in three
+      // seconds on a real desk: a third of a core, focus yanked between
+      // screens faster than a cursor could be moved, windows appearing to
+      // vanish as their workspace was destroyed and remade under them.
+      //
+      // A helper must not answer events its own commands produce. sway places
+      // a new workspace correctly by itself now that the `workspace N output
+      // X` bindings actually reach it.
       expect(
         classifySwayEvent({
-          'change': 'move',
-          'current': {'num': 8, 'output': 'DP-4'},
+          'change': 'init',
+          'current': {'num': 8, 'name': '8', 'output': 'eDP-1'},
         }).action,
         SwayEventAction.none,
       );
     });
 
-    test('focusing, emptying and renaming are not our business', () {
-      for (final change in ['focus', 'empty', 'urgent', 'rename']) {
+    test('nor is any other workspace event', () {
+      for (final change in ['init', 'focus', 'empty', 'move', 'rename',
+        'urgent']) {
         expect(
           classifySwayEvent({
             'change': change,
             'current': {'num': 3, 'output': 'DP-4'},
           }).action,
           SwayEventAction.none,
-          reason: '$change should be ignored',
+          reason: '$change must not make the helper issue a command',
         );
       }
-    });
-
-    test('the scratchpad has no number and is not managed', () {
-      expect(
-        classifySwayEvent({
-          'change': 'init',
-          'current': {'num': -1, 'name': '__i3_scratch'},
-        }).action,
-        SwayEventAction.none,
-      );
     });
 
     test('a workspace event that says nothing usable moves nothing', () {

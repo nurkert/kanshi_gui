@@ -36,67 +36,48 @@ class WorkspacePlan {
   String? get declarations =>
       buildWorkspaceDeclarations(map, criteria: criteria);
 
-  /// The command that puts one workspace where it belongs, or null if this
-  /// plan has no opinion about that workspace.
-  ///
-  /// Moving a workspace in sway means focusing it first — there is no way to
-  /// relocate one you are not on. That is invisible when the workspace was
-  /// just created (it already has focus), and rude when it was not: a user
-  /// who pressed `$mod+8` and then immediately `$mod+1` would be yanked back
-  /// to 8 by a command that arrived a few milliseconds late. Pass
-  /// [returnFocusTo] with wherever the user actually is and the chain hands
-  /// focus back in the same atomic command.
-  String? moveOne(int workspace, {int? returnFocusTo}) {
-    final target = map[workspace];
-    if (target == null) return null;
-    final c = criteria[target] ?? OutputCriteria.connector(target);
-    // Same gate as the full chain: a target that cannot be safely quoted
-    // means no command at all. See [buildWorkspaceDeclarations].
-    if (!c.isShellSafe) return null;
-    final move = 'workspace number $workspace; '
-        'move workspace to output ${c.swayExecForm}';
-    if (returnFocusTo == null || returnFocusTo == workspace) return move;
-    return '$move; workspace number $returnFocusTo';
-  }
 }
 
 /// What the helper should do about one sway IPC event.
 enum SwayEventAction {
-  /// Nothing. The default, and the right answer for most events.
+  /// Nothing. The default, and the right answer for every workspace event.
   none,
 
   /// Work the placement out again from scratch: the screens changed, or sway
   /// threw its workspace configs away.
   replan,
-
-  /// A workspace was just created. Put it where it belongs, if it is not
-  /// already there.
-  placeOne,
 }
 
-/// A decision about one event, and what it is about.
+/// A decision about one event.
 class SwayEventVerdict {
   final SwayEventAction action;
 
-  /// The workspace number, for [SwayEventAction.placeOne].
-  final int? workspace;
-
-  /// The screen sway put it on.
-  final String? on;
-
-  const SwayEventVerdict(this.action, {this.workspace, this.on});
+  const SwayEventVerdict(this.action);
 
   static const none = SwayEventVerdict(SwayEventAction.none);
 }
 
 /// Reads one line of `swaymsg -t subscribe -m` and decides.
 ///
-/// Deliberately narrow. In particular a `move` is NOT acted on: a user who
-/// drags a workspace to another screen has said something, and a helper that
-/// dragged it back would be unusable. Only a workspace being *born* — the one
-/// moment no config file can reach, because sway has already chosen an output
-/// by the time anything else could look — and the events that mean the plan
-/// itself is stale.
+/// Deliberately narrow, and narrower than it was.
+///
+/// It used to act on a workspace being *born*, moving it if sway had put it
+/// somewhere else. That fed itself: relocating a workspace means focusing it,
+/// focusing it away again leaves it empty, sway garbage-collects an empty
+/// workspace, and the next command recreates it — 975 workspace events in
+/// three seconds on a real desk, a third of a core burnt, focus yanked between
+/// screens faster than a cursor could be moved, and windows appearing to
+/// vanish as their workspace was destroyed and remade underneath them.
+///
+/// The lesson is not "add a guard". It is that a helper must not issue
+/// commands in response to events its own commands produce, and the only way
+/// to be sure of that is to not react to that class of event at all. What
+/// remains cannot loop: the screens changing, and sway throwing its workspace
+/// configs away, are things only the outside world does.
+///
+/// Nothing is lost by it either. Placing a workspace as it is born was a
+/// workaround for `workspace N output X` bindings that never reached sway —
+/// which is the bug 2.1.1 actually fixed. sway does this itself now.
 SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   final change = event['change']?.toString();
 
@@ -121,18 +102,9 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
     return const SwayEventVerdict(SwayEventAction.replan);
   }
 
-  if (change == 'init') {
-    final current = event['current'];
-    if (current is! Map) return SwayEventVerdict.none;
-    final num = current['num'];
-    if (num is! int || num < 1) return SwayEventVerdict.none;
-    return SwayEventVerdict(
-      SwayEventAction.placeOne,
-      workspace: num,
-      on: current['output']?.toString(),
-    );
-  }
-
+  // Everything else is a workspace event: something opened, closed, was
+  // focused or was moved. All of it is either the user's doing or our own,
+  // and neither is ours to answer.
   return SwayEventVerdict.none;
 }
 
