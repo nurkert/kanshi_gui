@@ -38,6 +38,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:kanshi_gui/domain/output_identity.dart';
+import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -256,6 +257,7 @@ class _Daemon {
           final name = e.path.split('/').last;
           if (name != 'settings.json' && name != 'config') return;
           _settleTimer?.cancel();
+          // A file changed, not a screen. Never move anything that is open.
           _settleTimer = Timer(
             const Duration(milliseconds: 400),
             () => unawaited(_serialised(() => apply(force: true))),
@@ -327,7 +329,8 @@ class _Daemon {
         _settleTimer?.cancel();
         _settleTimer = Timer(
           _settle,
-          () => unawaited(_serialised(() => apply(force: true))),
+          () => unawaited(
+              _serialised(() => apply(force: true, mayDisturb: true))),
         );
         return;
     }
@@ -358,6 +361,22 @@ class _Daemon {
   }
 
   Future<void> _queue = Future<void>.value();
+
+  /// The numeric workspace the user is looking at, or null when it has no
+  /// number or sway did not answer.
+  Future<int?> _focusedWorkspace() async {
+    final raw = await _swaymsg(['-t', 'get_workspaces']);
+    if (raw == null) return null;
+    try {
+      for (final w in (jsonDecode(raw) as List).cast<Map<String, dynamic>>()) {
+        if (w['focused'] == true) {
+          final n = w['num'];
+          return n is int && n > 0 ? n : null;
+        }
+      }
+    } catch (_) {/* malformed reply — do not guess where the user is */}
+    return null;
+  }
 
   /// Recomputes the placement from the files and the live outputs, and hands
   /// it to sway.
@@ -391,7 +410,7 @@ class _Daemon {
     return false;
   }
 
-  Future<void> apply({bool force = false}) async {
+  Future<void> apply({bool force = false, bool mayDisturb = false}) async {
     if (_runawayGuard()) return;
     final settings = await AppSettings.load();
     final mode = settings.workspaceManagement;
@@ -419,17 +438,31 @@ class _Daemon {
     }
 
     // Which half runs is the difference between invisible and disruptive.
-    // Declaring costs nothing and touches nothing that exists; the focus-and-
-    // move pass walks all nine workspaces and is very much visible, so it
-    // only runs when the live layout actually disagrees.
+    //
+    // Declaring costs nothing and touches nothing that exists. The other half
+    // walks all nine workspaces, focusing each in turn, because that is the
+    // only way sway will relocate one — and a background service that does
+    // that while someone is working has taken their screen away from them.
+    //
+    // So it needs BOTH a reason and permission: the live layout has to
+    // actually disagree, AND the trigger has to be one where a flicker is
+    // expected anyway — plugging a screen in. A settings change, a config
+    // rewrite or the service simply starting never move anything that is
+    // already open; they only say where things belong from now on.
     final actual = await _workspaceOutputs();
     final wrong = actual.entries.any((e) {
       final want = plan.map[e.key];
       return want != null && want != e.value;
     });
-    final command = wrong ? plan.chain : plan.declarations;
+    final disturb = wrong && mayDisturb;
+    final command = disturb
+        // And it hands focus back to whatever the user was on, instead of
+        // dropping them on workspace 1.
+        ? buildWorkspaceChain(plan.map,
+            criteria: plan.criteria, returnFocusTo: await _focusedWorkspace())
+        : plan.declarations;
     if (command == null) return;
-    _log('${plan.profile.name}: ${wrong ? 'repairing' : 'declaring'} '
+    _log('${plan.profile.name}: ${disturb ? 'repairing' : 'declaring'} '
         '${plan.map.entries.map((e) => '${e.key}→${e.value}').join(' ')}');
     if (dryRun) {
       _log('would send: $command');

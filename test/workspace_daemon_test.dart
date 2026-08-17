@@ -230,6 +230,20 @@ void main() {
     });
   });
 
+  group('the chain hands focus back', () {
+    test('it ends where the user was, not on workspace 1', () {
+      // Run from a background service while someone is working on workspace
+      // 6, ending on 1 takes their screen away for no reason they can see.
+      final map = {1: 'DP-4', 2: 'DP-5', 3: 'eDP-1'};
+      expect(buildWorkspaceChain(map, returnFocusTo: 6),
+          endsWith('workspace number 6'));
+      expect(buildWorkspaceChain(map), endsWith('workspace number 1'),
+          reason: 'with nobody to hand back to, the old landing stands');
+      expect(buildWorkspaceChain(map, returnFocusTo: null),
+          endsWith('workspace number 1'));
+    });
+  });
+
   group('reading sway events', () {
     test('an output event means work it out again', () {
       // The exact payload a live sway sends. It carries NOTHING else — no
