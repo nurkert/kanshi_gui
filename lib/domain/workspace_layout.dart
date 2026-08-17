@@ -148,6 +148,7 @@ String? buildSwayWorkspaceChain(
 String? buildWorkspaceChain(
   Map<int, String> map, {
   Map<String, OutputCriteria> criteria = const {},
+  int? returnFocusTo,
 }) {
   final declarations = buildWorkspaceDeclarations(map, criteria: criteria);
   if (declarations == null) return null;
@@ -159,7 +160,12 @@ String? buildWorkspaceChain(
     parts.add('workspace number $ws');
     parts.add('move workspace to output ${_execCriteria(map[ws]!, criteria)}');
   }
-  parts.add('workspace number ${numbers.first}');
+  // Where the walk leaves the user. It used to be workspace 1, always —
+  // "the leftmost screen, a predictable landing". Predictable is not the same
+  // as wanted: run from a background service while someone is working on
+  // workspace 6, it takes them to 1 for no reason they can see. Pass
+  // [returnFocusTo] and the chain hands them back.
+  parts.add('workspace number ${returnFocusTo ?? numbers.first}');
   return parts.join('; ');
 }
 

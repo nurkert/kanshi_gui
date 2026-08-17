@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.1.5
+
+### Fixed
+
+- **The helper no longer takes your screen away.** Relocating a workspace in
+  sway means focusing it — there is no other way — so the repair pass walked
+  workspaces 1 to 9 in turn and then left you on workspace 1. Removing the
+  runaway loop in 2.1.4 removed the *trigger* for that walk but not the walk
+  itself: it still ran whenever the live layout disagreed with the plan, from
+  a background service, while you were working.
+
+  It now needs both a reason and permission. The layout has to actually
+  disagree, **and** the trigger has to be one where a flicker is expected
+  anyway — a screen being plugged in. A settings change, a config rewrite or
+  the service simply starting never move anything that is already open; they
+  only say where things belong from now on. And when it does run, it hands
+  focus back to the workspace you were on instead of dropping you on 1.
+
+### Measured
+
+  On a three-screen desk, 40 workspace switches in 13 seconds: **one command
+  at startup, none after, no measurable CPU, 10 MB resident.**
+
 ## 2.1.4
 
 ### Fixed
