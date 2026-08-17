@@ -176,6 +176,9 @@ class WlrRandrBackend implements MonitorService {
   }
 
   @override
+  Future<int?> focusedWorkspace() async => null; // no workspace concept here
+
+  @override
   Future<void> shutdown() async {/* polls in-process; no child to reap */}
 
   @override

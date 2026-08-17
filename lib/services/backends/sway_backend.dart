@@ -237,6 +237,23 @@ class SwayBackend implements MonitorService {
   }
 
   @override
+  Future<int?> focusedWorkspace() async {
+    try {
+      final bin = await _binary();
+      final r = await _runner.run(bin, ['-t', 'get_workspaces']);
+      if (r.exitCode != 0) return null;
+      for (final raw in jsonDecode(r.stdout as String) as List) {
+        final ws = raw as Map<String, dynamic>;
+        if (ws['focused'] == true) {
+          final n = ws['num'];
+          return n is int && n > 0 ? n : null;
+        }
+      }
+    } catch (_) {/* never guess where the user is */}
+    return null;
+  }
+
+  @override
   Future<Map<int, String>> getWorkspaceOutputs() async {
     final bin = await _binary();
     final result = await _runner.run(bin, ['-t', 'get_workspaces']);

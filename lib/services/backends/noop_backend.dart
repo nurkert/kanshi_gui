@@ -63,6 +63,9 @@ class NoopBackend implements MonitorService {
   Stream<List<MonitorTileData>> watchOutputs() => const Stream.empty();
 
   @override
+  Future<int?> focusedWorkspace() async => null;
+
+  @override
   Future<void> shutdown() async {/* nothing was ever spawned */}
 
   @override

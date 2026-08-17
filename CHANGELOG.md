@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+
+- **The test that was missing.** Seven hundred tests did not catch the helper
+  feeding itself, and none of them could have: every one asserted on the
+  strings the code produced, and that bug lived in what the compositor did
+  with them afterwards. The deciding half of the helper now sits behind a
+  small interface, and the tests drive it with a **sway that answers commands
+  with the events the real one answers them with** — the exact churn captured
+  from the incident. The assertions are on the only thing that matters for
+  this class of bug: how many commands come back out.
+
+  Proven to work by putting the old behaviour back: three tests fail, the loud
+  one being *"one hotplug produces one command, not a storm"*. This is the
+  same discipline the kanshi quoting harness uses, and for the same reason —
+  twice now, a serious bug has hidden behind tests that checked what the code
+  said instead of what the world did with it.
+
+### Fixed
+
+- **The app took your screen away too.** The repair pass walked the workspaces
+  and left you on workspace 1. The helper was taught to hand focus back in
+  2.1.5; the app was not, so opening the window while working on workspace 6
+  moved you to 1 for no visible reason.
+
+- **Two helpers could run at once**, each answering the same events with its
+  own idea of the right moment. A second one now steps aside.
+
+- **The app and the helper could walk the workspaces at the same time.** A
+  hotplug while the window was open had both doing it, and two interleaved
+  walks end wherever the last one happened to land. Both now take the same
+  advisory lock and whoever arrives second leaves it to the first — they are
+  on their way to the same end state anyway. Locking failures are ignored on
+  purpose: it is an optimisation, not a correctness requirement.
+
 ## 2.1.6
 
 ### Fixed

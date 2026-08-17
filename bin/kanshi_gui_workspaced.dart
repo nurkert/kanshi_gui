@@ -38,12 +38,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:kanshi_gui/domain/output_identity.dart';
-import 'package:kanshi_gui/domain/workspace_layout.dart';
-import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
+import 'package:kanshi_gui/services/workspace_apply_lock.dart';
+import 'package:kanshi_gui/services/workspace_daemon_core.dart';
 
 /// How long the output set must stay unchanged before the placement is
 /// re-applied. Docking is a salvo, not an event: outputs appear one at a time
@@ -81,7 +81,16 @@ Future<void> main(List<String> args) async {
       return;
     }
     await daemon.attach(sock);
-    await daemon.apply();
+    await daemon.core.apply(ApplyReason.startup);
+    return;
+  }
+  // One helper per session. Systemd starts one, but the binary is on PATH
+  // and nothing stopped a second from running beside it, each answering the
+  // same events with its own idea of the right moment.
+  final singleton = WorkspaceApplyLock(WorkspaceApplyLock.singletonLock);
+  if (!singleton.tryHold()) {
+    stderr.writeln(
+        'kanshi-gui-workspaced: another one is already running; stepping aside.');
     return;
   }
   await daemon.run();
@@ -107,7 +116,22 @@ class _Daemon {
   /// "what would this do to my desk" without doing it.
   final bool dryRun;
 
-  _Daemon({required this.verbose, this.dryRun = false});
+  _Daemon({required this.verbose, this.dryRun = false}) {
+    core = WorkspaceDaemonCore(
+      sway: _SwaymsgConnection(this),
+      env: _FileEnvironment(this),
+      log: _log,
+      dryRun: dryRun,
+      withApplyLock: (action) =>
+          WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guard(action),
+    );
+  }
+
+  /// Everything that decides anything lives here, and is driven by a fake
+  /// sway in test/workspace_daemon_loop_test.dart. This file is the wiring.
+  late final WorkspaceDaemonCore core;
+
+  final _eventStream = StreamController<Map<String, dynamic>>.broadcast();
 
   String? _sock;
   Timer? _settleTimer;
@@ -273,7 +297,8 @@ class _Daemon {
           // A file changed, not a screen. Never move anything that is open.
           _settleTimer = Timer(
             const Duration(milliseconds: 400),
-            () => unawaited(_serialised(() => apply())),
+            () => unawaited(
+                core.serialised(() => core.apply(ApplyReason.configChanged))),
           );
         }, onError: (Object _) {/* watch died; events still drive us */});
       } catch (e) {
@@ -284,7 +309,7 @@ class _Daemon {
 
   /// Follows one sway session until its socket closes.
   Future<void> _session() async {
-    await _serialised(() => apply());
+    await core.serialised(() => core.apply(ApplyReason.startup));
     final Process proc;
     try {
       proc = await Process.start(
@@ -332,207 +357,20 @@ class _Daemon {
     } catch (_) {
       return;
     }
-    final verdict = classifySwayEvent(event);
-    switch (verdict.action) {
-      case SwayEventAction.none:
-        return;
-      case SwayEventAction.replan:
-        // Docking is a salvo, not an event. Coalesce it, and let kanshi
-        // finish switching profiles before asking what the desk looks like.
-        _settleTimer?.cancel();
-        _settleTimer = Timer(
-          _settle,
-          () => unawaited(
-              _serialised(() => apply(mayDisturb: true))),
-        );
-        return;
-    }
-  }
-
-  /// Runs [action] after everything already queued.
-  ///
-  /// Both things this daemon does end in a `swaymsg` call, and both are
-  /// reached from event handlers that do not wait for each other: a settle
-  /// timer firing a full re-apply while a workspace-init is mid-flight would
-  /// interleave two command streams into one compositor. Worse, the re-apply
-  /// reads the live workspace layout to decide whether the visible repair is
-  /// needed — reading it halfway through someone else's moves gives an answer
-  /// that was never true.
-  ///
-  /// A one-deep chain rather than a lock: the work is short, ordering is what
-  /// matters, and a failed step must not wedge the ones behind it.
-  Future<void> _serialised(Future<void> Function() action) {
-    final next = _queue.then((_) async {
-      try {
-        await action();
-      } catch (e) {
-        _log('step failed: $e');
-      }
-    });
-    _queue = next;
-    return next;
-  }
-
-  Future<void> _queue = Future<void>.value();
-
-  /// The numeric workspace the user is looking at, or null when it has no
-  /// number or sway did not answer.
-  Future<int?> _focusedWorkspace() async {
-    final raw = await _swaymsg(['-t', 'get_workspaces']);
-    if (raw == null) return null;
-    try {
-      for (final w in (jsonDecode(raw) as List).cast<Map<String, dynamic>>()) {
-        if (w['focused'] == true) {
-          final n = w['num'];
-          return n is int && n > 0 ? n : null;
-        }
-      }
-    } catch (_) {/* malformed reply — do not guess where the user is */}
-    return null;
-  }
-
-  /// Recomputes the placement from the files and the live outputs, and hands
-  /// it to sway.
-  ///
-  /// Everything is re-read every time. The settings and the config are small,
-  /// this runs on a hotplug rather than on a frame, and re-reading is what
-  /// makes the switch in the GUI take effect without restarting the service.
-  /// When each of the recent applies happened, for [_runawayGuard].
-  final List<DateTime> _recentApplies = [];
-
-  /// Refuses to keep going when the applies come too fast.
-  ///
-  /// A helper that talks to the compositor in response to compositor events
-  /// can, if any future change gets that wiring wrong, feed itself. It did:
-  /// 975 workspace events in three seconds, a third of a core, and a desktop
-  /// nobody could use. The wiring that caused it is gone, but the property
-  /// worth having is that no wiring mistake can ever do that again — so the
-  /// helper stops itself instead of the user having to.
-  ///
-  /// Twelve a minute is far above any real desk: docking produces one, a
-  /// reload one, a settings change one.
-  bool _runawayGuard() {
-    final now = DateTime.now();
-    _recentApplies.removeWhere(
-        (t) => now.difference(t) > const Duration(minutes: 1));
-    if (_recentApplies.length >= 12) {
-      _log('too many applies in a minute — standing down until it settles');
-      return true;
-    }
-    _recentApplies.add(now);
-    return false;
-  }
-
-  Future<void> apply({bool mayDisturb = false}) async {
-    if (_runawayGuard()) return;
-    final settings = await AppSettings.load();
-    final mode = settings.workspaceManagement;
-    if (!mode.enabled) {
-      _log('placement is switched off');
-      return;
-    }
-
-    final live = await _liveOutputs();
-    if (live.isEmpty) return;
-
-    final profiles = await _profiles(settings);
-    if (profiles.isEmpty) return;
-
-    final plan = planWorkspaces(
-      profiles: profiles,
-      live: live,
-      distribution: mode.distribution,
-      followProfileMap: mode.followsMap,
-      preferProfileName: await _markedProfile(),
+    _eventStream.add(event);
+    final reason = core.reasonFor(event);
+    if (reason == null) return;
+    // Docking is a salvo, not an event. Coalesce it, and let kanshi finish
+    // switching profiles before asking what the desk looks like.
+    _settleTimer?.cancel();
+    _settleTimer = Timer(
+      _settle,
+      () => unawaited(core.serialised(() => core.apply(reason))),
     );
-    if (plan == null) {
-      _log('no remembered setup matches these screens');
-      return;
-    }
-
-    // Which half runs is the difference between invisible and disruptive.
-    //
-    // Declaring costs nothing and touches nothing that exists. The other half
-    // walks all nine workspaces, focusing each in turn, because that is the
-    // only way sway will relocate one — and a background service that does
-    // that while someone is working has taken their screen away from them.
-    //
-    // So it needs BOTH a reason and permission: the live layout has to
-    // actually disagree, AND the trigger has to be one where a flicker is
-    // expected anyway — plugging a screen in. A settings change, a config
-    // rewrite or the service simply starting never move anything that is
-    // already open; they only say where things belong from now on.
-    final actual = await _workspaceOutputs();
-    final wrong = actual.entries.any((e) {
-      final want = plan.map[e.key];
-      return want != null && want != e.value;
-    });
-    final disturb = wrong && mayDisturb;
-    final command = disturb
-        // And it hands focus back to whatever the user was on, instead of
-        // dropping them on workspace 1.
-        ? buildWorkspaceChain(plan.map,
-            criteria: plan.criteria, returnFocusTo: await _focusedWorkspace())
-        : plan.declarations;
-    if (command == null) return;
-    _log('${plan.profile.name}: ${disturb ? 'repairing' : 'declaring'} '
-        '${plan.map.entries.map((e) => '${e.key}→${e.value}').join(' ')}');
-    if (dryRun) {
-      _log('would send: $command');
-      return;
-    }
-    await _swaymsg([command]);
   }
 
-  // ── Files ──────────────────────────────────────────────────────────────
+  // ── sway ──────────────────────────────────────────────────────────────
 
-  Future<List<Profile>> _profiles(AppSettings settings) async {
-    final path = settings.kanshiConfigPath?.isNotEmpty == true
-        ? settings.kanshiConfigPath!
-        : '${Platform.environment['HOME']}/.config/kanshi/config';
-    try {
-      return KanshiConfigParser.parse(await File(path).readAsString());
-    } catch (e) {
-      _log('cannot read $path: $e');
-      return const [];
-    }
-  }
-
-  /// The profile kanshi says it activated. A hint, never an instruction —
-  /// see [matchProfile]. Absent unless the user has the marker switched on.
-  Future<String?> _markedProfile() async {
-    try {
-      final f = File('${Platform.environment['HOME']}/.current_kanshi_profile');
-      if (!await f.exists()) return null;
-      final name = (await f.readAsString()).trim();
-      return name.isEmpty ? null : name;
-      // Compared against shellSafeText(profile.name) — see matchProfile.
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // ── sway ───────────────────────────────────────────────────────────────
-
-  Future<List<MonitorTileData>> _liveOutputs() async {
-    final raw = await _swaymsg(['-t', 'get_outputs']);
-    if (raw == null) return const [];
-    try {
-      final list = jsonDecode(raw) as List;
-      return [
-        for (final o in list.cast<Map<String, dynamic>>())
-          if ((o['name'] ?? '').toString().trim().isNotEmpty)
-            _output(o),
-      ];
-    } catch (e) {
-      _log('cannot read outputs: $e');
-      return const [];
-    }
-  }
-
-  /// Only the four fields the plan needs: who this screen is, and what it is
-  /// plugged into. Geometry comes from the remembered setup, which is the
-  /// whole point — the live positions are what the app is there to correct.
   MonitorTileData _output(Map<String, dynamic> o) {
     String clean(Object? raw) {
       final s = (raw ?? '').toString().trim();
@@ -561,21 +399,6 @@ class _Daemon {
       orientation: 'landscape',
       enabled: o['active'] == true,
     );
-  }
-
-  Future<Map<int, String>> _workspaceOutputs() async {
-    final raw = await _swaymsg(['-t', 'get_workspaces']);
-    if (raw == null) return const {};
-    try {
-      final list = jsonDecode(raw) as List;
-      return {
-        for (final w in list.cast<Map<String, dynamic>>())
-          if (w['num'] is int && w['num'] as int > 0)
-            w['num'] as int: (w['output'] ?? '').toString(),
-      };
-    } catch (_) {
-      return const {};
-    }
   }
 
   /// One short-lived `swaymsg`, with a deadline.
@@ -617,6 +440,100 @@ class _Daemon {
 /// service is not one of them unless the session was careful to import it —
 /// which is exactly the kind of setup step that makes a helper feel broken.
 /// The socket is named predictably in the runtime directory, so look there.
+/// The real compositor, behind the interface the core is tested against.
+class _SwaymsgConnection implements SwayConnection {
+  _SwaymsgConnection(this._daemon);
+  final _Daemon _daemon;
+
+  @override
+  Stream<Map<String, dynamic>> events() => _daemon._eventStream.stream;
+
+  @override
+  Future<List<MonitorTileData>> outputs() async {
+    final raw = await _daemon._swaymsg(['-t', 'get_outputs']);
+    if (raw == null) return const [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return [
+        for (final o in list.cast<Map<String, dynamic>>())
+          if ((o['name'] ?? '').toString().trim().isNotEmpty) _daemon._output(o),
+      ];
+    } catch (e) {
+      _daemon._log('cannot read outputs: $e');
+      return const [];
+    }
+  }
+
+  @override
+  Future<Map<int, String>> workspaceOutputs() async {
+    final raw = await _daemon._swaymsg(['-t', 'get_workspaces']);
+    if (raw == null) return const {};
+    try {
+      return {
+        for (final w in (jsonDecode(raw) as List).cast<Map<String, dynamic>>())
+          if (w['num'] is int && w['num'] as int > 0)
+            w['num'] as int: (w['output'] ?? '').toString(),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  @override
+  Future<int?> focusedWorkspace() async {
+    final raw = await _daemon._swaymsg(['-t', 'get_workspaces']);
+    if (raw == null) return null;
+    try {
+      for (final w in (jsonDecode(raw) as List).cast<Map<String, dynamic>>()) {
+        if (w['focused'] == true) {
+          final n = w['num'];
+          return n is int && n > 0 ? n : null;
+        }
+      }
+    } catch (_) {/* malformed reply — do not guess where the user is */}
+    return null;
+  }
+
+  @override
+  Future<bool> run(String command) async =>
+      await _daemon._swaymsg([command]) != null;
+}
+
+/// The two files on disk, behind the interface the core is tested against.
+class _FileEnvironment implements DaemonEnvironment {
+  _FileEnvironment(this._daemon);
+  final _Daemon _daemon;
+
+  @override
+  Future<AppSettings> settings() => AppSettings.load();
+
+  @override
+  Future<List<Profile>> profiles() async {
+    final s = await AppSettings.load();
+    final path = s.kanshiConfigPath?.isNotEmpty == true
+        ? s.kanshiConfigPath!
+        : '${Platform.environment['HOME']}/.config/kanshi/config';
+    try {
+      return KanshiConfigParser.parse(await File(path).readAsString());
+    } catch (e) {
+      _daemon._log('cannot read $path: $e');
+      return const [];
+    }
+  }
+
+  @override
+  Future<String?> markedProfile() async {
+    try {
+      final f = File('${Platform.environment['HOME']}/.current_kanshi_profile');
+      if (!await f.exists()) return null;
+      final name = (await f.readAsString()).trim();
+      return name.isEmpty ? null : name;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 Future<String?> _findSocket() async {
   final env = Platform.environment['SWAYSOCK'] ?? '';
   if (env.isNotEmpty && File(env).existsSync()) return env;
