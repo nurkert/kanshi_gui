@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.1.4
+
+### Fixed
+
+- **The helper fed itself and made the desktop unusable.** It reacted to a
+  workspace being created by moving it — and moving a workspace in sway means
+  focusing it, focusing away leaves the previous one empty, sway
+  garbage-collects an empty workspace, and the next command recreates it.
+  Measured on a real desk: **975 workspace events in three seconds**, a third
+  of a core burnt continuously, focus yanked between screens faster than a
+  cursor could be moved, workspaces landing in the wrong places, and windows
+  appearing to vanish as the workspace under them was destroyed and remade.
+
+  The lesson is not "add a guard" — it is that a helper must not issue
+  commands in response to events its own commands produce, and the only way to
+  be sure is not to react to that class of event at all. The helper now
+  answers only what the outside world does: the screens changing, sway
+  throwing its workspace configs away, and the app changing its mind.
+
+  Nothing is lost by it. Placing a workspace as it was born was a workaround
+  for `workspace N output X` bindings that never reached sway — which is the
+  bug 2.1.1 actually fixed. sway does this itself now.
+
+- **A runaway can no longer take the machine with it.** The helper stands down
+  if it finds itself applying more than a dozen times a minute, whatever the
+  cause. Docking produces one; a reload one; a settings change one.
+
 ## 2.1.3
 
 ### Fixed

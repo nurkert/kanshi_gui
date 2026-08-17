@@ -17,9 +17,14 @@
 //
 // Neither is fixable from a config file. Both are trivial for something that
 // is *there* — watching, with the answer already computed. This binary is
-// that: it re-applies on every hotplug, re-declares after a `swaymsg reload`
-// wipes the workspace configs, and moves each workspace as it is created if
-// sway put it somewhere else.
+// that: it re-applies at login and on every hotplug, and re-declares after a
+// `swaymsg reload` wipes the workspace configs.
+//
+// It deliberately does NOT react to individual workspaces opening. It did, and
+// that fed itself: relocating a workspace means focusing it, focusing away
+// leaves it empty, sway garbage-collects an empty workspace, and the next
+// command recreates it — 975 workspace events in three seconds on a real desk.
+// A helper must not answer events its own commands produce.
 //
 // It is a separate executable rather than a mode of the GUI because a Flutter
 // binary drags a GTK window and a rendering engine behind it. Compiled from
@@ -106,10 +111,6 @@ class _Daemon {
   String? _sock;
   Timer? _settleTimer;
 
-  /// The placement in force, kept between events so a workspace-init can be
-  /// answered without re-reading two files and asking sway for its outputs.
-  WorkspacePlan? _plan;
-
   void _log(String message) {
     if (verbose) stdout.writeln('kanshi-gui-workspaced: $message');
   }
@@ -157,7 +158,6 @@ class _Daemon {
         await _session();
         _log('sway went away');
         _settleTimer?.cancel();
-        _plan = null;
       }
       // The floor is the whole point, and it is outside the `sock == null`
       // branch on purpose. A sway that died without cleaning up leaves its
@@ -330,9 +330,6 @@ class _Daemon {
           () => unawaited(_serialised(() => apply(force: true))),
         );
         return;
-      case SwayEventAction.placeOne:
-        unawaited(_serialised(() => _place(verdict.workspace!, verdict.on)));
-        return;
     }
   }
 
@@ -362,51 +359,43 @@ class _Daemon {
 
   Future<void> _queue = Future<void>.value();
 
-  Future<void> _place(int workspace, String? on) async {
-    final plan = _plan;
-    if (plan == null) return;
-    final want = plan.map[workspace];
-    if (want == null || on == null || on == want) return;
-    // Where the user is NOW, not where they were when the event fired. The
-    // move has to focus the workspace it relocates, so without this a user
-    // who pressed $mod+8 and then $mod+1 lands back on 8 — the helper
-    // fighting them with a command they provoked a moment earlier.
-    final focused = await _focusedWorkspace();
-    final command = plan.moveOne(workspace, returnFocusTo: focused);
-    if (command == null) return;
-    _log('workspace $workspace opened on $on, belongs on $want'
-        '${focused != null && focused != workspace ? ' (user is on $focused)' : ''}');
-    if (dryRun) return;
-    await _swaymsg([command]);
-  }
-
-  /// The numeric workspace the user is looking at, or null if it has no
-  /// number (a named workspace, the scratchpad) or sway did not answer.
-  Future<int?> _focusedWorkspace() async {
-    final raw = await _swaymsg(['-t', 'get_workspaces']);
-    if (raw == null) return null;
-    try {
-      for (final w in (jsonDecode(raw) as List).cast<Map<String, dynamic>>()) {
-        if (w['focused'] == true) {
-          final n = w['num'];
-          return n is int && n > 0 ? n : null;
-        }
-      }
-    } catch (_) {/* malformed reply — do not guess where the user is */}
-    return null;
-  }
-
   /// Recomputes the placement from the files and the live outputs, and hands
   /// it to sway.
   ///
   /// Everything is re-read every time. The settings and the config are small,
   /// this runs on a hotplug rather than on a frame, and re-reading is what
   /// makes the switch in the GUI take effect without restarting the service.
+  /// When each of the recent applies happened, for [_runawayGuard].
+  final List<DateTime> _recentApplies = [];
+
+  /// Refuses to keep going when the applies come too fast.
+  ///
+  /// A helper that talks to the compositor in response to compositor events
+  /// can, if any future change gets that wiring wrong, feed itself. It did:
+  /// 975 workspace events in three seconds, a third of a core, and a desktop
+  /// nobody could use. The wiring that caused it is gone, but the property
+  /// worth having is that no wiring mistake can ever do that again — so the
+  /// helper stops itself instead of the user having to.
+  ///
+  /// Twelve a minute is far above any real desk: docking produces one, a
+  /// reload one, a settings change one.
+  bool _runawayGuard() {
+    final now = DateTime.now();
+    _recentApplies.removeWhere(
+        (t) => now.difference(t) > const Duration(minutes: 1));
+    if (_recentApplies.length >= 12) {
+      _log('too many applies in a minute — standing down until it settles');
+      return true;
+    }
+    _recentApplies.add(now);
+    return false;
+  }
+
   Future<void> apply({bool force = false}) async {
+    if (_runawayGuard()) return;
     final settings = await AppSettings.load();
     final mode = settings.workspaceManagement;
     if (!mode.enabled) {
-      _plan = null;
       _log('placement is switched off');
       return;
     }
@@ -425,11 +414,9 @@ class _Daemon {
       preferProfileName: await _markedProfile(),
     );
     if (plan == null) {
-      _plan = null;
       _log('no remembered setup matches these screens');
       return;
     }
-    _plan = plan;
 
     // Which half runs is the difference between invisible and disruptive.
     // Declaring costs nothing and touches nothing that exists; the focus-and-
