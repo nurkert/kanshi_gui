@@ -62,6 +62,14 @@ abstract class MonitorService {
   /// listeners are safe.
   Stream<List<MonitorTileData>> watchOutputs();
 
+  /// The numeric workspace the user is looking at, or null when there is
+  /// none or the backend cannot tell.
+  ///
+  /// Used so a repair pass can hand focus back where it found it. Without it
+  /// the chain ends on workspace 1, which is a fine landing after docking and
+  /// a rude one at every other moment.
+  Future<int?> focusedWorkspace();
+
   /// Releases anything this backend spawned that would outlive the app.
   ///
   /// [watchOutputs] runs a long-lived `swaymsg -t subscribe` subprocess, and

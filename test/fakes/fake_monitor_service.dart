@@ -119,6 +119,12 @@ class FakeMonitorService implements MonitorService {
   @override
   Stream<List<MonitorTileData>> watchOutputs() => _watchController.stream;
 
+  /// What [focusedWorkspace] reports; null unless a test says otherwise.
+  int? focused;
+
+  @override
+  Future<int?> focusedWorkspace() async => focused;
+
   /// Recorded so a test can assert the app actually releases its children on
   /// the way out — the real backend leaks a `swaymsg` per launch without it.
   int shutdownCalls = 0;
