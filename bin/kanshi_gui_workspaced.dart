@@ -81,7 +81,7 @@ Future<void> main(List<String> args) async {
       return;
     }
     await daemon.attach(sock);
-    await daemon.apply(force: true);
+    await daemon.apply();
     return;
   }
   await daemon.run();
@@ -89,7 +89,7 @@ Future<void> main(List<String> args) async {
 
 const _usage = '''
 kanshi-gui-workspaced — keeps sway workspaces on the screens kanshi_gui
-remembers, at login, on every hotplug, and as each workspace opens.
+remembers: at login, whenever you plug a screen in, and after a sway reload.
 
   --once      apply the current setup's placement and exit
   --dry-run   work out the placement and print it, changing nothing
@@ -132,7 +132,7 @@ class _Daemon {
       });
     }
 
-    _watchTheFiles();
+    unawaited(_watchTheFiles());
     _watchMyself();
 
     // One process, many sway sessions: a user who logs out and back in keeps
@@ -246,21 +246,34 @@ class _Daemon {
   /// The DIRECTORY, not the file: both are written by writing a temp file and
   /// renaming it over the target, which replaces the inode and would leave a
   /// watch on the old one pointing at nothing.
-  void _watchTheFiles() {
+  Future<void> _watchTheFiles() async {
     final home = Platform.environment['HOME'] ?? '';
     if (home.isEmpty) return;
-    for (final dir in ['$home/.config/kanshi-gui', '$home/.config/kanshi']) {
+    // The kanshi config can live somewhere else entirely — settings.json may
+    // name a path. Watching only the default meant an edit to a custom config
+    // was picked up on the next hotplug and not before.
+    final custom = (await AppSettings.load()).kanshiConfigPath;
+    final dirs = <String>{
+      '$home/.config/kanshi-gui',
+      '$home/.config/kanshi',
+      if (custom != null && custom.isNotEmpty && custom.contains('/'))
+        custom.substring(0, custom.lastIndexOf('/')),
+    };
+    for (final dir in dirs) {
       try {
         final d = Directory(dir);
         if (!d.existsSync()) continue;
         d.watch(events: FileSystemEvent.all).listen((e) {
           final name = e.path.split('/').last;
-          if (name != 'settings.json' && name != 'config') return;
+          final watched = name == 'settings.json' ||
+              name == 'config' ||
+              (custom != null && e.path == custom);
+          if (!watched) return;
           _settleTimer?.cancel();
           // A file changed, not a screen. Never move anything that is open.
           _settleTimer = Timer(
             const Duration(milliseconds: 400),
-            () => unawaited(_serialised(() => apply(force: true))),
+            () => unawaited(_serialised(() => apply())),
           );
         }, onError: (Object _) {/* watch died; events still drive us */});
       } catch (e) {
@@ -271,7 +284,7 @@ class _Daemon {
 
   /// Follows one sway session until its socket closes.
   Future<void> _session() async {
-    await _serialised(() => apply(force: true));
+    await _serialised(() => apply());
     final Process proc;
     try {
       proc = await Process.start(
@@ -330,7 +343,7 @@ class _Daemon {
         _settleTimer = Timer(
           _settle,
           () => unawaited(
-              _serialised(() => apply(force: true, mayDisturb: true))),
+              _serialised(() => apply(mayDisturb: true))),
         );
         return;
     }
@@ -410,7 +423,7 @@ class _Daemon {
     return false;
   }
 
-  Future<void> apply({bool force = false, bool mayDisturb = false}) async {
+  Future<void> apply({bool mayDisturb = false}) async {
     if (_runawayGuard()) return;
     final settings = await AppSettings.load();
     final mode = settings.workspaceManagement;
@@ -493,6 +506,7 @@ class _Daemon {
       if (!await f.exists()) return null;
       final name = (await f.readAsString()).trim();
       return name.isEmpty ? null : name;
+      // Compared against shellSafeText(profile.name) — see matchProfile.
     } catch (_) {
       return null;
     }

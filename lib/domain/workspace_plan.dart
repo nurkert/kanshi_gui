@@ -98,7 +98,13 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   // away every workspace config sway holds, which is exactly why it is the
   // documented way out of a workspace stuck on the wrong screen. It throws
   // away ours too, so put them back.
-  if (!event.containsKey('current') || change == 'reload') {
+  // Narrow, and deliberately so: the two shapes sway actually sends, rather
+  // than "anything without a `current`". A malformed or future event should
+  // mean "do nothing", not "go and rearrange the desk".
+  if (change == 'reload') {
+    return const SwayEventVerdict(SwayEventAction.replan);
+  }
+  if (change == 'unspecified' && !event.containsKey('current')) {
     return const SwayEventVerdict(SwayEventAction.replan);
   }
 
@@ -141,8 +147,14 @@ Profile? matchProfile(
   ];
   if (candidates.isEmpty) return null;
   if (preferProfileName != null) {
+    // Compared through the same reduction the writer applies on the way out.
+    // `~/.current_kanshi_profile` is written by a shell `echo`, and a name a
+    // shell cannot be trusted with is written in its printable form — so a
+    // literal comparison silently never matched for any setup named with an
+    // apostrophe or a bracket, and the tie-break quietly did nothing.
+    final wanted = shellSafeText(preferProfileName);
     for (final p in candidates) {
-      if (p.name == preferProfileName) return p;
+      if (shellSafeText(p.name) == wanted) return p;
     }
   }
   return candidates.first;
