@@ -401,8 +401,8 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
       return 'Switched on, but not running right now. '
           'systemctl --user status kanshi-gui-workspaces';
     }
-    return 'Running. Your workspaces are placed at login, on every dock, and '
-        'as each one opens.';
+    return 'Running. Your workspaces are placed at login and whenever you '
+        'plug a screen in.';
   }
 
   // ── Actions ────────────────────────────────────────────────────────────

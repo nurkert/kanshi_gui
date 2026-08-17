@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.1.6
+
+### Fixed
+
+- **The helper advertised something it no longer does.** Its `--help` and the
+  switch in the app both promised placement "as each workspace opens" — the
+  behaviour removed in 2.1.4 because it fed itself. Text that describes a
+  feature which is gone is worse than no text.
+
+- **The tie-break between two setups for the same screens never worked.** The
+  helper compared `~/.current_kanshi_profile` literally against the setup
+  name, but that file is written by a shell `echo`, so a name a shell cannot
+  be trusted with goes in reduced to its printable part. Anyone whose setup is
+  named with an apostrophe had a tie-break that silently did nothing. Both
+  sides are now reduced the same way before comparing.
+
+- **A kanshi config in a custom location was not watched.** The helper honours
+  the path in `settings.json` when it reads, but only ever watched the default
+  directory — so an edit there was noticed on the next hotplug and not before.
+
+- **An event the helper does not understand no longer means "rearrange the
+  desk".** It replanned on anything without a `current` field; now it replans
+  only on the two shapes sway actually sends. A future sway release, or one
+  corrupt line, should mean *do nothing*.
+
 ## 2.1.5
 
 ### Fixed

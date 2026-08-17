@@ -120,6 +120,24 @@ void main() {
       );
     });
 
+    test('a marker survives the sanitising the writer applies to it', () {
+      // The marker file is written by a shell `echo`, so a name a shell
+      // cannot be trusted with goes in reduced to its printable part. Compared
+      // literally, the tie-break silently never matched for anyone whose
+      // setup is named with an apostrophe.
+      final a = Profile(name: 'Desk', monitors: desk());
+      final b = Profile(name: "Nico's Desk", monitors: desk());
+      expect(
+        planWorkspaces(
+          profiles: [a, b],
+          live: desk(),
+          distribution: WorkspaceDistribution.interleaved,
+          preferProfileName: 'Nico s Desk',
+        )?.profile.name,
+        "Nico's Desk",
+      );
+    });
+
     test('a marker naming a setup that is not plugged in is ignored', () {
       // The file survives reboots and describes yesterday's desk until kanshi
       // gets round to rewriting it. Trusting it would apply the office layout
@@ -253,10 +271,13 @@ void main() {
           SwayEventAction.replan);
     });
 
-    test('a malformed event with no change at all still replans', () {
-      // Failing towards "look again" is right here: the cost is one cheap
-      // recomputation, and the alternative is the daemon going deaf.
-      expect(classifySwayEvent(const {}).action, SwayEventAction.replan);
+    test('a malformed event does nothing', () {
+      // Narrow beats generous here. "Anything I do not recognise means go
+      // rearrange the desk" is how a future sway release, or one corrupt
+      // line, turns into workspaces moving under someone's hands.
+      expect(classifySwayEvent(const {}).action, SwayEventAction.none);
+      expect(classifySwayEvent({'change': 'something_new'}).action,
+          SwayEventAction.none);
     });
 
     test('a reload means work it out again', () {
