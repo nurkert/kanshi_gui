@@ -8,18 +8,24 @@ import 'package:kanshi_gui/services/workspace_apply_lock.dart';
 /// Keeps the sway workspaces on the screens the active setup says they belong
 /// on.
 ///
-/// The placement itself is kanshi's job: the writer emits an
-/// `exec swaymsg "…"` chain into every profile, and kanshi re-runs it on each
-/// profile activation. `kanshi(5)` is explicit that exec commands "are
-/// executed asynchronously and their order may not be preserved", so on a
-/// cold boot that chain races sway's output discovery. An output sway does
-/// not know by name yet has its `output 'X'` target silently dropped, and the
-/// workspaces land in creation order.
+/// The declarations are kanshi's job: the writer emits one
+/// `exec swaymsg workspace N output …` line per workspace into every profile,
+/// and kanshi runs them on each profile activation. What that CANNOT do is
+/// move a workspace that already exists — a declaration only says where one
+/// will be born — and it cannot correct itself either, because sway keeps the
+/// first binding it was given for a workspace and ignores every later one.
 ///
-/// This class is the repair pass for that race: read the live mapping, diff it
-/// against what the active setup implies, and re-run the chain only when they
-/// disagree. Idempotent and best-effort — it is a nicety on top of the real
-/// mechanism, not the mechanism itself.
+/// This class is the repair pass for both. It reads the live mapping, diffs it
+/// against what the active setup implies, and walks the workspaces into place
+/// only when they disagree. Best-effort and deliberately visible-when-it-acts.
+///
+/// This doc used to describe the gap as an ordering race at cold boot, on the
+/// strength of `kanshi(5)` warning that exec commands "are executed
+/// asynchronously and their order may not be preserved". Measured on sway
+/// 1.12, that is not the failure: a `workspace N output X` naming a screen
+/// sway does not have yet is simply remembered, and takes effect the moment
+/// that screen appears. Re-running the exec earlier or harder would have
+/// fixed nothing — which is exactly the conclusion the old wording invited.
 class WorkspacePlacement {
   final MonitorService monitors;
 

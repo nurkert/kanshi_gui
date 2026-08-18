@@ -58,6 +58,10 @@ enum SwayEventAction {
   /// The user just switched to a workspace and it is on the wrong screen.
   /// Move that one workspace, and nothing else.
   correct,
+
+  /// The user moved a workspace to another screen themselves. Not something
+  /// to answer — something to remember, and stop answering.
+  userMoved,
 }
 
 /// A decision about one event.
@@ -93,9 +97,15 @@ class SwayEventVerdict {
 /// remains cannot loop: the screens changing, and sway throwing its workspace
 /// configs away, are things only the outside world does.
 ///
-/// Nothing is lost by it either. Placing a workspace as it is born was a
-/// workaround for `workspace N output X` bindings that never reached sway —
-/// which is the bug 2.1.1 actually fixed. sway does this itself now.
+/// What IS lost by it is one thing, and it is the reason [SwayEventAction.
+/// correct] exists below. This paragraph used to end "sway does this itself
+/// now", on the theory that once the bindings actually reached sway it would
+/// place a new workspace correctly. It does not always: it takes the FIRST
+/// binding it was ever given for that workspace, so a session carrying a
+/// stale one places it wrongly forever, and no fixed preference list can be
+/// right for two nested setups that disagree. Answering a workspace being
+/// BORN is still out of the question; answering the one the user just
+/// switched to, with one move, is not.
 SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   final change = event['change']?.toString();
 
@@ -151,14 +161,18 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
   // desk at once — see [workspaceHomes] — and because a session that started
   // before this version has stale bindings in it that nothing else can undo
   // short of logging out.
-  if (change == 'focus') {
+  if (change == 'focus' || change == 'move') {
     final current = event['current'];
     if (current is Map) {
       final num = current['num'];
       final output = current['output'];
       if (num is int && num > 0 && output is String && output.isNotEmpty) {
-        return SwayEventVerdict(SwayEventAction.correct,
-            workspace: num, output: output);
+        return SwayEventVerdict(
+            change == 'move'
+                ? SwayEventAction.userMoved
+                : SwayEventAction.correct,
+            workspace: num,
+            output: output);
       }
     }
     return SwayEventVerdict.none;
@@ -206,11 +220,29 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
 ///
 /// It is still not right for *every* desk at once, and it cannot be: two
 /// setups whose screens are nested and which disagree about one workspace each
-/// need to precede the other. What narrowest-first buys is that the only
-/// unresolvable cases are those where BOTH candidates are screens the two
-/// desks share. The ordinary nested case — a dock that adds screens of its own
-/// — always comes out right. The residue is what the helper's live correction
-/// is for; see [SwayEventAction.correct].
+/// need to precede the other, and no single list can do both.
+///
+/// Where exactly it fails, measured rather than argued — an earlier version of
+/// this paragraph claimed "the ordinary nested case always comes out right",
+/// and that was checked and found false. The residue is:
+///
+///   * A smaller setup nested inside a larger one **and sharing at least two
+///     screens with it** — laptop + monitor inside laptop + monitor + dock
+///     screen. Some of the nine come out wrong at one of the two desks, every
+///     session: four of nine in the shape the test pins. Which desk carries
+///     them is what the tie-break decides, and reversing it moves the same
+///     four to the other desk rather than removing any. The larger desk wins
+///     here, on the grounds that it is where more screens are in play and
+///     where a misplaced number is more visible.
+///   * A setup nested inside another sharing exactly ONE screen — the
+///     laptop-only fallback inside a docked desk, which is the common shape —
+///     comes out right at both. All nine, measured on the config this was
+///     found on.
+///
+/// The residue is what the helper's live correction is for; see
+/// [SwayEventAction.correct]. The helper is opt-in, so for someone who has not
+/// switched it on, those two numbers stay where sway put them until the app is
+/// opened. Say so rather than imply otherwise.
 Map<int, List<OutputCriteria>> workspaceHomes({
   required List<Profile> profiles,
   required WorkspaceDistribution? distribution,
@@ -270,17 +302,14 @@ Map<int, List<OutputCriteria>> workspaceHomes({
       final crit =
           criteria[entry.value] ?? OutputCriteria.connector(entry.value);
       final list = candidates.putIfAbsent(entry.key, () => <_WorkspaceHome>[]);
-      // Deduplicated by SCREEN, not by the string a setup spells it with. One
-      // setup may address a display by its description and another — where
-      // that description carries shell syntax — by its connector. Those are
-      // two spellings of one screen, and keeping both would only bury the
-      // real fallbacks behind an entry that can never be reached.
-      final seen = list.indexWhere((h) => h.identity == identity);
-      if (seen == -1) {
-        list.add(_WorkspaceHome(identity, crit, i));
-      } else if (crit.isDescription && !list[seen].criteria.isDescription) {
-        // Keep the stable spelling if any setup has one.
-        list[seen] = _WorkspaceHome(identity, crit, list[seen].order);
+      // Deduplicated by SPELLING, not by screen. Two setups usually spell a
+      // display the same way, and then this collapses them. They differ when
+      // one setup holds two displays that share a description and has to fall
+      // back to connector names for both — and a connector is a different
+      // address at a different dock. Collapsing those onto one screen dropped
+      // the spelling that was the only one that resolved at the other desk.
+      if (!list.any((h) => h.criteria == crit)) {
+        list.add(_WorkspaceHome(identity, crit, i, mons.length));
       }
     }
   }
@@ -291,7 +320,14 @@ Map<int, List<OutputCriteria>> workspaceHomes({
             ..sort((a, b) {
               final byReach =
                   (reach[a.identity] ?? 0).compareTo(reach[b.identity] ?? 0);
-              return byReach != 0 ? byReach : a.order.compareTo(b.order);
+              if (byReach != 0) return byReach;
+              // Equal reach, and one of them has to be wrong somewhere. The
+              // bigger desk wins: more of its screens are plugged in when it
+              // is the one you are at, so more of the list below it is live
+              // and more of it is shadowed. Config order last, so the answer
+              // never depends on which setup you happened to save first.
+              final bySize = b.deskSize.compareTo(a.deskSize);
+              return bySize != 0 ? bySize : a.order.compareTo(b.order);
             }))
           .map((h) => h.criteria)
           .toList(),
@@ -300,14 +336,18 @@ Map<int, List<OutputCriteria>> workspaceHomes({
 
 /// One candidate screen for one workspace, before the list is ordered.
 class _WorkspaceHome {
-  /// The screen itself, independent of how a given setup spells it.
+  /// The screen itself, independent of how a given setup spells it. Only used
+  /// for ordering; two spellings of one screen are both kept.
   final String identity;
   final OutputCriteria criteria;
 
   /// Which setup put it forward, so equal reach breaks deterministically.
   final int order;
 
-  const _WorkspaceHome(this.identity, this.criteria, this.order);
+  /// How many screens that setup has.
+  final int deskSize;
+
+  const _WorkspaceHome(this.identity, this.criteria, this.order, this.deskSize);
 }
 
 /// What makes two entries in two different setups the same physical screen.

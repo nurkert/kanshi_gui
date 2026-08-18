@@ -106,6 +106,15 @@ remembers: at login, whenever you plug a screen in, and after a sway reload.
   -v          log what it decides
   -h          this text
 
+It also puts ONE workspace right when you switch to it and it is on the wrong
+screen — a single `move workspace to output`, on the workspace already in
+front of you. That is the only time it moves anything you are looking at, and
+it is needed because sway keeps the first `workspace N output X` it was given
+in a session and ignores every later one.
+
+If you move a workspace to another screen yourself, it stops placing that one
+for the rest of the session. Yours wins.
+
 Reads ~/.config/kanshi-gui/settings.json and the kanshi config. Does nothing
 at all unless workspace placement is switched on in kanshi_gui.
 ''';
@@ -371,15 +380,31 @@ class _Daemon {
         unawaited(core.serialised(
             () => core.correct(verdict.workspace!, verdict.output!)));
         return;
+      case SwayEventAction.userMoved:
+        // sway emits `move` for our own corrections too; the core tells the
+        // two apart because it knows what it just sent.
+        core.noteMove(verdict.workspace!, verdict.output!);
+        return;
       case SwayEventAction.replan:
         // Docking is a salvo, not an event. Coalesce it, and let kanshi
         // finish switching profiles before asking what the desk looks like.
+        //
+        // Corrections are held for the whole of that window. Until the new
+        // placement is worked out the cached plan still describes the desk
+        // that was just unplugged, and a focus event arriving mid-dock would
+        // be answered by dragging the workspace back onto a screen the user
+        // has just moved away from.
+        core.replanPending(true);
         _settleTimer?.cancel();
-        _settleTimer = Timer(
-          _settle,
-          () => unawaited(
-              core.serialised(() => core.apply(ApplyReason.outputsChanged))),
-        );
+        _settleTimer = Timer(_settle, () {
+          unawaited(core.serialised(() async {
+            try {
+              await core.apply(ApplyReason.outputsChanged);
+            } finally {
+              core.replanPending(false);
+            }
+          }));
+        });
         return;
     }
   }
