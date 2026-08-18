@@ -30,14 +30,43 @@ class OutputMatcher {
   /// the EDID descriptor is stable across reboots and ports, the connector
   /// name is not, and the display label is only a fallback for entries that
   /// predate descriptors being recorded.
+  ///
+  /// **Two descriptors that disagree end the question.** They are proof of two
+  /// different screens, and no weaker signal is allowed to argue with proof.
+  ///
+  /// That sentence used to be missing, and it cost a user their setup. They
+  /// had a saved three-screen office, recorded down to the EDID serials of two
+  /// Samsung panels. In another room they plugged into a different dock with
+  /// two panels of the same model — different units, different serials — and
+  /// the dock happened to hand out the same connector names, `DP-4` and
+  /// `DP-5`. The descriptors disagreed, so the check above fell through, the
+  /// connector names agreed, and the app declared them the same screens.
+  ///
+  /// Everything followed from that. The saved office was re-pointed at the
+  /// room the user was actually in, and — because re-hydration writes the
+  /// observed identity back — its recorded serials were overwritten with the
+  /// new panels'. The setup for the other room was gone, unrecoverably, from
+  /// one coincidence of port naming. The window then showed that room's saved
+  /// positions over these screens' real ones, which is what the dashed drift
+  /// ghosts and the off-centre canvas were: the app was describing a desk two
+  /// doors away.
+  ///
+  /// A connector name is the one piece of evidence `kanshi(5)` explicitly
+  /// warns about — "output names may not be stable: they may change across
+  /// reboots \[…\] or creation order (typically for USB-C docks)". Letting it
+  /// speak over a recorded EDID inverted the entire strength order this
+  /// function exists to express.
   static MatchStrength? strength(
     MonitorTileData live,
     MonitorTileData entry,
   ) {
-    if (live.edidDescriptor.isNotEmpty &&
-        entry.edidDescriptor.isNotEmpty &&
-        same(live.edidDescriptor, entry.edidDescriptor)) {
-      return MatchStrength.descriptor;
+    if (live.edidDescriptor.isNotEmpty && entry.edidDescriptor.isNotEmpty) {
+      return same(live.edidDescriptor, entry.edidDescriptor)
+          ? MatchStrength.descriptor
+          // Both sides know who they are and they are not the same display.
+          // No fall-through: the weaker passes exist for entries that have no
+          // descriptor to offer, not to overrule one that does.
+          : null;
     }
     if (entry.id.isNotEmpty && same(live.id, entry.id)) {
       return MatchStrength.connector;
