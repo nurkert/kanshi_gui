@@ -323,11 +323,11 @@ void main() {
     });
 
     test('nor is any other workspace event', () {
-      // `focus` is the one exception and it is handled separately below: it
-      // reports where the user just went, and the helper decides whether that
-      // disagrees with the plan. Everything here is either the user's doing or
-      // the helper's own, and neither is the helper's to answer.
-      for (final change in ['init', 'empty', 'move', 'rename', 'urgent']) {
+      // `focus` and `move` are the two exceptions and are handled separately
+      // below: one reports where the user just went, the other that they moved
+      // a workspace themselves. Neither is a command; both are things the
+      // helper notes. Everything here is the helper's own doing or nobody's.
+      for (final change in ['init', 'empty', 'rename', 'urgent']) {
         expect(
           classifySwayEvent({
             'change': change,
@@ -354,6 +354,19 @@ void main() {
       expect(v.action, SwayEventAction.correct);
       expect(v.workspace, 3);
       expect(v.output, 'DP-4');
+    });
+
+    test('a move is remembered, not answered', () {
+      // sway has a `move workspace to output` binding of its own. Someone who
+      // presses it has said something more specific than any rule the app
+      // holds, and correcting them back would be a fight they cannot win —
+      // the rule answers again on every visit.
+      final v = classifySwayEvent({
+        'change': 'move',
+        'current': {'num': 3, 'name': '3', 'output': 'DP-4'},
+      });
+      expect(v.action, SwayEventAction.userMoved);
+      expect(v.workspace, 3);
     });
 
     test('a focus with nothing usable in it is ignored', () {

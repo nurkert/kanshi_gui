@@ -171,6 +171,48 @@ void main() {
           reason: 'the connector a dock hands out is not stable; the EDID is');
     });
 
+    test('two desks sharing two screens: two numbers cannot be right', () {
+      // The honest limit, pinned so nobody rediscovers it as a surprise. A
+      // smaller setup nested inside a larger one and sharing TWO screens with
+      // it needs its answer to both precede and follow the larger setup's, and
+      // no single list can do both. The desk-size tie-break puts the errors on
+      // the smaller desk; reversing it moves the same two to the larger one.
+      // The helper's live correction is what closes them — see
+      // [WorkspaceDaemonCore.correct].
+      final pair = Profile(name: 'Desk', monitors: [_panel, _middle]);
+      final plusDock =
+          Profile(name: 'Desk + dock', monitors: [_panel, _middle, _left]);
+      final homes = workspaceHomes(
+        profiles: [pair, plusDock],
+        distribution: WorkspaceDistribution.interleaved,
+      );
+
+      /// What sway would do: the first entry that names a connected screen.
+      int wrongAt(List<MonitorTileData> desk) {
+        final present = {for (final m in desk) m.edidDescriptor};
+        final wants = resolveWorkspaceMap(
+          resolveWorkspaceRanks(desk),
+          distribution: WorkspaceDistribution.interleaved,
+        );
+        final byId = {for (final m in desk) m.id: m.edidDescriptor};
+        var wrong = 0;
+        for (var ws = 1; ws <= 9; ws++) {
+          final born = homes[ws]!
+              .map((c) => c.value)
+              .firstWhere(present.contains, orElse: () => '');
+          if (born != byId[wants[ws]]) wrong++;
+        }
+        return wrong;
+      }
+
+      expect(wrongAt([_left, _panel, _middle]), 0,
+          reason: 'the larger desk comes out right');
+      expect(wrongAt([_panel, _middle]), 4,
+          reason: 'and the smaller one pays for it — measured, not argued. '
+              'Reversing the tie-break moves the same four to the larger '
+              'desk; the total does not change, only who carries it.');
+    });
+
     test('placement switched off says nothing at all', () {
       expect(workspaceHomes(profiles: [_docked()], distribution: null), isEmpty);
     });
@@ -233,11 +275,19 @@ void main() {
           knownProfiles: [_docked(), _laptopOnly()],
         ),
       );
+      // Wired exactly as bin/kanshi_gui_workspaced.dart wires it.
       sway.events().listen((e) {
         final v = classifySwayEvent(e);
-        if (v.action != SwayEventAction.correct) return;
-        core.noteFocus(v.workspace!);
-        core.serialised(() => core.correct(v.workspace!, v.output!));
+        switch (v.action) {
+          case SwayEventAction.none:
+          case SwayEventAction.replan:
+            return;
+          case SwayEventAction.userMoved:
+            core.noteMove(v.workspace!, v.output!);
+          case SwayEventAction.correct:
+            core.noteFocus(v.workspace!);
+            core.serialised(() => core.correct(v.workspace!, v.output!));
+        }
       });
       await core.apply(ApplyReason.startup);
       sway.commands.clear();
@@ -295,6 +345,75 @@ void main() {
       await settle();
       expect(sway.commands, isEmpty,
           reason: 'workspace 3 belongs on the panel, and 2 is stale');
+    });
+
+    test('a workspace you moved yourself is never moved back', () async {
+      // sway has a `move workspace to output` binding of its own. Someone who
+      // presses it has said something more specific than any rule the app
+      // holds, and the rule would answer again on every single visit.
+      sway.userSwitchedTo(2, 'DP-5');
+      await settle();
+      sway.focused = 2;
+      // Their own move. It emits no focus, so nothing happens yet — which is
+      // why it looks like it stuck.
+      await sway.run("move workspace to output 'eDP-1'");
+      await settle();
+      sway.commands.clear();
+      sway.userSwitchedTo(1, 'DP-4');
+      await settle();
+      sway.userSwitchedTo(2, 'eDP-1');
+      await settle();
+      expect(sway.commands, isEmpty,
+          reason: 'the helper noticed the move and stood down for workspace 2');
+    });
+
+    test('but its own move is not mistaken for the user\'s', () async {
+      sway.userSwitchedTo(4, 'eDP-1');
+      await settle();
+      expect(sway.commands, hasLength(1));
+      // Same workspace, wrong screen again — a stale binding recreating it.
+      sway.userSwitchedTo(9, 'eDP-1');
+      await settle();
+      sway.commands.clear();
+      sway.userSwitchedTo(4, 'eDP-1');
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      await settle();
+      // Held only by the cooldown, not by a false 'moved by hand'.
+      expect(core.plan, isNotNull);
+    });
+
+    test('nothing is corrected while a dock is still settling', () async {
+      // During the settle window the cached plan still describes the desk that
+      // was just unplugged. A focus event answered from it would drag the
+      // workspace back onto a screen the user has moved away from.
+      core.replanPending(true);
+      sway.userSwitchedTo(2, 'eDP-1');
+      await settle();
+      expect(sway.commands, isEmpty);
+      core.replanPending(false);
+      sway.userSwitchedTo(2, 'eDP-1');
+      await settle();
+      expect(sway.commands, hasLength(1));
+    });
+
+    test('the repair chain declares every screen, not just this one', () async {
+      // The chain's first half IS a declaration, and it ran on every dock
+      // with one screen per workspace — the exact shape sway keeps forever.
+      sway.commands.clear();
+      sway.hotplug();
+      await settle();
+      await core.apply(ApplyReason.outputsChanged);
+      final declarations = sway.commands
+          .expand((c) => c.split(';'))
+          .map((c) => c.trim())
+          .where((c) => c.startsWith('workspace 2 output'))
+          .toList();
+      expect(declarations, isNotEmpty);
+      for (final d in declarations) {
+        expect(d, contains('HK2XA01167'));
+        expect(d, contains('InfoVision'),
+            reason: 'the panel is the fallback and has to be named');
+      }
     });
 
     test('placement switched off means the correction stops too', () async {

@@ -56,7 +56,12 @@ void main() {
         core.noteFocus(verdict.workspace!);
           core.serialised(
               () => core.correct(verdict.workspace!, verdict.output!));
-        case SwayEventAction.replan:
+        case SwayEventAction.userMoved:
+        // sway emits `move` for our own corrections too; the core tells the
+        // two apart because it knows what it just sent.
+        core.noteMove(verdict.workspace!, verdict.output!);
+        return;
+      case SwayEventAction.replan:
           core.serialised(() => core.apply(ApplyReason.outputsChanged));
       }
     });
@@ -194,8 +199,10 @@ void main() {
     });
 
     test('sway discarding its workspace configs is answered', () async {
-      // `swaymsg reload` is the documented way out of a stuck workspace, and
-      // it throws our bindings away with everything else.
+      // `swaymsg reload` throws our bindings away with everything else. It
+      // is not something to recommend — measured, it also wipes every output
+      // position and scale — but a user or a keybinding can still run it, and
+      // the helper has to notice.
       sway.reload();
       await settle();
       expect(sway.commands, hasLength(1));

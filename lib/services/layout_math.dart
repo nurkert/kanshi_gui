@@ -434,21 +434,15 @@ class LayoutMath {
     final double maxX;
     final double maxY;
     if (pinnedBounds != null) {
-      // The pin freezes the fit against the dragged tile, not against the
-      // ghosts — they do not move while a drag is in progress, and leaving
-      // them out made grabbing a tile re-project the whole canvas. Measured
-      // on a layout drifted by 10769 units: the tile jumped from 121px wide
-      // to 800px wide and the dashes left the canvas the instant the pointer
-      // went down. Which is also what "it fixed itself after a lot of
-      // dragging" was describing from the other side.
-      minX = alsoVisible.map((m) => m.x).fold(pinnedBounds.left, min);
-      minY = alsoVisible.map((m) => m.y).fold(pinnedBounds.top, min);
-      maxX = alsoVisible
-          .map((m) => m.x + _spanX(m))
-          .fold(pinnedBounds.right, max);
-      maxY = alsoVisible
-          .map((m) => m.y + _spanY(m))
-          .fold(pinnedBounds.bottom, max);
+      // Taken as given, ghosts included: whoever pinned it did so once, at the
+      // start of the gesture, over everything that is drawn. Expanding it here
+      // per frame would undo the point of pinning — dragging a tile onto where
+      // its screen really is drops that ghost out of [alsoVisible], and the
+      // box would collapse under the cursor at the moment of arrival.
+      minX = pinnedBounds.left;
+      minY = pinnedBounds.top;
+      maxX = pinnedBounds.right;
+      maxY = pinnedBounds.bottom;
     } else {
       // Fit to EVERY tile that will be drawn, parked ones included.
       //

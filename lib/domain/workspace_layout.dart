@@ -117,7 +117,16 @@ String? buildSwayWorkspaceChain(
 ///     existing workspaces. To relocate workspaces that already exist
 ///     with windows (e.g. ws 1 opened before docking), we focus each
 ///     in turn and run `move workspace to output X`. This forces the
-///     move for existing workspaces and is a no-op for empty ones.
+///     move for existing workspaces.
+///
+///     It is NOT a no-op for empty ones, whatever this used to say.
+///     Measured on sway 1.12: focusing a workspace that does not exist
+///     creates it, moving it emits `move`, leaves the previous one empty
+///     — which sway collects — and makes sway auto-create a replacement
+///     on each screen the walk vacates. Nine workspaces is a few dozen
+///     events and a visible sweep across the desk. That is why this half
+///     runs only when the live layout actually disagrees, and only at a
+///     moment a flicker is expected anyway.
 ///
 /// The chain first declares every output target up front (so the later
 /// `workspace N` focus picks the right home AND so any *future*
