@@ -882,6 +882,15 @@ class KanshiController extends ChangeNotifier {
   /// config when they haven't changed anything. The captured setup lives in
   /// memory and is persisted the moment the user makes a real edit.
   Future<void> ensureCurrentSetupMatches({bool persist = true}) async {
+    // No outputs at all is not a desk, it is an answer that has not arrived —
+    // `swaymsg` failing once at login, the socket busy, the compositor not up
+    // yet. This would capture a setup with no screens in it, make it active,
+    // and put an empty canvas over the profile that had just been loaded
+    // correctly. There is nothing to reconcile against, so reconcile nothing.
+    //
+    // A desk whose screens are all switched OFF is a different thing: it is
+    // still that desk, and the user needs to see it to switch one back on.
+    if (_currentMonitors.isEmpty) return;
     final matchIdx = _findProfileMatchingCurrent();
     if (matchIdx != null) {
       _activeProfileIndex = matchIdx;
@@ -1098,6 +1107,14 @@ class KanshiController extends ChangeNotifier {
     // surprising.
     _lastModeBeforeCustom.clear();
     _revertScheduler.cancelAll();
+    // Drift is a comparison between the ACTIVE setup and the live screens, and
+    // it is cached — so switching setups left the previous one's answer in
+    // place. At a desk the app got wrong, clicking through saved setups
+    // looking for the right one is the first thing anyone does, and every one
+    // of them was shown without ghosts: an arrangement that might have nothing
+    // to do with the screens in front of them, presented as if it fitted.
+    _drift.resetDismissal();
+    _recomputeDriftIssues();
     // Profile mirrors are per-profile: tear down everything that belongs
     // to the previous profile and let _reconcileMirrors stand up the new
     // ones. Do this even when the index is unchanged so a manual switch
@@ -1355,7 +1372,14 @@ class KanshiController extends ChangeNotifier {
             .monitors
             .where((m) => m.enabled && m.mirrorOf == null)
             .toList();
-    return _drags.begin(id, rollback, cluster);
+    // The dashed ghosts go into the pin as well. They are drawn with the same
+    // projection, so the fit has to cover them — and it has to cover them for
+    // the WHOLE gesture, frozen. Recomputing them per frame is worse than
+    // leaving them out: dragging a tile onto where its screen really is makes
+    // the drift fall under tolerance, the ghost disappears, the bounding box
+    // collapses and the tile jumps out from under the cursor at the exact
+    // moment it arrives.
+    return _drags.begin(id, rollback, [...cluster, ...driftedLiveOutputs]);
   }
 
   /// Cancel every in-flight drag session: roll the profile back to each
@@ -2940,34 +2964,20 @@ class KanshiController extends ChangeNotifier {
         missing: [for (final m in pEnabled) m.id],
       );
     }
-    final claimedCurrent = <int>{};
-    final matchedSlots = <int>{};
-    // Pass 1: id-exact.
-    for (var i = 0; i < pEnabled.length; i++) {
-      for (var j = 0; j < cEnabled.length; j++) {
-        if (claimedCurrent.contains(j)) continue;
-        if (_matchesOutput(pEnabled[i].id, cEnabled[j].id)) {
-          claimedCurrent.add(j);
-          matchedSlots.add(i);
-          break;
-        }
-      }
-    }
-    // Pass 2: manufacturer fallback for profile slots still unmatched.
-    for (var i = 0; i < pEnabled.length; i++) {
-      if (matchedSlots.contains(i)) continue;
-      if (pEnabled[i].manufacturer.isEmpty) continue;
-      for (var j = 0; j < cEnabled.length; j++) {
-        if (claimedCurrent.contains(j)) continue;
-        if (cEnabled[j].manufacturer.isEmpty) continue;
-        if (_matchesOutput(
-            pEnabled[i].manufacturer, cEnabled[j].manufacturer)) {
-          claimedCurrent.add(j);
-          matchedSlots.add(i);
-          break;
-        }
-      }
-    }
+    // Through [OutputMatcher], which is the app's one answer to "are these
+    // the same screen". This used to be a second, weaker matcher living here:
+    // pass 1 compared connector names, pass 2 compared the manufacturer
+    // string, and the recorded EDID descriptor was never consulted at all.
+    //
+    // That is the check that decides which desk you are at, and it is how a
+    // saved office came to be declared active in a different room: two panels
+    // of the same model, a different dock that handed out the same `DP-4` and
+    // `DP-5`, and pass 1 called it a full match. The app then applied that
+    // room's layout here and re-hydration overwrote the saved EDID serials
+    // with these panels'. Fixing the strength order in one matcher while the
+    // other one still guessed by port name would have fixed nothing.
+    final pairs = OutputMatcher.pair(pEnabled, cEnabled);
+    final matchedSlots = pairs.keys.toSet();
     final missing = <String>[
       for (var i = 0; i < pEnabled.length; i++)
         if (!matchedSlots.contains(i)) pEnabled[i].id,

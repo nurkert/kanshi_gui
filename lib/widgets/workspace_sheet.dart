@@ -401,8 +401,14 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
       return 'Switched on, but not running right now. '
           'systemctl --user status kanshi-gui-workspaces';
     }
+    // Says what it does to the screen the user is looking at, not just when
+    // it runs. It moves one workspace — the one you just switched to, if it
+    // is on the wrong screen — and someone who sees that happen should have
+    // read it here first. Moving a workspace yourself takes it back off the
+    // list for the session.
     return 'Running. Your workspaces are placed at login and whenever you '
-        'plug a screen in.';
+        'plug a screen in. If you switch to one that is on the wrong screen, '
+        'it moves there. Move one yourself and it stays where you put it.';
   }
 
   // ── Actions ────────────────────────────────────────────────────────────

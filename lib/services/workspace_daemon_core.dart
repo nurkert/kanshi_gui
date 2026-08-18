@@ -139,6 +139,57 @@ class WorkspaceDaemonCore {
   /// Called synchronously as the event is read, before anything is queued.
   void noteFocus(int workspace) => _latestFocus = workspace;
 
+  /// Workspaces the user has moved themselves.
+  ///
+  /// sway has a `move workspace to output` binding of its own, and someone who
+  /// presses it has said something more specific than any rule the app holds.
+  /// Correcting them back would be a fight they cannot win — the rule answers
+  /// again on every visit — so the first time a workspace is moved by someone
+  /// other than us, it stops being ours to place for the rest of the session.
+  final Set<int> _movedByHand = <int>{};
+
+  /// The workspace this helper is moving right now, so its own `move` event is
+  /// not read as the user's.
+  int? _movingOurselves;
+
+  /// A screen appeared or disappeared and the placement is being worked out
+  /// again. Until it is, the cached plan describes the previous desk — and
+  /// correcting against it would drag workspaces back onto the screen they
+  /// just came off. Docking settles over seconds, not milliseconds.
+  bool _replanning = false;
+
+  /// Called when a replan is scheduled, and again when it has finished.
+  // ignore: avoid_positional_boolean_parameters
+  void replanPending(bool pending) => _replanning = pending;
+
+  /// One `move` event. Returns true when it was read as the user's own doing.
+  ///
+  /// Three things emit `move` and only one of them is a decision:
+  ///
+  ///  * this helper, which knows what it just sent;
+  ///  * sway, relocating workspaces onto a screen that just appeared — which
+  ///    it does from the bindings, so it happens on every dock. Measured: it
+  ///    logged "workspace 3 was moved by hand" while plugging a dock in, and
+  ///    would then have stopped placing workspace 3 for the session;
+  ///  * the user, on their own keybinding.
+  ///
+  /// The first is excluded by memory, the second by only counting moves that
+  /// land a workspace somewhere the plan does NOT put it. A move onto its own
+  /// screen is not an override, it is agreement — which also covers the app's
+  /// repair chain, running in another process where no memory would reach.
+  bool noteMove(int workspace, String output) {
+    if (_movingOurselves == workspace) {
+      _movingOurselves = null;
+      return false;
+    }
+    if (_replanning) return false;
+    final want = _plan?.map[workspace];
+    if (want == null || want == output) return false;
+    if (!_movedByHand.add(workspace)) return true;
+    log('workspace $workspace was moved by hand; leaving it be from now on');
+    return true;
+  }
+
   Future<void> _queue = Future<void>.value();
 
   /// Runs [action] after everything already queued.
@@ -176,6 +227,8 @@ class WorkspaceDaemonCore {
   Future<void> correct(int workspace, String liveOutput, {DateTime? now}) async {
     final plan = _plan;
     if (plan == null) return;
+    if (_replanning) return;
+    if (_movedByHand.contains(workspace)) return;
     if (_latestFocus != null && _latestFocus != workspace) return;
     final want = plan.map[workspace];
     if (want == null || want == liveOutput) return;
@@ -214,6 +267,7 @@ class WorkspaceDaemonCore {
     }
     Future<void> send() async {
       sent.add(command);
+      _movingOurselves = workspace;
       await sway.run(command);
     }
 
@@ -280,6 +334,11 @@ class WorkspaceDaemonCore {
       log('no remembered setup matches these screens');
       return;
     }
+    if (_plan?.profile.name != plan.profile.name) {
+      // A different desk. What someone chose to do with a workspace at the
+      // last one says nothing about this one.
+      _movedByHand.clear();
+    }
     _plan = plan;
 
     // Which half runs is the difference between invisible and disruptive.
@@ -301,10 +360,14 @@ class WorkspaceDaemonCore {
 
     final command = disturb
         // Handed back to whatever the user was on, instead of dropping them
-        // on workspace 1.
+        // on workspace 1. And carrying `homes`, because the chain's first half
+        // IS a declaration: without it this path re-emitted one screen per
+        // workspace — the exact shape sway keeps forever and ignores every
+        // correction to — from the one code path that runs on every dock.
         ? buildWorkspaceChain(plan.map,
             criteria: plan.criteria,
-            returnFocusTo: await sway.focusedWorkspace())
+            returnFocusTo: await sway.focusedWorkspace(),
+            homes: plan.homes.isEmpty ? null : plan.homes)
         : plan.declarations;
     if (command == null) return;
 

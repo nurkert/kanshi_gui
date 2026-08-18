@@ -109,12 +109,62 @@
   bindings. Detected by the setups disagreeing with each other rather than by
   counting targets, so a config that is already right is never rewritten.
 
+- The helper's own dock-repair chain was the last path still declaring one
+  screen per workspace: the chain's first half IS a declaration, and it did not
+  carry the preference list. It ran on every dock — the exact moment the trap
+  is set.
+
+- A correction during a dock answered from the previous desk's plan, dragging
+  workspaces back onto the screen just unplugged. Corrections are held for the
+  whole settle window now.
+
+- Moving a workspace yourself is respected: the helper stops placing that one
+  for the rest of the session. It tells its own moves, sway's hotplug
+  relocations and the app's repair chain apart from a real decision by only
+  counting moves that land a workspace somewhere the plan does *not* put it —
+  a first pass counted sway's own dock relocation as the user's and stood down
+  from a workspace nobody had touched.
+
+- Switching setups left the previous one's drift comparison in place, so
+  clicking through saved setups at a desk the app got wrong showed each of them
+  without ghosts — an arrangement that might have nothing to do with the
+  screens in front of you, presented as if it fitted.
+
+- A launch where the compositor reports no outputs at all — `swaymsg` not up
+  yet, the socket busy — captured a setup with no screens in it, made it
+  active, and put an empty canvas over the profile that had just loaded
+  correctly. A desk whose screens are all switched *off* is still that desk and
+  is unaffected.
+
 ### Changed
 
 - The fake sway the helper's tests run against now models sway's append-only,
   first-resolving workspace bindings, and answers a focus and a move with the
   events each really produces. It could not previously express the bug above;
   now a test reproduces it.
+
+### Known
+
+- Two remembered setups where one's screens are a subset of the other's **and
+  they share at least two screens** cannot both get their way from one
+  declaration: each needs its answer to precede the other's. Measured, four of
+  the nine numbers come out wrong at one of the two desks, and the tie-break
+  decides which desk carries them — the larger one wins, so the smaller pays.
+  Reversing it moves the same four rather than removing any.
+
+  A setup nested inside another sharing exactly ONE screen — the laptop-only
+  fallback inside a docked desk, the common shape and the one this was reported
+  from — comes out right at both, all nine, measured on the config it was found
+  on.
+
+  The background helper closes the residue: it moves the workspace when you
+  switch to it. The helper is opt-in and ships switched off, so without it
+  those numbers stay where sway put them until the app is next opened, which
+  runs the same repair for workspaces that already exist.
+
+- A setup's hand-made workspace map is stored against connector names, so
+  plugging the same screens into a different dock — new port names — drops it
+  back to the pattern. Only affects "my own"; the rules are unaffected.
 
 ### Verified
 
@@ -463,8 +513,16 @@
   but never replace one (`sway/commands/workspace.c`,
   `workspace_get_initial_output`). Workspaces that never had a home — the ones
   that were opening under the cursor — are fixed immediately; a stale one
-  clears on the next login, or right away with
-  `swaymsg reload && kanshictl reload`.
+  clears on the next login.
+
+  > **Corrected in 2.3.0.** This entry used to end "or right away with
+  > `swaymsg reload && kanshictl reload`". Do not run that. Measured since:
+  > `swaymsg reload` does discard the workspace bindings, and it also throws
+  > away every output position and scale the compositor was given over IPC and
+  > re-arranges the desk from scratch. It trades a workspace on the wrong
+  > screen for the monitor arrangement this app exists to keep. 2.3.0 removes
+  > the need for it: the bindings no longer go stale, and the helper puts a
+  > workspace right when you switch to it.
 
 ## 2.0.2
 

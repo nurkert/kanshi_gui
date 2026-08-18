@@ -199,6 +199,7 @@ void main() {
       // pinned the tile cluster only, so on a drifted layout the ghosts were
       // in the idle fit and out of the dragging one: the instant the pointer
       // went down the whole canvas changed scale and the dashes left it.
+      // The pin now covers what is drawn — see beginDragSession.
       const viewport = Size(1000, 700);
       final tile = _mon(id: 'A', x: 0, y: 0);
       final ghost = _mon(id: 'A', x: 10769, y: 1510);
@@ -207,12 +208,30 @@ void main() {
       final dragging = LayoutMath.computeDisplay(
         [tile],
         viewport,
-        pinnedBounds: LayoutMath.boundingBox([tile]),
+        pinnedBounds: LayoutMath.boundingBox([tile, ghost]),
         alsoVisible: [ghost],
       );
       expect(dragging.scaleFactor, closeTo(idle.scaleFactor, 1e-9));
       expect(dragging.displayMonitors.single.width,
           closeTo(idle.displayMonitors.single.width, 1e-9));
+    });
+
+    test('and the pin does not move when the ghost it covers goes away', () {
+      // Drag the tile onto where the screen really is and the drift falls
+      // under tolerance, so the ghost stops being reported. If the fit were
+      // recomputed from the live ghost list the box would collapse and the
+      // tile would jump out from under the cursor at the moment it arrived.
+      const viewport = Size(1000, 700);
+      final tile = _mon(id: 'A', x: 0, y: 0);
+      final ghost = _mon(id: 'A', x: 10769, y: 1510);
+      final pin = LayoutMath.boundingBox([tile, ghost]);
+      final withGhost = LayoutMath.computeDisplay([tile], viewport,
+          pinnedBounds: pin, alsoVisible: [ghost]);
+      final ghostGone = LayoutMath.computeDisplay([tile], viewport,
+          pinnedBounds: pin, alsoVisible: const []);
+      expect(ghostGone.scaleFactor, withGhost.scaleFactor);
+      expect(ghostGone.offsetX, withGhost.offsetX);
+      expect(ghostGone.originX, withGhost.originX);
     });
 
     test('a scale of 0 cannot blank the canvas through the pinned path', () {
