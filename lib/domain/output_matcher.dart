@@ -61,12 +61,27 @@ class OutputMatcher {
     MonitorTileData entry,
   ) {
     if (live.edidDescriptor.isNotEmpty && entry.edidDescriptor.isNotEmpty) {
-      return same(live.edidDescriptor, entry.edidDescriptor)
-          ? MatchStrength.descriptor
-          // Both sides know who they are and they are not the same display.
-          // No fall-through: the weaker passes exist for entries that have no
-          // descriptor to offer, not to overrule one that does.
-          : null;
+      if (same(live.edidDescriptor, entry.edidDescriptor)) {
+        return MatchStrength.descriptor;
+      }
+      // A descriptor is `make model serial`, and [composeKanshiDescriptor]
+      // writes the word `Unknown` where the display reported no serial. Two
+      // descriptors that agree on make and model and differ only in that a
+      // serial appeared — a firmware update, a different cable, a compositor
+      // that reads EDID more thoroughly — are not proof of two displays. They
+      // are one display that has started introducing itself properly, and
+      // refusing outright would silently drop the setup it belongs to.
+      //
+      // Not a descriptor match either: without the serial this is exactly as
+      // strong as the display label, which is what two panels of one model
+      // share. [pair] hands it out only after every stronger claim is settled.
+      if (_serialUnknownOnOneSide(live.edidDescriptor, entry.edidDescriptor)) {
+        return MatchStrength.label;
+      }
+      // Both sides know who they are and they are not the same display.
+      // No fall-through: the weaker passes exist for entries that have no
+      // descriptor to offer, not to overrule one that does.
+      return null;
     }
     if (entry.id.isNotEmpty && same(live.id, entry.id)) {
       return MatchStrength.connector;
@@ -76,6 +91,23 @@ class OutputMatcher {
       return MatchStrength.label;
     }
     return null;
+  }
+
+  /// Whether two descriptors are the same but for a serial that one of them
+  /// does not have.
+  static bool _serialUnknownOnOneSide(String a, String b) {
+    const unknown = ' unknown';
+    final na = normalize(a);
+    final nb = normalize(b);
+    final aUnknown = na.endsWith(unknown);
+    final bUnknown = nb.endsWith(unknown);
+    // Both unknown would have compared equal already; neither unknown means
+    // two real serials, which is proof.
+    if (aUnknown == bUnknown) return false;
+    final known = aUnknown ? nb : na;
+    final stem = (aUnknown ? na : nb)
+        .substring(0, (aUnknown ? na : nb).length - unknown.length);
+    return stem.isNotEmpty && known.startsWith('$stem ');
   }
 
   /// Resolves [reference] — a connector name, an EDID descriptor or a display

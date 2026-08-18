@@ -149,8 +149,15 @@ class WorkspaceDaemonCore {
   final Set<int> _movedByHand = <int>{};
 
   /// The workspace this helper is moving right now, so its own `move` event is
-  /// not read as the user's.
+  /// not read as the user's — with a deadline, because a command that never
+  /// reaches sway produces no event to consume the mark, and the next real
+  /// move of that workspace would be swallowed as ours.
   int? _movingOurselves;
+  DateTime? _movingSince;
+
+  /// How long a sent move may still claim the next `move` event. Long enough
+  /// for the round trip, far shorter than anyone reaches for a keybinding.
+  static const Duration _ownMoveWindow = Duration(seconds: 3);
 
   /// A screen appeared or disappeared and the placement is being worked out
   /// again. Until it is, the cached plan describes the previous desk — and
@@ -177,10 +184,13 @@ class WorkspaceDaemonCore {
   /// land a workspace somewhere the plan does NOT put it. A move onto its own
   /// screen is not an override, it is agreement — which also covers the app's
   /// repair chain, running in another process where no memory would reach.
-  bool noteMove(int workspace, String output) {
+  bool noteMove(int workspace, String output, {DateTime? now}) {
+    final at = now ?? DateTime.now();
     if (_movingOurselves == workspace) {
+      final since = _movingSince;
       _movingOurselves = null;
-      return false;
+      _movingSince = null;
+      if (since != null && at.difference(since) <= _ownMoveWindow) return false;
     }
     if (_replanning) return false;
     final want = _plan?.map[workspace];
@@ -268,6 +278,7 @@ class WorkspaceDaemonCore {
     Future<void> send() async {
       sent.add(command);
       _movingOurselves = workspace;
+      _movingSince = at;
       await sway.run(command);
     }
 
@@ -281,6 +292,15 @@ class WorkspaceDaemonCore {
       _corrections.remove(at);
       log('another apply is in flight; leaving it to them');
     }
+  }
+
+  static bool _sameMap(Map<int, String>? a, Map<int, String>? b) {
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (b[e.key] != e.value) return false;
+    }
+    return true;
   }
 
   bool _runaway(DateTime now) {
@@ -334,11 +354,13 @@ class WorkspaceDaemonCore {
       log('no remembered setup matches these screens');
       return;
     }
-    if (_plan?.profile.name != plan.profile.name) {
-      // A different desk. What someone chose to do with a workspace at the
-      // last one says nothing about this one.
-      _movedByHand.clear();
-    }
+    // Keyed on the placement, not on the setup's name. The app can change
+    // where a workspace belongs without renaming anything — and while the
+    // helper still held the old plan, the app's own repair chain moving that
+    // workspace to its NEW screen looked like a decision by the user, after
+    // which the helper stopped placing it. Comparing the map catches that:
+    // the plan it was recorded against no longer exists.
+    if (!_sameMap(_plan?.map, plan.map)) _movedByHand.clear();
     _plan = plan;
 
     // Which half runs is the difference between invisible and disruptive.
