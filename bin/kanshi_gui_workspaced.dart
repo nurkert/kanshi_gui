@@ -242,6 +242,9 @@ class _Daemon {
     _selfCheck = null;
     _settleTimer?.cancel();
     _settleTimer = null;
+    _configTimer?.cancel();
+    _configTimer = null;
+    core.replanPending(false);
     _subscriber?.kill(ProcessSignal.sigterm);
     _subscriber = null;
   }
@@ -267,6 +270,10 @@ class _Daemon {
   }
 
   Timer? _selfCheck;
+
+  /// Debounce for a changed settings or kanshi config file. Deliberately not
+  /// the settle timer — see [_watchTheFiles].
+  Timer? _configTimer;
 
   /// Re-plans when the app changes its mind.
   ///
@@ -303,9 +310,14 @@ class _Daemon {
               name == 'config' ||
               (custom != null && e.path == custom);
           if (!watched) return;
-          _settleTimer?.cancel();
+          // Its OWN timer. Sharing the settle timer with the hotplug path
+          // meant a settings write landing mid-dock cancelled the replan —
+          // and the replan is what clears the flag that holds corrections
+          // back, so it stayed held for the rest of the session and no
+          // workspace was ever put right again.
+          _configTimer?.cancel();
           // A file changed, not a screen. Never move anything that is open.
-          _settleTimer = Timer(
+          _configTimer = Timer(
             const Duration(milliseconds: 400),
             () => unawaited(
                 core.serialised(() => core.apply(ApplyReason.configChanged))),

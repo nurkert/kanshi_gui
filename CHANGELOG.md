@@ -143,6 +143,39 @@
   events each really produces. It could not previously express the bug above;
   now a test reproduces it.
 
+### Fixed (found by review, after the fixes above)
+
+- **The helper could go silent for a whole session.** The file watcher and the
+  hotplug path shared one debounce timer. A settings write landing inside the
+  1.5 s dock settle cancelled the replan — and the replan is what clears the
+  flag holding corrections back, so it stayed held and nothing was ever put
+  right again. Two timers now, and the flag is cleared when a session ends.
+  Reproduced and re-checked against a real sway.
+
+- A move the helper sent that never reached the compositor left its "this one
+  was mine" mark set, and the next genuine move of that workspace was swallowed
+  as ours. The mark now expires after three seconds.
+
+- The "you moved this yourself" memory was keyed on the setup's *name*. The app
+  can change where a workspace belongs without renaming anything, so its own
+  repair chain moving that workspace to its new screen looked like a decision
+  by the user — and the helper stopped placing it. Keyed on the placement now.
+
+- `findBestProfileSuggestion` still scored a connector-name hit as a perfect
+  match and never looked at the recorded EDID, so the room `profileMatchInfo`
+  had just refused could still be offered as the setup to switch to.
+
+- A saved screen whose serial the compositor once reported as `Unknown` was
+  treated as a *different* display once a real serial appeared — both
+  descriptors non-empty, so the connector fallback was refused and the setup
+  was dropped. That case is now a label-strength match: the same display
+  introducing itself properly, ranked below anything that can prove more.
+
+- Deduplicating a screen proposed by several setups kept the first proposer's
+  size, which is what the ordering tie-break reads — so a one-screen fallback
+  could sort ahead of the desk that actually needs the screen. The largest
+  proposer's size wins.
+
 ### Known
 
 - Two remembered setups where one's screens are a subset of the other's **and
@@ -504,6 +537,39 @@
   on the next launch — the annotations are an observation, not your data, and
   the "keep them where I put them" mode records the setup you are on again the
   moment you pick it.
+
+### Fixed (found by review, after the fixes above)
+
+- **The helper could go silent for a whole session.** The file watcher and the
+  hotplug path shared one debounce timer. A settings write landing inside the
+  1.5 s dock settle cancelled the replan — and the replan is what clears the
+  flag holding corrections back, so it stayed held and nothing was ever put
+  right again. Two timers now, and the flag is cleared when a session ends.
+  Reproduced and re-checked against a real sway.
+
+- A move the helper sent that never reached the compositor left its "this one
+  was mine" mark set, and the next genuine move of that workspace was swallowed
+  as ours. The mark now expires after three seconds.
+
+- The "you moved this yourself" memory was keyed on the setup's *name*. The app
+  can change where a workspace belongs without renaming anything, so its own
+  repair chain moving that workspace to its new screen looked like a decision
+  by the user — and the helper stopped placing it. Keyed on the placement now.
+
+- `findBestProfileSuggestion` still scored a connector-name hit as a perfect
+  match and never looked at the recorded EDID, so the room `profileMatchInfo`
+  had just refused could still be offered as the setup to switch to.
+
+- A saved screen whose serial the compositor once reported as `Unknown` was
+  treated as a *different* display once a real serial appeared — both
+  descriptors non-empty, so the connector fallback was refused and the setup
+  was dropped. That case is now a label-strength match: the same display
+  introducing itself properly, ranked below anything that can prove more.
+
+- Deduplicating a screen proposed by several setups kept the first proposer's
+  size, which is what the ordering tie-break reads — so a one-screen fallback
+  could sort ahead of the desk that actually needs the screen. The largest
+  proposer's size wins.
 
 ### Known limitation
 

@@ -198,6 +198,25 @@ void main() {
               'monitor that is not there');
     });
 
+    test('the by-hand list survives a re-apply of the same placement',
+        () async {
+      // Keyed on the placement rather than on the setup's name, and the plan
+      // is re-worked out on every dock and every settings write. If a re-apply
+      // of the SAME answer cleared it, a workspace someone moved would be
+      // dragged back the next time anything touched a config file.
+      await core.apply(ApplyReason.startup);
+      sway.userSwitchedTo(3, 'DP-4');
+      await settle();
+      sway.focused = 3;
+      expect(core.noteMove(3, 'DP-4'), isTrue,
+          reason: 'workspace 3 belongs on the laptop panel, not on DP-4');
+      await core.apply(ApplyReason.configChanged);
+      sway.commands.clear();
+      sway.userSwitchedTo(3, 'DP-4');
+      await settle();
+      expect(sway.commands, isEmpty);
+    });
+
     test('sway discarding its workspace configs is answered', () async {
       // `swaymsg reload` throws our bindings away with everything else. It
       // is not something to recommend — measured, it also wipes every output

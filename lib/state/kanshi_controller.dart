@@ -2877,13 +2877,19 @@ class KanshiController extends ChangeNotifier {
       for (var k = 0; k < currentEnabled.length; k++) {
         if (claimed.contains(k)) continue;
         final cm = currentEnabled[k];
-        double s;
-        if (_matchesOutput(pm.id, cm.id)) {
-          s = 1.0;
-        } else if (_matchesOutput(pm.manufacturer, cm.manufacturer)) {
-          s = 0.7;
-        } else {
-          continue;
+        // Through [OutputMatcher] like every other identity question. This
+        // scored a connector-name hit as a perfect match and never looked at
+        // the recorded EDID, so the room that [profileMatchInfo] had just
+        // refused could still be offered here as the setup to switch to.
+        final double s;
+        switch (OutputMatcher.strength(cm, pm)) {
+          case MatchStrength.descriptor:
+          case MatchStrength.connector:
+            s = 1.0;
+          case MatchStrength.label:
+            s = 0.7;
+          case null:
+            continue;
         }
         if (s > bestS) {
           bestS = s;
