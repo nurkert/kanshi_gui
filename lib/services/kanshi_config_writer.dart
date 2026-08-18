@@ -1,5 +1,6 @@
 import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/workspace_layout.dart';
+import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -114,45 +115,30 @@ class KanshiConfigWriter {
     KanshiWriteOptions options = KanshiWriteOptions.neutral,
   }) {
     final buffer = StringBuffer();
+    // Worked out once, from ALL the setups, and written identically into
+    // every one of them. A `workspace N output X` binding outlives the desk it
+    // was written for — sway keeps the first one it was given and ignores
+    // every later one — so a per-profile answer is a trap the moment you
+    // dock. See [workspaceHomes].
+    final homes = options.injectSwayWorkspaceExec
+        ? workspaceHomes(
+            profiles: profiles,
+            distribution: options.workspaceDistribution,
+            followProfileMap: options.followProfileWorkspaceMap,
+          )
+        : const <int, List<OutputCriteria>>{};
     for (final profile in profiles) {
       if (profile.monitors.isEmpty) continue;
-      _renderProfile(buffer, profile, options);
+      _renderProfile(buffer, profile, options, homes);
     }
     return buffer.toString();
-  }
-
-  /// Restates an observed workspace map in terms of [mons]' own ids.
-  ///
-  /// Returns null when there is nothing to restate, so the caller falls
-  /// straight through to the distribution rule.
-  static Map<int, String>? _rekeyWorkspaceMap(
-    Map<int, String>? learned,
-    List<MonitorTileData> mons,
-  ) {
-    if (learned == null || learned.isEmpty) return null;
-    String? idFor(String target) {
-      for (final m in mons) {
-        if (m.id == target ||
-            m.edidDescriptor == target ||
-            m.manufacturer == target) {
-          return m.id;
-        }
-      }
-      return null;
-    }
-
-    final out = <int, String>{};
-    for (final entry in learned.entries) {
-      final id = idFor(entry.value);
-      if (id != null) out[entry.key] = id;
-    }
-    return out.isEmpty ? null : out;
   }
 
   static void _renderProfile(
     StringBuffer buffer,
     Profile profile,
     KanshiWriteOptions options,
+    Map<int, List<OutputCriteria>> homes,
   ) {
     final referenceMonitors =
         profile.monitors.where((m) => m.enabled).toList();
@@ -190,13 +176,12 @@ class KanshiConfigWriter {
     }
 
     final criteria = chooseOutputCriteria(mons.map((m) => m.id), descriptorOf);
-    // A second, narrower answer for the `exec` lines. The `output` directive
-    // above is read by kanshi itself and must keep the stable description
-    // whatever it contains — that is how a profile is recognised. An `exec`
-    // line goes to a shell, where the same description can be a syntax error.
-    // See [chooseExecCriteria].
-    final execCriteria =
-        chooseExecCriteria(mons.map((m) => m.id), descriptorOf);
+    // The `exec` lines get a second, narrower answer, and it is not computed
+    // here: the `output` directive above is read by kanshi itself and must
+    // keep the stable description whatever it contains, while an `exec` line
+    // goes to a shell where the same description can be a syntax error. That
+    // answer now spans every setup at once — see [workspaceHomes] — so it is
+    // worked out in [render] and handed down.
 
     buffer.writeln("profile '${escapeProfileName(profile.name)}' {");
 
@@ -356,7 +341,7 @@ class KanshiConfigWriter {
       // monitor may be keyed by its EDID descriptor — and an entry whose
       // target does not match a monitor here is dropped as unknown, which
       // would silently discard the very preference the mode exists to keep.
-      final saved = _rekeyWorkspaceMap(profile.workspaceMap, mons);
+      final saved = rekeyWorkspaceMap(profile.workspaceMap, mons);
       if (saved != null && saved.isNotEmpty) {
         // Written whatever mode is active, because the annotation is STORAGE
         // and the mode is POLICY. It used to be written only while a map was
@@ -373,7 +358,6 @@ class KanshiConfigWriter {
           buffer.writeln("    # kanshi_gui:ws '$entry'='${saved[entry]}'");
         }
       }
-      final learned = options.followProfileWorkspaceMap ? saved : null;
       // One `exec` per binding, and criteria chosen for a shell rather than
       // for kanshi's own parser. Both of those are corrections.
       //
@@ -391,14 +375,13 @@ class KanshiConfigWriter {
       // app and the helper service already do it properly over the IPC socket
       // where no shell is involved. What belongs in the file is the quiet half
       // — where each workspace lives — and that is what survives a cold boot.
-      final execs = buildWorkspaceConfigExecs(
-        resolveWorkspaceMap(
-          ranked,
-          distribution: options.workspaceDistribution,
-          learned: learned,
-        ),
-        criteria: execCriteria,
-      );
+      //
+      // And every binding names every screen the workspace could live on
+      // rather than the one this setup uses, because sway keeps only the
+      // first binding it is given in a session: written per-setup, docking a
+      // laptop left all nine workspaces pinned to the built-in panel for the
+      // rest of the session, whatever the file said. See [workspaceHomes].
+      final execs = buildWorkspaceConfigExecs(homes);
       for (final line in execs) {
         buffer.writeln('    exec $line');
       }
