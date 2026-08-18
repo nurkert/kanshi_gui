@@ -308,8 +308,16 @@ Map<int, List<OutputCriteria>> workspaceHomes({
       // back to connector names for both — and a connector is a different
       // address at a different dock. Collapsing those onto one screen dropped
       // the spelling that was the only one that resolved at the other desk.
-      if (!list.any((h) => h.criteria == crit)) {
+      final seen = list.indexWhere((h) => h.criteria == crit);
+      if (seen == -1) {
         list.add(_WorkspaceHome(identity, crit, i, mons.length));
+      } else if (mons.length > list[seen].deskSize) {
+        // The same screen proposed again by a bigger setup. Keep the bigger
+        // number: the tie-break below reads it, and the first proposal's size
+        // could otherwise sort a one-screen fallback ahead of the desk that
+        // actually needs the screen.
+        list[seen] = _WorkspaceHome(
+            list[seen].identity, crit, list[seen].order, mons.length);
       }
     }
   }

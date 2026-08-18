@@ -108,6 +108,42 @@ void main() {
           MatchStrength.connector);
     });
 
+    test('a serial that appears later is the same screen, weakly', () {
+      // A descriptor is `make model serial`, and the composer writes the word
+      // Unknown where the display reported none. Two that agree on make and
+      // model and differ only in that a serial turned up — firmware update,
+      // different cable, a compositor reading EDID more thoroughly — are one
+      // display introducing itself properly, not two displays. Refusing
+      // outright would drop the setup it belongs to.
+      final wasUnknown = _screen(
+          connector: 'DP-4', descriptor: 'Samsung Electric Company LS27D60xU Unknown');
+      expect(OutputMatcher.strength(_hereLeft, wasUnknown), MatchStrength.label,
+          reason: 'without the serial it is exactly as strong as the label');
+    });
+
+    test('but two real serials are still proof of two screens', () {
+      expect(OutputMatcher.strength(_hereLeft, _savedLeft), isNull);
+    });
+
+    test('and a different model with an unknown serial is still not it', () {
+      final other = _screen(
+          connector: 'DP-4', descriptor: 'Samsung Electric Company LS24X999 Unknown');
+      expect(OutputMatcher.strength(_hereLeft, other), isNull);
+    });
+
+    test('the stronger claim still wins when both are on offer', () {
+      // The panel that knows its serial must not be handed to the entry that
+      // only half-matches, when the entry it really belongs to is right there.
+      final wasUnknown = _screen(
+          connector: 'DP-9',
+          descriptor: 'Samsung Electric Company LS27D60xU Unknown');
+      final exact = _screen(
+          connector: 'DP-9',
+          descriptor: 'Samsung Electric Company LS27D60xU HK2XA01318');
+      final pairs = OutputMatcher.pair([wasUnknown, exact], [_hereLeft]);
+      expect(pairs, {1: 0});
+    });
+
     test('a live output with no EDID at all still matches by port', () {
       // An adapter or a KVM that strips EDID. The saved side knows who it is;
       // the live side offers nothing, so the port is all there is.

@@ -416,6 +416,48 @@ void main() {
       }
     });
 
+    test('a move the app made after a plan change is not read as the user\'s',
+        () async {
+      // The app can change where a workspace belongs without renaming the
+      // setup. While the helper still held the old plan, the app's own repair
+      // chain moving that workspace to its NEW screen looked like a decision
+      // by the user — after which the helper stopped placing it. The by-hand
+      // memory is keyed on the placement, so a changed map clears it.
+      // Starts where it belongs, so no correction of our own gets in the way.
+      sway.userSwitchedTo(2, 'DP-5');
+      await settle();
+      expect(sway.commands, isEmpty);
+      sway.focused = 2;
+      await sway.run("move workspace to output 'Samsung LS27D60xU HK2XA01318'");
+      await settle();
+      // The app has since changed the pattern, so where workspace 2 belongs
+      // is a different answer than the one the move was recorded against.
+      (core.env as FakeEnvironment).mode = WorkspaceManagementMode.grouped;
+      await core.apply(ApplyReason.configChanged);
+      (core.env as FakeEnvironment).mode = WorkspaceManagementMode.interleaved;
+      await core.apply(ApplyReason.configChanged);
+      sway.commands.clear();
+      sway.userSwitchedTo(2, 'eDP-1');
+      await settle();
+      expect(sway.commands, hasLength(1),
+          reason: 'a plan change retires what was recorded against the old one');
+    });
+
+    test('a move we sent but that never landed does not swallow the next one',
+        () async {
+      // `_movingOurselves` marks the workspace so our own `move` event is not
+      // read as the user's. If the command never reaches sway there is no
+      // event to consume the mark, and without a deadline the next real user
+      // move of that workspace would be swallowed as ours.
+      sway.userSwitchedTo(5, 'eDP-1');
+      await settle();
+      expect(sway.commands, hasLength(1), reason: 'we sent a correction');
+      // Three seconds later, a move nobody attributed to us.
+      final late = DateTime.now().add(const Duration(seconds: 5));
+      expect(core.noteMove(5, 'eDP-1', now: late), isTrue,
+          reason: 'past the window, so it is the user speaking');
+    });
+
     test('placement switched off means the correction stops too', () async {
       (core.env as FakeEnvironment).mode = WorkspaceManagementMode.off;
       await core.apply(ApplyReason.configChanged);
