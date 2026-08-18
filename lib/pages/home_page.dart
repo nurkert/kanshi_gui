@@ -598,6 +598,10 @@ class _HomePageState extends State<HomePage> {
                           c.activeMonitors,
                           Size(constraints.maxWidth, constraints.maxHeight),
                           pinnedBounds: c.pinnedLayoutBounds,
+                          // The dashed ghosts are drawn with this projection,
+                          // so they have to be inside what it fits — see
+                          // [LayoutMath.computeDisplay].
+                          alsoVisible: c.driftedLiveOutputs,
                         );
                         return Stack(
                           children: [

@@ -122,7 +122,38 @@ class ConfigService {
     try {
       final file = File(configPath);
       if (!await file.exists()) return false;
-      return (await file.readAsString()).contains('exec swaymsg "');
+      final raw = await file.readAsString();
+      // The `;`-joined chain: kanshi hands it to /bin/sh, which read the
+      // semicolons as command separators and looked the rest up as programs.
+      if (raw.contains('exec swaymsg "')) return true;
+
+      // And the shape after that one: a binding that names the screen THIS
+      // setup uses. sway keeps the first binding a session is given and
+      // ignores every later one, so a per-setup answer stops being true the
+      // moment a second setup activates — dock a laptop and all nine
+      // workspaces stay on the panel for the rest of the session, whatever
+      // the file says. See [workspaceHomes].
+      //
+      // Recognised by the setups disagreeing with each other rather than by
+      // counting targets: a workspace legitimately has one target when every
+      // setup puts it on the same screen, and a config that is already right
+      // must not be rewritten on every launch.
+      final blocks = <List<String>>[];
+      List<String>? current;
+      for (final line in raw.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('profile ')) {
+          current = <String>[];
+          blocks.add(current);
+        } else if (current != null &&
+            trimmed.startsWith('exec swaymsg workspace ')) {
+          current.add(trimmed);
+        }
+      }
+      final withBindings = blocks.where((b) => b.isNotEmpty).toList();
+      if (withBindings.length < 2) return false;
+      return withBindings
+          .any((b) => b.join('\n') != withBindings.first.join('\n'));
     } catch (_) {
       return false;
     }

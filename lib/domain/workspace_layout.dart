@@ -149,8 +149,16 @@ String? buildWorkspaceChain(
   Map<int, String> map, {
   Map<String, OutputCriteria> criteria = const {},
   int? returnFocusTo,
+  Map<int, List<OutputCriteria>>? homes,
 }) {
-  final declarations = buildWorkspaceDeclarations(map, criteria: criteria);
+  if (map.isEmpty) return null;
+  if (!_allTargetsSafe(map, criteria)) return null;
+  // The declaration half states every screen the workspace could belong to,
+  // because it is the half that outlives this desk; the move half names the
+  // one screen that is plugged in right now, because moving somewhere that
+  // is not there is not a thing sway can do.
+  final declarations =
+      buildWorkspaceDeclarations(homes ?? homesFromMap(map, criteria: criteria));
   if (declarations == null) return null;
   final numbers = map.keys.toList()..sort();
   final parts = <String>[declarations];
@@ -169,7 +177,7 @@ String? buildWorkspaceChain(
   return parts.join('; ');
 }
 
-/// Phase 1 on its own: the `workspace N output X` bindings, with no focus
+/// Phase 1 on its own: the `workspace N output X …` bindings, with no focus
 /// dance and no moves.
 ///
 /// This half is invisible — it tells sway where each workspace belongs and
@@ -178,30 +186,18 @@ String? buildWorkspaceChain(
 /// cannot detect: sway reports the workspaces it HAS, so a workspace with no
 /// home and no existence looks identical to one that is simply closed.
 ///
-/// It FILLS a missing binding; it does not OVERRIDE an existing one. `sway`'s
-/// `cmd_workspace` appends to `wsc->outputs` and never clears it, and
-/// `workspace_get_initial_output` walks that list and takes the first output
-/// that exists — so the earliest declaration in a sway session wins for the
-/// whole session. Re-declaring a workspace whose home was already set to
-/// something else is a no-op until sway itself is reloaded (`swaymsg reload`
-/// discards the workspace configs; `kanshictl reload` does not). Workspaces
-/// that never had a home — the ones that were opening under the cursor — are
-/// unaffected by that, which is why this is worth running anyway.
-String? buildWorkspaceDeclarations(
-  Map<int, String> map, {
-  Map<String, OutputCriteria> criteria = const {},
-}) {
-  if (map.isEmpty) return null;
-  if (!_allTargetsSafe(map, criteria)) return null;
-  final numbers = map.keys.toList()..sort();
-  return [
-    // NO `number` keyword — see [buildWorkspaceChain] for why.
-    for (final ws in numbers)
-      'workspace $ws output ${_execCriteria(map[ws]!, criteria)}',
-  ].join('; ');
+/// Each workspace gets its whole preference list, not one screen, and that is
+/// the fix for the bug that made this feature look broken on every docked
+/// laptop. See [buildWorkspaceConfigExecs] for the measurements.
+String? buildWorkspaceDeclarations(Map<int, List<OutputCriteria>> homes) {
+  // Straight to sway's IPC socket, where no shell is involved and sway's own
+  // parser strips one layer of quoting. See [OutputCriteria.swayExecForm].
+  final lines = _declarationLines(homes, (c) => c.swayExecForm);
+  if (lines.isEmpty) return null;
+  return lines.join('; ');
 }
 
-/// The `workspace N output X` bindings as ONE COMMAND PER LINE, for the
+/// The `workspace N output X …` bindings as ONE COMMAND PER LINE, for the
 /// kanshi config.
 ///
 /// Not a chain, and that is the whole point. kanshi hands each `exec` line to
@@ -215,20 +211,82 @@ String? buildWorkspaceDeclarations(
 /// independent bindings does not matter, so kanshi's warning that exec
 /// commands "may not be preserved" in order costs nothing here.
 ///
-/// Returns an empty list when any target cannot be expressed safely; see
-/// [isShellSafeCriteria].
-List<String> buildWorkspaceConfigExecs(
+/// Returns an empty list when a workspace has no safely expressible target;
+/// see [isShellSafeCriteria] and [_declarationLines].
+List<String> buildWorkspaceConfigExecs(Map<int, List<OutputCriteria>> homes) =>
+    [
+      // scfg, then kanshi's re-escaping, then /bin/sh, then sway: three layers
+      // strip one quote each. See [OutputCriteria.kanshiExecForm].
+      for (final line in _declarationLines(homes, (c) => c.kanshiExecForm))
+        'swaymsg $line',
+    ];
+
+/// One `workspace N output A B C` per workspace, shared by the config writer
+/// and the IPC path so the two cannot spell a binding differently.
+///
+/// Several outputs per workspace, and the reason is the whole bug:
+///
+/// sway's `cmd_workspace` APPENDS to a workspace's output list and never
+/// clears it, and `workspace_get_initial_output` walks that list and takes
+/// the first entry that resolves to a connected screen. Measured against
+/// sway 1.12: declare `workspace 5 output A`, then `workspace 5 output B`,
+/// then create workspace 5 — it is born on **A**. The first declaration in a
+/// sway session wins for the rest of that session.
+///
+/// A laptop is therefore broken by design under one-target declarations. Boot
+/// undocked and kanshi activates the laptop-only setup, which binds all nine
+/// workspaces to the built-in panel. Dock, kanshi switches setups and binds
+/// them to the external screens — appended behind the panel, which is still
+/// connected, so it still wins. Every workspace opened from then on is born
+/// on the laptop screen, forever, whatever the config says. Nothing in the
+/// file is wrong; sway simply never looks at it again.
+///
+/// The only reset sway offers is `swaymsg reload`, and that is not usable:
+/// measured on the same build, it also throws away every output position and
+/// scale the compositor was given over IPC and re-arranges the desk from
+/// scratch. Curing a workspace binding by scrambling the monitors is not a
+/// cure.
+///
+/// So the binding is stated as a *preference list* instead — every screen
+/// this workspace could belong to across all remembered setups, most specific
+/// desk first. sway takes the first one that is plugged in. Because the list
+/// does not depend on what is connected, every re-declaration appends an
+/// identical copy, and an identical copy cannot shadow anything: stacking
+/// becomes a no-op instead of a trap. Verified against sway 1.12 —
+/// `workspace 15 output <absent> <present>` declared while the first screen
+/// was unplugged still puts workspace 15 on it once it appears.
+///
+/// A workspace whose list contains anything a shell cannot be trusted with is
+/// dropped whole rather than partially: emitting only the safe half would
+/// silently promote a fallback to first choice, and a workspace on the wrong
+/// screen is a worse answer than a workspace the rule stays quiet about.
+List<String> _declarationLines(
+  Map<int, List<OutputCriteria>> homes,
+  String Function(OutputCriteria) render,
+) {
+  if (homes.isEmpty) return const [];
+  final numbers = homes.keys.toList()..sort();
+  final lines = <String>[];
+  for (final ws in numbers) {
+    final targets = homes[ws]!;
+    if (targets.isEmpty) continue;
+    if (!targets.every((c) => c.isShellSafe)) continue;
+    // NO `number` keyword — see [buildWorkspaceChain] for why.
+    lines.add('workspace $ws output ${targets.map(render).join(' ')}');
+  }
+  return lines;
+}
+
+/// Lifts a single-target `workspace → output id` map into the preference-list
+/// shape, for callers that genuinely mean exactly one screen.
+Map<int, List<OutputCriteria>> homesFromMap(
   Map<int, String> map, {
   Map<String, OutputCriteria> criteria = const {},
-}) {
-  if (map.isEmpty || !_allTargetsSafe(map, criteria)) return const [];
-  final numbers = map.keys.toList()..sort();
-  return [
-    for (final ws in numbers)
-      'swaymsg workspace $ws output '
-          '${(criteria[map[ws]!] ?? OutputCriteria.connector(map[ws]!)).kanshiExecForm}',
-  ];
-}
+}) =>
+    {
+      for (final e in map.entries)
+        e.key: [criteria[e.value] ?? OutputCriteria.connector(e.value)],
+    };
 
 /// Fails the whole chain closed if any target could not be safely quoted.
 ///

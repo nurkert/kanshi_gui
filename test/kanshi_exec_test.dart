@@ -107,6 +107,65 @@ void main() {
     });
   });
 
+  group('a binding that names several screens', () {
+    // The fix for the docked-laptop bug puts every screen a workspace could
+    // live on into one `workspace N output A B` line, so sway can pick the
+    // one that is plugged in. That is another argument crossing scfg, kanshi's
+    // re-escaping and /bin/sh, and every previous quoting assumption in this
+    // project was wrong — so it is measured rather than reasoned about.
+    test('all of them arrive, in order, as separate arguments', () async {
+      final config = KanshiConfigWriter.render(
+        [
+          Profile(name: 'Docked', monitors: [
+            _mon('DP-4', _samsungLeft),
+            _mon('DP-5', _samsungRight, x: 2560),
+            _mon('eDP-1', _laptop, x: 5120),
+          ]),
+          Profile(name: 'Undocked', monitors: [_mon('eDP-1', _laptop)]),
+        ],
+        options: KanshiWriteOptions.swayDefaults
+            .copyWith(injectSwayWorkspaceExec: true),
+      );
+      final seen = await swaySees(config);
+      // Nine per setup, twice. The double quotes are sway's to strip, and
+      // they are what kanshi(5) documents; what matters here is that both
+      // targets survived as SEPARATE arguments with their spaces intact.
+      expect(seen, hasLength(18));
+      expect(seen.first, 'workspace 1 output "$_samsungLeft" "eDP-1"');
+      expect(seen[1], 'workspace 2 output "$_samsungRight" "eDP-1"');
+      expect(seen[2], 'workspace 3 output "eDP-1"');
+      expect(seen.skip(9).toList(), seen.take(9).toList(),
+          reason: 'both setups declare the same thing, which is the point');
+      // The laptop is addressed by connector, not by EDID, and that is the
+      // shell gate doing its job rather than an oversight: its description is
+      // `InfoVision Optoelectronics (Kunshan) Co.,Ltd China 0x057D Unknown`
+      // and the brackets in it used to abort the whole line before anything
+      // ran. A connector is a weaker address — it can be handed to a
+      // different screen after a re-dock — so a workspace that lands wrong
+      // because of it is put right by the helper the moment the user goes
+      // there. See [WorkspaceDaemonCore.correct].
+      expect(seen.first, isNot(contains('(')));
+    });
+
+    test('a name with a quote in it still cannot break the line', () async {
+      final config = KanshiConfigWriter.render(
+        [
+          Profile(name: 'Odd', monitors: [
+            _mon('DP-1', 'Acme "Pro" 27'),
+            _mon('DP-2', _laptop, x: 2560),
+          ]),
+        ],
+        options: KanshiWriteOptions.swayDefaults
+            .copyWith(injectSwayWorkspaceExec: true),
+      );
+      final seen = await swaySees(config);
+      expect(seen, hasLength(9));
+      expect(seen.first, 'workspace 1 output "DP-1"',
+          reason: 'a quote in an EDID means the connector, not a broken line');
+      expect(seen.every((c) => !c.contains('Pro')), isTrue);
+    });
+  });
+
   group('what the writer produces now', () {
     test('every workspace reaches sway, on the desk that broke it', () async {
       final commands = await swaySees(render([
@@ -311,8 +370,9 @@ void main() {
     test('an unsafe target produces no exec lines at all', () {
       // Fail closed: the user loses their workspace placement, not their
       // session.
-      expect(buildWorkspaceConfigExecs({1: r'DP-1$(id)'}), isEmpty);
-      expect(buildWorkspaceConfigExecs({1: 'DP-1'}), hasLength(1));
+      expect(buildWorkspaceConfigExecs(homesFromMap({1: r'DP-1$(id)'})),
+          isEmpty);
+      expect(buildWorkspaceConfigExecs(homesFromMap({1: 'DP-1'})), hasLength(1));
     });
 
     test('a hash in a display name does not make the screen disappear', () {

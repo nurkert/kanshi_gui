@@ -323,8 +323,11 @@ void main() {
     });
 
     test('nor is any other workspace event', () {
-      for (final change in ['init', 'focus', 'empty', 'move', 'rename',
-        'urgent']) {
+      // `focus` is the one exception and it is handled separately below: it
+      // reports where the user just went, and the helper decides whether that
+      // disagrees with the plan. Everything here is either the user's doing or
+      // the helper's own, and neither is the helper's to answer.
+      for (final change in ['init', 'empty', 'move', 'rename', 'urgent']) {
         expect(
           classifySwayEvent({
             'change': change,
@@ -332,6 +335,40 @@ void main() {
           }).action,
           SwayEventAction.none,
           reason: '$change must not make the helper issue a command',
+        );
+      }
+    });
+
+    test('focus reports where the user went, and nothing more', () {
+      // The verdict is not a command. It says "the user is on workspace 3 and
+      // it is on DP-4"; whether that is wrong is the core's question, and it
+      // answers it from a cached plan without touching disk or sway. Reacting
+      // to `focus` rather than to `init` is what keeps this safe — a
+      // correction emits `move`, `empty` and an `init` for the workspace sway
+      // auto-creates on the screen just vacated, and NOT a `focus`, so it
+      // cannot answer itself. Measured on sway 1.12.
+      final v = classifySwayEvent({
+        'change': 'focus',
+        'current': {'num': 3, 'name': '3', 'output': 'DP-4'},
+      });
+      expect(v.action, SwayEventAction.correct);
+      expect(v.workspace, 3);
+      expect(v.output, 'DP-4');
+    });
+
+    test('a focus with nothing usable in it is ignored', () {
+      for (final current in <Object?>[
+        null,
+        'nonsense',
+        {'num': -1, 'output': 'DP-4'},
+        {'num': 3},
+        {'num': 3, 'output': ''},
+        {'num': '3', 'output': 'DP-4'},
+      ]) {
+        expect(
+          classifySwayEvent({'change': 'focus', 'current': current}).action,
+          SwayEventAction.none,
+          reason: 'a scratchpad or a future sway must mean "do nothing"',
         );
       }
     });

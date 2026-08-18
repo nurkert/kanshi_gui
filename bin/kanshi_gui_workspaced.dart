@@ -38,6 +38,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:kanshi_gui/domain/output_identity.dart';
+import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
@@ -358,15 +359,29 @@ class _Daemon {
       return;
     }
     _eventStream.add(event);
-    final reason = core.reasonFor(event);
-    if (reason == null) return;
-    // Docking is a salvo, not an event. Coalesce it, and let kanshi finish
-    // switching profiles before asking what the desk looks like.
-    _settleTimer?.cancel();
-    _settleTimer = Timer(
-      _settle,
-      () => unawaited(core.serialised(() => core.apply(reason))),
-    );
+    final verdict = classifySwayEvent(event);
+    switch (verdict.action) {
+      case SwayEventAction.none:
+        return;
+      case SwayEventAction.correct:
+        core.noteFocus(verdict.workspace!);
+        // Not coalesced and not delayed. The user is looking at this
+        // workspace right now; a second and a half later they have already
+        // started working on the wrong screen.
+        unawaited(core.serialised(
+            () => core.correct(verdict.workspace!, verdict.output!)));
+        return;
+      case SwayEventAction.replan:
+        // Docking is a salvo, not an event. Coalesce it, and let kanshi
+        // finish switching profiles before asking what the desk looks like.
+        _settleTimer?.cancel();
+        _settleTimer = Timer(
+          _settle,
+          () => unawaited(
+              core.serialised(() => core.apply(ApplyReason.outputsChanged))),
+        );
+        return;
+    }
   }
 
   // ── sway ──────────────────────────────────────────────────────────────

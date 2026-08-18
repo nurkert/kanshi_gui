@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:kanshi_gui/domain/output_matcher.dart';
+import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
@@ -661,6 +662,15 @@ class KanshiController extends ChangeNotifier {
       learnedMap: _followsWorkspaceMap
           ? _profiles[activeIdx].workspaceMap
           : null,
+      // Every setup's opinion, not just this one's — the same list the config
+      // file carries, so the app and the file cannot bind a workspace to two
+      // different screens. See [workspaceHomes].
+      homes: workspaceHomes(
+        profiles: _profiles,
+        distribution: config.writeOptions.workspaceDistribution,
+        followProfileMap: _followsWorkspaceMap,
+        maxWorkspaces: WorkspacePlacement.maxWorkspaces,
+      ),
       force: force,
       isCancelled: () => _isDisposed,
     );
@@ -2621,6 +2631,10 @@ class KanshiController extends ChangeNotifier {
       }
       await refreshConnectedMonitors();
       await _loadConfig();
+      // Same reason as in [reloadOnly]: re-reading the file must never leave
+      // a setup on the canvas that does not describe the screens in front of
+      // the user.
+      await ensureCurrentSetupMatches(persist: false);
       _hasUnappliedEdits = false;
 
       // Arm the auto-revert safety net (opt-in, live backends only). If the
@@ -2643,6 +2657,7 @@ class KanshiController extends ChangeNotifier {
               await monitors.restartCompositorProfileApply();
               await _loadConfig();
               await refreshConnectedMonitors();
+              await ensureCurrentSetupMatches(persist: false);
             } catch (e) {
               debugPrint('layout auto-revert failed: $e');
             }
@@ -2665,6 +2680,14 @@ class KanshiController extends ChangeNotifier {
     try {
       await refreshConnectedMonitors();
       await _loadConfig();
+      // Re-reading the file drops the in-memory capture of an unrecognised
+      // desk, and [_loadConfig] then falls back to whatever setup happens to
+      // be first in the config. So a refresh at a desk nothing describes put
+      // someone else's arrangement on the canvas — three tiles for screens
+      // that are not plugged in, and a dashed ghost for the one that is,
+      // drawn wherever it really was. Capture what is actually there instead,
+      // exactly as launching does.
+      await ensureCurrentSetupMatches(persist: false);
       return const OpResult.ok('Outputs and profiles refreshed.');
     } catch (e) {
       return OpResult.err('Reload failed: $e');

@@ -157,6 +157,82 @@ void main() {
       expect(((left + right) / 2), closeTo(400, 1e-3));
     });
 
+    test('a drifted screen is fitted with the tile it belongs to', () {
+      // Reported from a new desk: "weird yellow dashed lines, and the monitors
+      // are not centred in the GUI". The dashes are the drift ghosts — where a
+      // screen actually is, when that disagrees with the setup — and they are
+      // painted with THIS projection but were not part of what it fitted. A
+      // setup describing a desk at x=0 while sway had the screens at x=10769
+      // put every ghost thousands of units past the right edge: dashes
+      // trailing off the canvas, tiles shoved to one side of it.
+      final tile = _mon(id: 'A', x: 0, y: 0);
+      final ghost = _mon(id: 'A', x: 10769, y: 1510);
+      final l = LayoutMath.computeDisplay(
+        [tile],
+        const Size(800, 600),
+        alsoVisible: [ghost],
+      );
+      final gx = l.offsetX + (ghost.x - l.originX) * l.scaleFactor;
+      final gy = l.offsetY + (ghost.y - l.originY) * l.scaleFactor;
+      final gw = ghost.width * l.scaleFactor;
+      expect(gx, greaterThanOrEqualTo(0));
+      expect(gx + gw, lessThanOrEqualTo(800));
+      expect(gy, greaterThanOrEqualTo(0));
+      // And the pair is centred, which is the half the user could see.
+      final tileLeft = l.displayMonitors.single.x;
+      expect((tileLeft + gx + gw) / 2, closeTo(400, 1e-3));
+    });
+
+    test('with nothing drifted the fit is exactly what it always was', () {
+      final a = _mon(id: 'A', x: 0, y: 0);
+      final b = _mon(id: 'B', x: 1920, y: 0);
+      final was = LayoutMath.computeDisplay([a, b], const Size(800, 600));
+      final now = LayoutMath.computeDisplay([a, b], const Size(800, 600),
+          alsoVisible: const []);
+      expect(now.scaleFactor, was.scaleFactor);
+      expect(now.offsetX, was.offsetX);
+      expect(now.originX, was.originX);
+    });
+
+    test('grabbing a tile does not re-project the canvas under it', () {
+      // The pin exists so the layout does not rescale under the cursor. It
+      // pinned the tile cluster only, so on a drifted layout the ghosts were
+      // in the idle fit and out of the dragging one: the instant the pointer
+      // went down the whole canvas changed scale and the dashes left it.
+      const viewport = Size(1000, 700);
+      final tile = _mon(id: 'A', x: 0, y: 0);
+      final ghost = _mon(id: 'A', x: 10769, y: 1510);
+      final idle =
+          LayoutMath.computeDisplay([tile], viewport, alsoVisible: [ghost]);
+      final dragging = LayoutMath.computeDisplay(
+        [tile],
+        viewport,
+        pinnedBounds: LayoutMath.boundingBox([tile]),
+        alsoVisible: [ghost],
+      );
+      expect(dragging.scaleFactor, closeTo(idle.scaleFactor, 1e-9));
+      expect(dragging.displayMonitors.single.width,
+          closeTo(idle.displayMonitors.single.width, 1e-9));
+    });
+
+    test('a scale of 0 cannot blank the canvas through the pinned path', () {
+      // `scale 0` in a hand-edited config makes width/scale infinite.
+      // computeDisplay has guarded that since 2.0.0; boundingBox — which is
+      // what a drag pins to — divided anyway, so the offsets came out
+      // -Infinity and every tile was drawn at -Infinity.
+      final bad = _mon(id: 'A', x: 0, scale: 0.0);
+      final good = _mon(id: 'B', x: 1920);
+      final box = LayoutMath.boundingBox([bad, good]);
+      expect(box.right.isFinite, isTrue);
+      expect(box.bottom.isFinite, isTrue);
+      final l = LayoutMath.computeDisplay(
+          [bad, good], const Size(1000, 700), pinnedBounds: box);
+      for (final m in l.displayMonitors) {
+        expect(m.x.isFinite, isTrue, reason: '${m.id} was drawn nowhere');
+        expect(m.y.isFinite, isTrue, reason: '${m.id} was drawn nowhere');
+      }
+    });
+
     test('never up-scales above 1.0', () {
       final a = _mon(id: 'A', x: 0, y: 0, w: 100, h: 100);
       final l = LayoutMath.computeDisplay([a], const Size(4000, 4000));

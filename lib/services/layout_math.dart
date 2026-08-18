@@ -400,6 +400,7 @@ class LayoutMath {
     List<MonitorTileData> mons,
     Size viewport, {
     Rect? pinnedBounds,
+    List<MonitorTileData> alsoVisible = const [],
   }) {
     if (mons.isEmpty) return DisplayLayout.empty;
 
@@ -433,10 +434,21 @@ class LayoutMath {
     final double maxX;
     final double maxY;
     if (pinnedBounds != null) {
-      minX = pinnedBounds.left;
-      minY = pinnedBounds.top;
-      maxX = pinnedBounds.right;
-      maxY = pinnedBounds.bottom;
+      // The pin freezes the fit against the dragged tile, not against the
+      // ghosts — they do not move while a drag is in progress, and leaving
+      // them out made grabbing a tile re-project the whole canvas. Measured
+      // on a layout drifted by 10769 units: the tile jumped from 121px wide
+      // to 800px wide and the dashes left the canvas the instant the pointer
+      // went down. Which is also what "it fixed itself after a lot of
+      // dragging" was describing from the other side.
+      minX = alsoVisible.map((m) => m.x).fold(pinnedBounds.left, min);
+      minY = alsoVisible.map((m) => m.y).fold(pinnedBounds.top, min);
+      maxX = alsoVisible
+          .map((m) => m.x + _spanX(m))
+          .fold(pinnedBounds.right, max);
+      maxY = alsoVisible
+          .map((m) => m.y + _spanY(m))
+          .fold(pinnedBounds.bottom, max);
     } else {
       // Fit to EVERY tile that will be drawn, parked ones included.
       //
@@ -449,10 +461,21 @@ class LayoutMath {
       // screen off pushed it off the canvas entirely, taking the "Enable
       // display" menu with it. A screen you cannot see is not a smaller
       // problem than a screen that is drawn slightly smaller.
-      minX = laidOut.map((m) => m.x).reduce(min);
-      minY = laidOut.map((m) => m.y).reduce(min);
-      maxX = laidOut.map((m) => m.x + _spanX(m)).reduce(max);
-      maxY = laidOut.map((m) => m.y + _spanY(m)).reduce(max);
+      //
+      // [alsoVisible] is the same argument one step further: the canvas also
+      // paints a dashed ghost for every screen that is not where the setup
+      // says it should be, using this projection — and those were left out of
+      // it. A setup describing a desk at x=0 while the screens are actually at
+      // x=10769 put the ghosts nine thousand units past the right edge, so
+      // what the user saw was a canvas of tiles pushed off-centre with yellow
+      // dashes sliding off the side of it. The ghost is only meaningful
+      // NEXT TO the tile it belongs to; fitting to both is what makes "here
+      // is where it should be, there is where it went" readable.
+      final fitted = [...laidOut, ...alsoVisible];
+      minX = fitted.map((m) => m.x).reduce(min);
+      minY = fitted.map((m) => m.y).reduce(min);
+      maxX = fitted.map((m) => m.x + _spanX(m)).reduce(max);
+      maxY = fitted.map((m) => m.y + _spanY(m)).reduce(max);
     }
 
     final boundingWidth = maxX - minX;
@@ -568,8 +591,14 @@ class LayoutMath {
     if (list.isEmpty) return Rect.zero;
     final minX = list.map((m) => m.x).reduce(min);
     final minY = list.map((m) => m.y).reduce(min);
-    final maxX = list.map((m) => m.x + m.width / m.scale).reduce(max);
-    final maxY = list.map((m) => m.y + m.height / m.scale).reduce(max);
+    // Through [_spanX]/[_spanY], not a bare division. A `scale 0` in a
+    // hand-edited config makes the division infinite, and this box is what a
+    // drag pins the canvas to — so the offsets came out -Infinity and every
+    // tile was drawn at -Infinity. A blank canvas, from one typo in a file
+    // the app does not own, and only while the pointer was down.
+    // [computeDisplay] has guarded this since 2.0.0; this path did not.
+    final maxX = list.map((m) => m.x + _spanX(m)).reduce(max);
+    final maxY = list.map((m) => m.y + _spanY(m)).reduce(max);
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 

@@ -21,21 +21,29 @@ class WorkspacePlan {
   /// How each of those connectors should be addressed in a sway command.
   final Map<String, OutputCriteria> criteria;
 
+  /// Every screen each workspace could be born on, most-preferred first,
+  /// across all remembered setups. See [workspaceHomes] for why a binding
+  /// must not name only the screen that happens to be plugged in.
+  final Map<int, List<OutputCriteria>> homes;
+
   const WorkspacePlan({
     required this.profile,
     required this.map,
     required this.criteria,
+    this.homes = const {},
   });
 
   /// Declarations plus the focus-and-move pass: relocates workspaces that
   /// already exist. Visible, so it is for moments where something changed.
-  String? get chain => buildWorkspaceChain(map, criteria: criteria);
+  String? get chain =>
+      buildWorkspaceChain(map, criteria: criteria, homes: _homes);
 
-  /// The `workspace N output X` half alone. Invisible, and the half that
+  /// The `workspace N output X …` half alone. Invisible, and the half that
   /// decides where a workspace that does not exist yet will be born.
-  String? get declarations =>
-      buildWorkspaceDeclarations(map, criteria: criteria);
+  String? get declarations => buildWorkspaceDeclarations(_homes);
 
+  Map<int, List<OutputCriteria>> get _homes =>
+      homes.isEmpty ? homesFromMap(map, criteria: criteria) : homes;
 }
 
 /// What the helper should do about one sway IPC event.
@@ -46,13 +54,23 @@ enum SwayEventAction {
   /// Work the placement out again from scratch: the screens changed, or sway
   /// threw its workspace configs away.
   replan,
+
+  /// The user just switched to a workspace and it is on the wrong screen.
+  /// Move that one workspace, and nothing else.
+  correct,
 }
 
 /// A decision about one event.
 class SwayEventVerdict {
   final SwayEventAction action;
 
-  const SwayEventVerdict(this.action);
+  /// For [SwayEventAction.correct]: the workspace the user is looking at.
+  final int? workspace;
+
+  /// For [SwayEventAction.correct]: the screen it is on right now.
+  final String? output;
+
+  const SwayEventVerdict(this.action, {this.workspace, this.output});
 
   static const none = SwayEventVerdict(SwayEventAction.none);
 }
@@ -112,11 +130,228 @@ SwayEventVerdict classifySwayEvent(Map<String, dynamic> event) {
     return const SwayEventVerdict(SwayEventAction.replan);
   }
 
+  // The one workspace event worth answering, and the narrowest possible
+  // answer to it: the user switched to a workspace and it is somewhere the
+  // setup does not put it.
+  //
+  // This is not a walk back to the old design. What burnt a third of a core
+  // was reacting to a workspace being BORN by running the whole nine-step
+  // focus-and-move chain: relocating means focusing, focusing away leaves the
+  // previous one empty, sway collects an empty workspace, and the next
+  // command recreates it. Measured on sway 1.12, a single
+  // `move workspace to output X` on the already-focused workspace emits
+  // `move`, an `empty` for whatever the destination was showing, and an
+  // `init` for the workspace sway auto-creates on the screen just vacated —
+  // and NOT a `focus`. So the one event class this reacts to is the one class
+  // its own command cannot produce, which is what makes it safe rather than
+  // merely guarded. The auto-created workspace arrives unfocused and is
+  // ignored for the same reason.
+  //
+  // It earns its place because the declarations cannot be right for every
+  // desk at once — see [workspaceHomes] — and because a session that started
+  // before this version has stale bindings in it that nothing else can undo
+  // short of logging out.
+  if (change == 'focus') {
+    final current = event['current'];
+    if (current is Map) {
+      final num = current['num'];
+      final output = current['output'];
+      if (num is int && num > 0 && output is String && output.isNotEmpty) {
+        return SwayEventVerdict(SwayEventAction.correct,
+            workspace: num, output: output);
+      }
+    }
+    return SwayEventVerdict.none;
+  }
+
   // Everything else is a workspace event: something opened, closed, was
-  // focused or was moved. All of it is either the user's doing or our own,
+  // renamed or was moved. All of it is either the user's doing or our own,
   // and neither is ours to answer.
   return SwayEventVerdict.none;
 }
+
+/// Every screen each workspace could be born on, most-preferred first,
+/// across every remembered setup.
+///
+/// This exists because a `workspace N output X` binding outlives the desk it
+/// was written for. sway appends bindings and never clears them, and it takes
+/// the first one that resolves to a connected screen — so the first binding a
+/// session sees wins for the rest of that session, and re-declaring is a
+/// silent no-op. See [buildWorkspaceConfigExecs] for the measurements, and for
+/// why `swaymsg reload` — the one reset sway offers — is not usable.
+///
+/// The way out is to declare the whole preference list at once and let sway
+/// pick the first screen that is actually there. That only works if the list
+/// is the same every time: a list that depended on what is plugged in would
+/// stack a different order on every dock and put us straight back where we
+/// started. So the order here is deliberately blind to the live outputs.
+///
+/// **Narrowest reach first.** A screen that belongs to many remembered setups
+/// goes last; a screen only one setup has goes first.
+///
+/// That is not a preference, it falls out of how sway reads the list. An entry
+/// is only ever reached if everything before it is absent, so a screen that is
+/// present at every desk — a laptop panel, typically — makes everything after
+/// it dead. First, it answers for every desk; last, it answers only when
+/// nothing more specific is there, which is what a fallback is.
+///
+/// Ordering by setup size instead is the obvious idea, and it gets the common
+/// case backwards. Measured on a real config: a three-screen home setup whose
+/// leftmost screen is the laptop panel and a three-screen office setup whose
+/// leftmost screen is an external monitor are the same size, the tie fell to
+/// config order, and `workspace 1` came out as
+/// `output 'eDP-1' 'Samsung …HK2XA01318'`. At the office desk the panel is
+/// plugged in, so workspace 1 would be born on the laptop instead of on the
+/// left screen — this function's own bug, one layer up.
+///
+/// It is still not right for *every* desk at once, and it cannot be: two
+/// setups whose screens are nested and which disagree about one workspace each
+/// need to precede the other. What narrowest-first buys is that the only
+/// unresolvable cases are those where BOTH candidates are screens the two
+/// desks share. The ordinary nested case — a dock that adds screens of its own
+/// — always comes out right. The residue is what the helper's live correction
+/// is for; see [SwayEventAction.correct].
+Map<int, List<OutputCriteria>> workspaceHomes({
+  required List<Profile> profiles,
+  required WorkspaceDistribution? distribution,
+  bool followProfileMap = false,
+  int maxWorkspaces = 9,
+}) {
+  if (distribution == null) return const {};
+
+  // How many remembered setups each screen belongs to. Counted over setups
+  // rather than over how often a screen is chosen for a workspace: what
+  // decides whether an entry can shadow a later one is only whether it is
+  // plugged in, which is a property of the desk.
+  final reach = <String, int>{};
+  for (final profile in profiles) {
+    for (final id in {
+      for (final m in _placeableScreens(profile)) _screenIdentity(m),
+    }) {
+      reach[id] = (reach[id] ?? 0) + 1;
+    }
+  }
+
+  final candidates = <int, List<_WorkspaceHome>>{};
+  for (var i = 0; i < profiles.length; i++) {
+    final profile = profiles[i];
+    final mons = _placeableScreens(profile);
+    if (mons.isEmpty) continue;
+    final ranked = resolveWorkspaceRanks(mons);
+    if (ranked.isEmpty) continue;
+    // Addressed by EDID descriptor wherever the setup has ever seen one. A
+    // screen that is not plugged in has no connector to name, and the
+    // connector a dock hands out is not the one it handed out last week; the
+    // descriptor is the only address that survives being absent.
+    final criteria = chooseExecCriteria(
+      mons.map((m) => m.id),
+      (id) {
+        final m = mons.firstWhere((e) => e.id == id);
+        return m.edidDescriptor.isEmpty ? null : m.edidDescriptor;
+      },
+    );
+    final map = resolveWorkspaceMap(
+      ranked,
+      maxWorkspaces: maxWorkspaces,
+      distribution: distribution,
+      // Restated in this setup's own ids first. An observation is recorded
+      // against the connector sway reported, while a setup may address the
+      // same screen by EDID descriptor — and [resolveWorkspaceMap] drops an
+      // overlay entry it cannot recognise, which would quietly discard the
+      // nine deliberate choices that mode exists to keep.
+      learned: followProfileMap
+          ? rekeyWorkspaceMap(profile.workspaceMap, mons)
+          : null,
+    );
+    for (final entry in map.entries) {
+      final screen = mons.firstWhere((m) => m.id == entry.value,
+          orElse: () => mons.first);
+      final identity = _screenIdentity(screen);
+      final crit =
+          criteria[entry.value] ?? OutputCriteria.connector(entry.value);
+      final list = candidates.putIfAbsent(entry.key, () => <_WorkspaceHome>[]);
+      // Deduplicated by SCREEN, not by the string a setup spells it with. One
+      // setup may address a display by its description and another — where
+      // that description carries shell syntax — by its connector. Those are
+      // two spellings of one screen, and keeping both would only bury the
+      // real fallbacks behind an entry that can never be reached.
+      final seen = list.indexWhere((h) => h.identity == identity);
+      if (seen == -1) {
+        list.add(_WorkspaceHome(identity, crit, i));
+      } else if (crit.isDescription && !list[seen].criteria.isDescription) {
+        // Keep the stable spelling if any setup has one.
+        list[seen] = _WorkspaceHome(identity, crit, list[seen].order);
+      }
+    }
+  }
+
+  return {
+    for (final entry in candidates.entries)
+      entry.key: (entry.value.toList()
+            ..sort((a, b) {
+              final byReach =
+                  (reach[a.identity] ?? 0).compareTo(reach[b.identity] ?? 0);
+              return byReach != 0 ? byReach : a.order.compareTo(b.order);
+            }))
+          .map((h) => h.criteria)
+          .toList(),
+  };
+}
+
+/// One candidate screen for one workspace, before the list is ordered.
+class _WorkspaceHome {
+  /// The screen itself, independent of how a given setup spells it.
+  final String identity;
+  final OutputCriteria criteria;
+
+  /// Which setup put it forward, so equal reach breaks deterministically.
+  final int order;
+
+  const _WorkspaceHome(this.identity, this.criteria, this.order);
+}
+
+/// What makes two entries in two different setups the same physical screen.
+///
+/// The EDID descriptor when there is one — it survives a reboot and a change
+/// of port, which is why the app records it at all — and the connector
+/// otherwise.
+String _screenIdentity(MonitorTileData m) =>
+    m.edidDescriptor.isNotEmpty ? m.edidDescriptor : m.id;
+
+/// Restates an observed `workspace → output` map in terms of [mons]' own ids.
+///
+/// Returns null when there is nothing to restate, so the caller falls straight
+/// through to the distribution rule.
+Map<int, String>? rekeyWorkspaceMap(
+  Map<int, String>? learned,
+  List<MonitorTileData> mons,
+) {
+  if (learned == null || learned.isEmpty) return null;
+  String? idFor(String target) {
+    for (final m in mons) {
+      if (m.id == target ||
+          m.edidDescriptor == target ||
+          m.manufacturer == target) {
+        return m.id;
+      }
+    }
+    return null;
+  }
+
+  final out = <int, String>{};
+  for (final entry in learned.entries) {
+    final id = idFor(entry.value);
+    if (id != null) out[entry.key] = id;
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// The screens of [profile] that can own workspaces: switched on, and not a
+/// mirror destination showing someone else's picture.
+List<MonitorTileData> _placeableScreens(Profile profile) => [
+      for (final m in profile.monitors)
+        if (m.enabled && m.mirrorOf == null) m,
+    ];
 
 /// Whether [profile] describes exactly the screens in [live].
 ///
@@ -239,6 +474,14 @@ WorkspacePlan? planWorkspaces({
     criteria: chooseExecCriteria(
       resolved.map((m) => m.id),
       (connector) => descriptors[connector],
+    ),
+    // Computed from EVERY remembered setup, not just the one in front of the
+    // user, and deliberately not from the live outputs. See [workspaceHomes].
+    homes: workspaceHomes(
+      profiles: profiles,
+      distribution: distribution,
+      followProfileMap: followProfileMap,
+      maxWorkspaces: maxWorkspaces,
     ),
   );
 }

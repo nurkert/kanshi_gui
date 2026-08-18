@@ -3,6 +3,7 @@
 
 import 'dart:async';
 
+import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
@@ -99,6 +100,45 @@ class WorkspaceDaemonCore {
   /// one, a settings change one — a dozen is far above any real desk.
   static const int applyCeiling = 12;
 
+  /// How long before the same workspace may be corrected again.
+  ///
+  /// A correction that works needs no repeat: the workspace is on its screen
+  /// and the next switch to it agrees. A correction that does NOT work — a
+  /// target sway cannot resolve, a screen that went away between the plan and
+  /// the command — would otherwise fire on every single workspace switch for
+  /// the rest of the session.
+  static const Duration correctionCooldown = Duration(seconds: 10);
+
+  /// Ceiling for corrections, counted separately from applies: switching
+  /// briskly through nine workspaces in a session with stale bindings is
+  /// legitimate and would otherwise trip the apply ceiling and leave the desk
+  /// half repaired.
+  static const int correctionCeiling = 20;
+
+  /// The placement the last [apply] worked out. Held so a correction costs a
+  /// map lookup rather than reading two files and asking sway what it has.
+  WorkspacePlan? _plan;
+
+  /// Visible for tests: what the helper currently believes.
+  WorkspacePlan? get plan => _plan;
+
+  final Map<int, DateTime> _correctedAt = {};
+  final List<DateTime> _corrections = [];
+
+  /// The workspace of the most recent focus event, recorded the moment the
+  /// event arrives rather than when the correction reaches the front of the
+  /// queue.
+  ///
+  /// A repair chain focuses all nine workspaces on its way through, so nine
+  /// focus events land while the chain is still running and every one of them
+  /// describes a workspace that the chain is about to move. Acting on them
+  /// would mean nine pointless commands after every dock. Only the last focus
+  /// still describes where the user actually is.
+  int? _latestFocus;
+
+  /// Called synchronously as the event is read, before anything is queued.
+  void noteFocus(int workspace) => _latestFocus = workspace;
+
   Future<void> _queue = Future<void>.value();
 
   /// Runs [action] after everything already queued.
@@ -118,6 +158,75 @@ class WorkspaceDaemonCore {
     });
     _queue = next;
     return next;
+  }
+
+  /// Puts one workspace back on its screen, and touches nothing else.
+  ///
+  /// Called when the user switches to a workspace that is not where the setup
+  /// says it lives. That happens for two reasons, and neither is fixable from
+  /// the declarations alone: a session that started before this version has
+  /// stale `workspace N output X` bindings in it that only a logout clears,
+  /// and no single fixed preference list can be right for two nested setups
+  /// that disagree — see [workspaceHomes].
+  ///
+  /// The command is one `move workspace to output`, on the workspace the user
+  /// is already looking at, so nothing is taken away from them: they asked for
+  /// this workspace, and it arrives on the screen they put it on. See
+  /// [classifySwayEvent] for the measurement showing this cannot feed itself.
+  Future<void> correct(int workspace, String liveOutput, {DateTime? now}) async {
+    final plan = _plan;
+    if (plan == null) return;
+    if (_latestFocus != null && _latestFocus != workspace) return;
+    final want = plan.map[workspace];
+    if (want == null || want == liveOutput) return;
+
+    final at = now ?? DateTime.now();
+    final last = _correctedAt[workspace];
+    if (last != null && at.difference(last) < correctionCooldown) return;
+    _corrections.removeWhere((t) => at.difference(t) > const Duration(minutes: 1));
+    if (_corrections.length >= correctionCeiling) {
+      log('too many corrections in a minute — standing down until it settles');
+      return;
+    }
+
+    // The event said where the workspace was when it was focused. Between
+    // then and now the user may have moved on, and `move workspace to output`
+    // acts on whatever is focused NOW — so it would drag a workspace nobody
+    // asked about. One round trip buys the guarantee that the thing we are
+    // about to move is the thing we decided to move.
+    final int? focused;
+    try {
+      focused = await sway.focusedWorkspace();
+    } catch (e) {
+      log('correction: could not confirm the focused workspace: $e');
+      return;
+    }
+    if (focused != workspace) return;
+
+    _correctedAt[workspace] = at;
+    _corrections.add(at);
+    final target = plan.criteria[want] ?? OutputCriteria.connector(want);
+    final command = 'move workspace to output ${target.swayExecForm}';
+    log('workspace $workspace is on $liveOutput, not $want — moving it');
+    if (dryRun) {
+      log('would send: $command');
+      return;
+    }
+    Future<void> send() async {
+      sent.add(command);
+      await sway.run(command);
+    }
+
+    final lock = withApplyLock;
+    if (lock == null) {
+      await send();
+    } else if (!await lock(send)) {
+      // A full apply is in flight and is on its way to the same end state.
+      // Forget the cooldown so the next switch tries again if it was not.
+      _correctedAt.remove(workspace);
+      _corrections.remove(at);
+      log('another apply is in flight; leaving it to them');
+    }
   }
 
   bool _runaway(DateTime now) {
@@ -146,6 +255,10 @@ class WorkspaceDaemonCore {
     final settings = await env.settings();
     final mode = settings.workspaceManagement;
     if (!mode.enabled) {
+      // Also drops the cached plan: a correction fired against a placement the
+      // user has since switched off would be the one thing this service must
+      // never do.
+      _plan = null;
       log('placement is switched off');
       return;
     }
@@ -163,9 +276,11 @@ class WorkspaceDaemonCore {
       preferProfileName: await env.markedProfile(),
     );
     if (plan == null) {
+      _plan = null;
       log('no remembered setup matches these screens');
       return;
     }
+    _plan = plan;
 
     // Which half runs is the difference between invisible and disruptive.
     //

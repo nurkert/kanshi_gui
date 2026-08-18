@@ -50,6 +50,7 @@ class WorkspacePlacement {
     required WorkspaceDistribution distribution,
     required String Function(String) resolveConnector,
     Map<int, String>? learnedMap,
+    Map<int, List<OutputCriteria>>? homes,
     bool force = false,
     bool Function()? isCancelled,
   }) async {
@@ -136,8 +137,10 @@ class WorkspacePlacement {
       final chain = force || needsRepair(want, actual)
           ? buildWorkspaceChain(want,
               criteria: criteria,
-              returnFocusTo: await monitors.focusedWorkspace())
-          : buildWorkspaceDeclarations(want, criteria: criteria);
+              returnFocusTo: await monitors.focusedWorkspace(),
+              homes: homes)
+          : buildWorkspaceDeclarations(
+              homes ?? homesFromMap(want, criteria: criteria));
       if (chain == null) return;
       Future<void> send() async {
         try {

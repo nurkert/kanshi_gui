@@ -1,23 +1,129 @@
 # Changelog
 
-## Unreleased
+## 2.3.0
 
 ### Fixed
 
-- A comment in the event classifier claimed sway's workspace `reload` event
-  carries no `current` field, and that the missing-`current` rule was what
-  caught it. Measured against a live sway: it emits
-  `{change: reload, current: null, old: null}`, plus two `{change:
-  unspecified}` output events. The explicit branch is what catches it. Pinned
-  with a test carrying the real payload.
+- **A saved setup could be re-pointed at a different room, and its identity
+  overwritten.** Reported from the desk it happened on: the app insisted the
+  user was at "Office - Titan Rain" while those screens were standing two doors
+  away.
 
-### Known
+  `OutputMatcher.strength` ranks evidence — EDID descriptor, then connector
+  name, then display label — but when two recorded descriptors *disagreed* it
+  fell through to the connector instead of stopping. So a saved office whose
+  two Samsung panels were recorded down to their EDID serials met a different
+  dock, in a different room, holding two panels of the same model — different
+  units — and that dock handed out the same connector names, `DP-4` and `DP-5`.
+  Different serials, same ports, declared the same screens.
 
-- The claim that `swaymsg reload` discards sway's workspace configs is still
-  **unverified**. An attempt to check it on a live desk was confounded: the
-  reload also wakes the app, which re-declares the bindings within the second.
-  Nothing depends on the claim being true — at worst the helper re-declares
-  bindings that were still valid — but it should not be read as measured.
+  Everything followed. The saved setup was applied to the room the user was
+  actually in, and re-hydration wrote the observed identity back, overwriting
+  the recorded serials with the new panels'. The setup for the other room was
+  gone, unrecoverably, from one coincidence of port naming — and the config
+  backups only go back to after the damage.
+
+  Two descriptors that disagree now END the question. They are proof of two
+  different screens, and no weaker signal is allowed to argue with proof. A
+  connector name is the one piece of evidence `kanshi(5)` explicitly warns
+  about; letting it speak over a recorded EDID inverted the whole strength
+  order the function exists to express. Entries that never recorded a
+  descriptor, and live outputs that report none, still match by port — that is
+  the migration path, and it is unchanged.
+
+- **Every workspace was born on the laptop panel after docking.** Reported as
+  "workspace 2 always ends up on the third monitor on the far right, and the
+  middle screen only ever gets workspace 8".
+
+  Nothing was wrong with the config file. Measured against sway 1.12:
+  `workspace N output X` **appends** to a workspace's output list and never
+  clears it, and `workspace_get_initial_output` takes the **first** entry that
+  resolves to a connected screen. Declare `workspace 5 output A`, then
+  `workspace 5 output B`, then create workspace 5 — it is born on A. So boot
+  undocked, kanshi activates the laptop-only setup and binds all nine
+  workspaces to the panel; dock, kanshi switches setups and binds them to the
+  external screens *behind* an entry that is still connected. Every workspace
+  opened from then on lands on the laptop, for the rest of the session, and
+  re-declaring is a silent no-op.
+
+  Every binding now names **every screen that workspace could live on**, across
+  all remembered setups, narrowest reach first — `workspace 2 output "middle"
+  "panel"`. sway takes the first one that is plugged in, and because the list
+  does not depend on what is connected, appending it again is a no-op instead
+  of a trap. Verified on real sway: declared while a screen is unplugged, a
+  workspace created after it appears still lands on it.
+
+  The order is by reach and not by setup size, and that distinction is not
+  cosmetic — it shipped the other way round for an hour and reintroduced the
+  bug one layer up. A screen present at every desk makes every entry after it
+  unreachable, so it has to go last.
+
+- **The helper puts one workspace right when you switch to it.** The
+  declarations cannot be correct for every desk at once — two setups with
+  nested screens that disagree about one workspace each need to precede the
+  other — and a session that started before this version has stale bindings in
+  it that nothing short of logging out can clear. So when a workspace is
+  focused on a screen the setup does not put it on, the helper sends exactly
+  one `move workspace to output`, on the workspace already in front of the
+  user.
+
+  This is not the 2.1.4 behaviour returning. That reacted to a workspace being
+  *born* by running the whole nine-step focus-and-move chain, and every step
+  fed the next. Measured on sway 1.12: a bare `move workspace to output` emits
+  `move`, an `empty`, and an `init` for the workspace sway auto-creates on the
+  screen just vacated — and **not** a `focus`. The one event class it answers
+  is the one class its own command cannot produce. Guarded further by a cached
+  plan (no disk, no `swaymsg`, per event), a newest-focus-only rule so a repair
+  chain's own nine focus events are ignored, a ten-second per-workspace
+  cooldown, a separate ceiling, and the shared apply lock. Measured on a real
+  desk: 200 workspace switches in a burst cost 0.11 s of CPU and produced zero
+  commands.
+
+- **The dashed drift ghosts were painted outside the canvas that fits them.**
+  The ghosts show where a screen actually is when that disagrees with the
+  setup, and they use the canvas projection — but were not part of what it
+  fitted. With a setup describing a desk at x=0 while the screens were at
+  x=10769, every ghost landed thousands of units past the right edge: yellow
+  dashes trailing off the canvas and tiles shoved to one side of it. The fit
+  now includes them, so tile and ghost are legible as the pair they are.
+
+- **Grabbing a tile re-projected the whole canvas under the cursor.** The drag
+  pin froze the fit against the tile cluster only, so on a drifted layout the
+  ghosts were in the idle fit and out of the dragging one. Measured: the tile
+  jumped from 121 px wide to 800 px the instant the pointer went down. Which is
+  the other side of "it fixed itself after a lot of dragging".
+
+- **A `scale 0` in a hand-edited config blanked the canvas while dragging.**
+  `computeDisplay` has guarded that division since 2.0.0; `boundingBox` — which
+  is what a drag pins to — divided anyway, so the offsets came out `-Infinity`
+  and every tile was drawn nowhere.
+
+- **Refreshing at an unrecognised desk showed someone else's setup.** Re-reading
+  the config drops the in-memory capture of a desk nothing describes, and the
+  loader then falls back to whatever setup happens to be first in the file —
+  tiles for screens that are not plugged in, and a dashed ghost for the one
+  that is. `reloadOnly`, `reloadAndApply` and the layout auto-revert now
+  re-capture what is actually there, exactly as launching does.
+
+- Opening the app rewrites a config still carrying one-screen-per-workspace
+  bindings. Detected by the setups disagreeing with each other rather than by
+  counting targets, so a config that is already right is never rewritten.
+
+### Changed
+
+- The fake sway the helper's tests run against now models sway's append-only,
+  first-resolving workspace bindings, and answers a focus and a move with the
+  events each really produces. It could not previously express the bug above;
+  now a test reproduces it.
+
+### Verified
+
+- `swaymsg reload` **does** discard sway's accumulated workspace bindings —
+  recorded as unverified in 2.2.0, now measured. It is still not usable as a
+  repair: the same measurement shows it **also throws away every output
+  position and scale the compositor was given over IPC** and re-arranges the
+  desk from scratch. Curing a workspace binding by scrambling the monitors is
+  not a cure, and nothing in the app calls it.
 
 ## 2.2.0
 

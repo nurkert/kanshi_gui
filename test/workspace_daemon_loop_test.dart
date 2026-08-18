@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
+import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/workspace_daemon_core.dart';
 
@@ -47,9 +48,17 @@ void main() {
   /// if it means anything, through the same serialising queue.
   void wire() {
     sway.events().listen((e) {
-      final reason = core.reasonFor(e);
-      if (reason == null) return;
-      core.serialised(() => core.apply(reason));
+      final verdict = classifySwayEvent(e);
+      switch (verdict.action) {
+        case SwayEventAction.none:
+          return;
+        case SwayEventAction.correct:
+        core.noteFocus(verdict.workspace!);
+          core.serialised(
+              () => core.correct(verdict.workspace!, verdict.output!));
+        case SwayEventAction.replan:
+          core.serialised(() => core.apply(ApplyReason.outputsChanged));
+      }
     });
   }
 

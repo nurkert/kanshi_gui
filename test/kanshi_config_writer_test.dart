@@ -321,7 +321,8 @@ void main() {
       // second rendering of the same idea living in the writer.
       expect(
         embedded,
-        equals(buildWorkspaceConfigExecs(resolveWorkspaceMap(ranked))),
+        equals(buildWorkspaceConfigExecs(
+            homesFromMap(resolveWorkspaceMap(ranked)))),
       );
     });
 
