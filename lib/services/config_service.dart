@@ -159,6 +159,126 @@ class ConfigService {
     }
   }
 
+  /// Rewrites a config whose `transform` values are in sway's naming rather
+  /// than kanshi's, and stamps the file so it is only ever done once.
+  ///
+  /// Every release up to 2.3.0 read the rotation off sway's IPC and wrote that
+  /// number straight into the config file. Sway and the wlr-output-management
+  /// protocol kanshi speaks disagree about which orientation is called `90`
+  /// and which `270` (see [swayTransformFor]), so a portrait screen came back
+  /// from every reboot standing on its head — invisibly, because the GUI read
+  /// the same wrong number back and reported no drift. Rotating it in the GUI
+  /// applied the right thing live and then saved the wrong thing again, which
+  /// is why it kept coming back.
+  ///
+  /// Only `output` lines inside profiles this app wrote are touched,
+  /// recognised by their `# kanshi_gui:` annotations. A hand-written profile
+  /// always meant kanshi's names and must be left alone — but the file still
+  /// gets the marker, so a later save through the GUI is not mistaken for a
+  /// legacy one.
+  ///
+  /// Returns true when a value actually changed, so the caller can decide
+  /// whether the running compositor needs to hear about it.
+  Future<bool> migrateTransformConvention() async {
+    final file = File(configPath);
+    if (!await file.exists()) return false;
+    final String raw;
+    try {
+      raw = await file.readAsString();
+    } catch (_) {
+      return false;
+    }
+    if (raw.trim().isEmpty) return false;
+    if (raw.contains(KanshiConfigWriter.transformConventionMarker)) {
+      return false;
+    }
+
+    // Tag every line with the profile block it belongs to, so the annotation
+    // test below is scoped to one profile rather than the whole file.
+    final lines = raw.split('\n');
+    final blockOf = List<int>.filled(lines.length, -1);
+    var block = -1;
+    var depth = 0;
+    for (var i = 0; i < lines.length; i++) {
+      final trimmed = lines[i].trim();
+      if (depth == 0 && trimmed.startsWith('profile ')) {
+        block++;
+        blockOf[i] = block;
+        depth += '{'.allMatches(trimmed).length;
+        continue;
+      }
+      if (depth > 0) {
+        blockOf[i] = block;
+        depth += '{'.allMatches(trimmed).length;
+        depth -= '}'.allMatches(trimmed).length;
+      }
+    }
+    final ours = <int>{
+      for (var i = 0; i < lines.length; i++)
+        if (blockOf[i] >= 0 && lines[i].trim().startsWith('# kanshi_gui:'))
+          blockOf[i],
+    };
+
+    final swap = RegExp(r'(\btransform\s+)(90|270)\b');
+    var changed = false;
+    for (var i = 0; i < lines.length; i++) {
+      if (!ours.contains(blockOf[i])) continue;
+      if (!lines[i].trim().startsWith('output ')) continue;
+      final rewritten = lines[i].replaceAllMapped(
+        swap,
+        (m) => '${m.group(1)}${m.group(2) == '90' ? '270' : '90'}',
+      );
+      if (rewritten != lines[i]) {
+        lines[i] = rewritten;
+        changed = true;
+      }
+    }
+
+    // Nothing rotated, nothing to correct — and opening the app must not
+    // write to disk. The scan is pure string work and simply runs again next
+    // launch; the marker gets stamped by the first real save instead.
+    if (!changed) return false;
+
+    await _writeRawAtomically(
+      '${KanshiConfigWriter.transformConventionMarker}\n${lines.join('\n')}',
+    );
+    return true;
+  }
+
+  /// Backup + tmp + atomic rename, for a rewrite that bypasses the renderer.
+  /// Same contract as the save path: the previous file is snapshotted first,
+  /// and a failed write leaves the live config untouched.
+  Future<void> _writeRawAtomically(String content) async {
+    final file = File(configPath);
+    await Directory(file.parent.path).create(recursive: true);
+    await Directory(File(backupPrefix).parent.path).create(recursive: true);
+    File? backup;
+    if (await file.exists()) {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      backup = await file.copy('$backupPrefix.$ts');
+    }
+    final tmp = File('$configPath.tmp.${pid}_${_writeSeq++}');
+    try {
+      await tmp.writeAsString(content, flush: true);
+      await tmp.rename(configPath);
+    } catch (e) {
+      if (await tmp.exists()) {
+        try {
+          await tmp.delete();
+        } catch (_) {/* best effort cleanup */}
+      }
+      if (backup != null && await backup.exists()) {
+        try {
+          await backup.copy(configPath);
+        } catch (_) {/* best effort */}
+      }
+      rethrow;
+    }
+    _unparsedCache = null;
+    _unparsedCacheValid = false;
+    await _pruneBackups();
+  }
+
   /// True iff the live kanshi config contains an `include <pattern>`
   /// directive (kanshi's DSL feature for splitting profiles across
   /// files). Result is cached after the first call to keep the save
@@ -361,6 +481,16 @@ class ConfigService {
     }
 
 
+    // Stamp the convention the `transform` values below are written in, so a
+    // later launch does not mistake this file for one an older release wrote
+    // and flip every rotation. Applies to both branches above: a rendered file
+    // and an edited-in-place one are equally ours.
+    // See [migrateTransformConvention].
+    final stamped =
+        rendered.contains(KanshiConfigWriter.transformConventionMarker)
+            ? rendered
+            : '${KanshiConfigWriter.transformConventionMarker}\n$rendered';
+
     final file = File(configPath);
     await Directory(file.parent.path).create(recursive: true);
 
@@ -376,7 +506,7 @@ class ConfigService {
     if (await file.exists()) {
       try {
         final current = await file.readAsString();
-        if (current == rendered) return;
+        if (current == stamped) return;
       } catch (_) {
         // Read failed (permissions, disk error, …) — fall through and
         // let the write attempt either succeed or surface the real
@@ -399,7 +529,7 @@ class ConfigService {
     try {
       // Atomic write: a partial failure leaves the live config untouched
       // (the tmp file is on the same filesystem so rename is atomic).
-      await tmp.writeAsString(rendered, flush: true);
+      await tmp.writeAsString(stamped, flush: true);
       await tmp.rename(configPath);
     } catch (e) {
       if (await tmp.exists()) {

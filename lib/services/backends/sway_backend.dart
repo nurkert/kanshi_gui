@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:kanshi_gui/domain/output_identity.dart';
+import 'package:kanshi_gui/domain/output_transform.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -107,12 +108,11 @@ class SwayBackend implements MonitorService {
         ((currentMode?['refresh'] as num?)?.toDouble() ?? 60000.0) / 1000.0;
     final scale = (output['scale'] as num?)?.toDouble() ?? 1.0;
     final transform = (output['transform'] ?? 'normal').toString();
-    final rotation = switch (transform) {
-      '90' || 'flipped-90' => 90,
-      '180' || 'flipped-180' => 180,
-      '270' || 'flipped-270' => 270,
-      _ => 0,
-    };
+    // Sway's transform names are NOT the ones kanshi and wlr-randr use for
+    // the same orientation; see [rotationFromSwayTransform]. This is the one
+    // place that converts, so the rest of the app — and the config file it
+    // writes — hold a single convention.
+    final rotation = rotationFromSwayTransform(transform);
     // Sway IPC reports current_mode in the panel's native (unrotated)
     // orientation, but the rest of the app stores width/height already
     // rotated to match the visible rect. Swap on portrait transforms so
@@ -166,12 +166,10 @@ class SwayBackend implements MonitorService {
   @override
   Future<ProcessResult> apply(MonitorTileData target) async {
     final bin = await _binary();
-    final transform = switch (target.rotation % 360) {
-      90 => '90',
-      180 => '180',
-      270 => '270',
-      _ => 'normal',
-    };
+    // Converted, not passed through: `transform 90` here and `transform 90`
+    // in the kanshi config stand the screen up opposite ways. See
+    // [swayTransformFor].
+    final transform = swayTransformFor(target.rotation);
     final mode = _modeMatchingTarget(target) ?? _bestMode(target);
     // NB: swaymsg's `output … position` IPC takes two separate arguments
     // (X Y), unlike the kanshi config syntax which is comma-joined ("X,Y").

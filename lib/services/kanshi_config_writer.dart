@@ -110,6 +110,16 @@ class KanshiConfigWriter {
       .replaceAll('\\', r'\\')
       .replaceAll("'", r"\'");
 
+  /// Stamped at the top of every file this app writes — by the save path, not
+  /// by [render], so a caller rendering a single block for inspection gets the
+  /// block and nothing else. Its presence says the
+  /// `transform` values below are in the wlr-output-management sense — the one
+  /// kanshi itself executes — rather than the sway IPC names releases up to
+  /// 2.3.0 wrote there by mistake. See
+  /// [ConfigService.migrateTransformConvention].
+  static const transformConventionMarker =
+      '# kanshi_gui:transform wlr-output-management';
+
   static String render(
     List<Profile> profiles, {
     KanshiWriteOptions options = KanshiWriteOptions.neutral,
