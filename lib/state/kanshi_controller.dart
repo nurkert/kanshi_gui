@@ -483,6 +483,9 @@ class KanshiController extends ChangeNotifier {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
   Future<void> init() async {
+    // BEFORE anything reads the file: this one rewrites raw text, so it has to
+    // happen while the file is still the only copy of the truth.
+    await _migrateTransformConvention();
     await _loadConfig();
     await refreshConnectedMonitors();
     // Detect include directives BEFORE `ensureCurrentSetupMatches` —
@@ -520,6 +523,38 @@ class KanshiController extends ChangeNotifier {
     // see [learnWorkspaceMap] for why it is cautious about the moment.
     if (config.writeOptions.injectSwayWorkspaceExec && _learnsWorkspaceMap) {
       await learnWorkspaceMap();
+    }
+  }
+
+  /// Repairs the rotation naming in a config written before 2.3.1, once.
+  ///
+  /// Sway's `output … transform 90` and kanshi's `transform 90` are opposite
+  /// orientations; every earlier release read the first and wrote the second
+  /// unchanged, so a portrait screen came back from every reboot upside down
+  /// and rotating it in the GUI saved the wrong value again. See
+  /// [ConfigService.migrateTransformConvention] for the rewrite itself.
+  ///
+  /// When a value actually flipped, the screens on the desk are now standing
+  /// the way the file no longer asks for, so kanshi is told to re-read it.
+  /// That is the same self-healing licence [_verifyAndFixWorkspacePlacement]
+  /// takes later in this method — the app correcting a state it knows is
+  /// wrong, out of the user's own file, not applying anything new.
+  ///
+  /// Best-effort throughout: a config that cannot be read or written is left
+  /// exactly as it is and the app opens against it normally.
+  Future<void> _migrateTransformConvention() async {
+    bool flipped;
+    try {
+      flipped = await config.migrateTransformConvention();
+    } catch (e) {
+      debugPrint('transform migration skipped: $e');
+      return;
+    }
+    if (!flipped) return;
+    try {
+      await KanshiDaemon(_processRunner).reload();
+    } catch (e) {
+      debugPrint('kanshi reload after transform migration failed: $e');
     }
   }
 

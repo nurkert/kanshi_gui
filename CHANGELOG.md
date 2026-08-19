@@ -1,5 +1,58 @@
 # Changelog
 
+## 2.3.1
+
+### Fixed
+
+- **A rotated screen came back upside down after every reboot.** Reported from
+  a home-office dock: the portrait panel on the right stood on its head at
+  every login, was righted by hand in the GUI, and was on its head again the
+  next day.
+
+  Sway and kanshi call the same orientation different names, and the app never
+  translated. Measured on sway 1.12 with the panel in question:
+
+  ```text
+  swaymsg output HDMI-A-2 transform 270   ->  get_outputs reports 270
+  wlr-randr --output HDMI-A-2 -t 270      ->  get_outputs reports  90
+  kanshi config `transform 270`           ->  get_outputs reports  90
+  ```
+
+  Sway's own `output … transform` command is the outlier. Everything speaking
+  the wlr-output-management protocol — kanshi, `wlr-randr` — means the opposite
+  by `90` and `270`; `normal` and `180` are their own inverse and were never
+  affected.
+
+  The app read the rotation off sway's IPC and wrote that number straight into
+  the config. Live preview through `swaymsg` was therefore right and the saved
+  file wrong, by exactly 180°, and nothing could see it: the GUI read the same
+  wrong number back out of the file, agreed with itself, and reported no drift.
+  Rotating the screen in the GUI applied the right thing and saved the wrong
+  thing again, which is why the fix never survived a reboot.
+
+  Rotation is now stored in the wlr-output-management sense — a kanshi config's
+  `transform` keyword is defined by kanshi, so a hand-written file has to be
+  read the way kanshi will execute it — and the sway backend is the single
+  place that converts, on the way in and on the way out. The `wlr-randr`
+  backend, the config writer and the config parser pass the number through
+  untouched. See `lib/domain/output_transform.dart`.
+
+### Changed
+
+- **Existing configs are repaired once, on launch.** A file written by an
+  earlier release carries sway's names, so `90` and `270` are swapped back in
+  every profile that carries this app's `# kanshi_gui:` annotations, and the
+  file is stamped `# kanshi_gui:transform wlr-output-management` so it is never
+  done twice. Profiles nobody but the user wrote are left exactly as they are —
+  they always meant kanshi's names.
+
+  Only a file that actually holds a rotated output is written to; opening the
+  app against a config with nothing rotated still touches no disk. When
+  something did flip, `kanshictl reload` follows, because the screens on the
+  desk are now standing the way the file no longer asks for — the same
+  self-healing the workspace pass at launch already does, out of the user's own
+  file.
+
 ## 2.3.0
 
 ### Fixed
