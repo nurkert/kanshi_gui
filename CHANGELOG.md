@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.3.2
+
+### Fixed
+
+- **A repair left two of three screens showing empty workspaces.** Reported
+  after a reboot at a docked desk: the screens came up on 1, 8 and 9 — or
+  thereabouts — with every open window hidden behind the two blank ones, and
+  pressing `$mod+2` and `$mod+3` put it right in a second.
+
+  The repair chain puts each workspace on the screen the setup says it belongs
+  to, and it does that by focusing the workspace and moving it, because
+  focusing is the only way sway will relocate one. A screen shows whichever of
+  its workspaces was focused last, so the walk also decides what every screen
+  is left displaying — and walking 1 to 9 in order left each screen on the
+  *highest* number it owns. Those are the numbers nobody has anything open on.
+  Only the screen the trailing hand-back focus happened to land on came out
+  right, which is exactly the "one screen fine, the other two blank" in the
+  report.
+
+  Measured on sway 1.12, three screens, the interleaved rule:
+
+  ```text
+  ascending  1..9, then focus 3  ->  eDP-1: 7   DP-1: 8   HDMI-A-2: 3
+  descending 9..1, then focus 3  ->  eDP-1: 1   DP-1: 2   HDMI-A-2: 3
+  ```
+
+  The walk now runs from the highest number down. Empty high workspaces are
+  garbage-collected as it passes them, so every screen is left on the lowest
+  number it owns — which is where the windows are. Nothing else changed: the
+  moves place each workspace independently of the others, so their order has
+  never meant anything to where a workspace ends up, only to what is left on
+  screen afterwards. A workspace with windows on it is still never collected,
+  a workspace stranded on the wrong screen is still brought home, and passing
+  a workspace to hand focus back to still has the last word.
+
 ## 2.3.1
 
 ### Fixed

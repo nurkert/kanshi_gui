@@ -367,11 +367,13 @@ void main() {
       expect(stmts[1], equals("workspace 2 output 'R'"));
       // Phase 2 then pairs `workspace number N` (focus by numeric
       // slot, rename-safe) with a `move workspace to output 'X'` for
-      // force-moves on any pre-existing workspaces.
-      expect(stmts[2], equals('workspace number 1'));
-      expect(stmts[3], equals("move workspace to output 'L'"));
-      expect(stmts[4], equals('workspace number 2'));
-      expect(stmts[5], equals("move workspace to output 'R'"));
+      // force-moves on any pre-existing workspaces — walked from the
+      // highest number DOWN, so each screen is left showing the lowest
+      // workspace it owns rather than the highest.
+      expect(stmts[2], equals('workspace number 2'));
+      expect(stmts[3], equals("move workspace to output 'R'"));
+      expect(stmts[4], equals('workspace number 1'));
+      expect(stmts[5], equals("move workspace to output 'L'"));
       // Trailing focus lands the user on workspace 1.
       expect(stmts.last, equals('workspace number 1'));
     });
