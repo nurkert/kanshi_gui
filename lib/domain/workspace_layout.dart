@@ -132,10 +132,15 @@ String? buildSwayWorkspaceChain(
 /// `workspace N` focus picks the right home AND so any *future*
 /// workspace creation during the session lands on the assigned
 /// monitor without help from kanshi_gui), then walks the workspaces
-/// and moves each one into place, and ends on `workspace number 1`
-/// so focus lands on the leftmost-rank monitor — typically the
-/// user's primary attention area after docking, and stable across
-/// runs.
+/// **from the highest number down** and moves each one into place, and
+/// ends on `workspace number 1` so focus lands on the leftmost-rank
+/// monitor — typically the user's primary attention area after docking,
+/// and stable across runs.
+///
+/// The descending direction is load-bearing rather than cosmetic: it is
+/// what leaves every screen showing the lowest workspace it owns instead
+/// of the highest. See the comment on the walk itself for the
+/// measurement.
 ///
 /// Phase-1 (the output binding) deliberately uses `workspace N output X`
 /// rather than `workspace number N output X`. Sway stores the binding
@@ -171,7 +176,33 @@ String? buildWorkspaceChain(
   if (declarations == null) return null;
   final numbers = map.keys.toList()..sort();
   final parts = <String>[declarations];
-  for (final ws in numbers) {
+  // Walked from the highest number DOWN, and the direction is the whole
+  // difference between a desk that comes up showing 1, 2, 3 and one that
+  // comes up showing 7, 8, 9.
+  //
+  // A screen displays whichever of its workspaces was focused last, and
+  // focusing a workspace that does not exist creates it. So the walk decides
+  // what every screen is left showing: the last number it visited there.
+  // Ascending, that is the HIGHEST workspace each screen owns — and the
+  // numbers above the ones anybody actually uses are empty, so every repair
+  // ended with the open windows hidden behind three blank workspaces. Only
+  // the one screen the trailing focus happened to land on came out right,
+  // which is why the symptom read as "two of my three screens are wrong".
+  //
+  // Measured on sway 1.12, three screens, the interleaved rule, all nine
+  // workspaces in play:
+  //
+  //     ascending 1..9, then focus 3   ->  eDP-1: 7   DP-1: 8   HDMI-A-2: 3
+  //     descending 9..1, then focus 3  ->  eDP-1: 1   DP-1: 2   HDMI-A-2: 3
+  //
+  // The empty high workspaces are garbage-collected as the descending walk
+  // passes them, so the desk is left on the lowest number each screen owns.
+  //
+  // The direction costs nothing: `move workspace to output` places each
+  // workspace independently of the others, so the order of the moves has
+  // never meant anything to where a workspace ends up — only to what is left
+  // on screen afterwards.
+  for (final ws in numbers.reversed) {
     // Phase 2: focus the numeric slot (renamed-workspace safe) and
     // force-move any pre-existing workspace to its new home output.
     parts.add('workspace number $ws');
@@ -182,6 +213,10 @@ String? buildWorkspaceChain(
   // as wanted: run from a background service while someone is working on
   // workspace 6, it takes them to 1 for no reason they can see. Pass
   // [returnFocusTo] and the chain hands them back.
+  //
+  // Redundant when nothing is passed, now that the walk descends and already
+  // ends on the lowest number — and kept anyway, so the landing is stated
+  // rather than left implied by the direction of a loop.
   parts.add('workspace number ${returnFocusTo ?? numbers.first}');
   return parts.join('; ');
 }
