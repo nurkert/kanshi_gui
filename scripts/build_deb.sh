@@ -179,6 +179,14 @@ exec /usr/lib/kanshi_gui/kanshi-gui-workspaced "$@"
 EOS
 chmod 755 "$PKG_DIR/usr/bin/kanshi-gui-workspaced"
 
+# ── Mirror launcher ────────────────────────────────────────────────────────
+# The `exec` line the app writes into a kanshi profile for a mirrored screen
+# goes through this instead of calling wl-mirror directly: kanshi re-runs
+# every exec line on reload, and a second wl-mirror on the same output
+# breaks the first. The script is the guard the config line cannot carry.
+cp "$ROOT_DIR/bin/kanshi-gui-mirror" "$PKG_DIR/usr/bin/kanshi-gui-mirror"
+chmod 755 "$PKG_DIR/usr/bin/kanshi-gui-mirror"
+
 cp "$ROOT_DIR/debian/systemd/kanshi-gui-workspaces.service" \
   "$PKG_DIR/usr/lib/systemd/user/"
 

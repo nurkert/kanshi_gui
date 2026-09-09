@@ -1,3 +1,4 @@
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/workspace_layout.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
@@ -40,6 +41,13 @@ class KanshiWriteOptions {
   /// Ignored when [injectMirrorExec] is false. Mirrors the live
   /// MirrorRunner setting so the config and the GUI agree.
   final String mirrorScaling;
+  /// Start the boot-fallback mirror through `kanshi-gui-mirror` instead of
+  /// calling `wl-mirror` directly. The launcher refuses to start a second
+  /// wl-mirror for a destination that already has one, which a config line
+  /// cannot express on its own (see the script for why). On only when the
+  /// launcher is installed; a config that names a program the machine does
+  /// not have would mirror nothing at boot.
+  final bool useMirrorLauncher;
 
   const KanshiWriteOptions({
     this.injectSwayWorkspaceExec = false,
@@ -48,6 +56,7 @@ class KanshiWriteOptions {
     this.workspaceDistribution = WorkspaceDistribution.interleaved,
     this.followProfileWorkspaceMap = false,
     this.mirrorScaling = 'fit',
+    this.useMirrorLauncher = false,
   });
 
   KanshiWriteOptions copyWith({
@@ -57,6 +66,7 @@ class KanshiWriteOptions {
     WorkspaceDistribution? workspaceDistribution,
     bool? followProfileWorkspaceMap,
     String? mirrorScaling,
+    bool? useMirrorLauncher,
   }) {
     return KanshiWriteOptions(
       injectSwayWorkspaceExec:
@@ -69,6 +79,7 @@ class KanshiWriteOptions {
       followProfileWorkspaceMap:
           followProfileWorkspaceMap ?? this.followProfileWorkspaceMap,
       mirrorScaling: mirrorScaling ?? this.mirrorScaling,
+      useMirrorLauncher: useMirrorLauncher ?? this.useMirrorLauncher,
     );
   }
 
@@ -174,7 +185,12 @@ class KanshiConfigWriter {
     // that share logical coordinates, which is the "a screen landed on top
     // of the GUI" disaster. `resolveOverlaps` is idempotent, so a clean
     // layout passes through untouched.
-    final mons = LayoutMath.resolveOverlaps(sanitized);
+    // Mirror destinations are applied a pointer-proof distance away from the
+    // screens that own the picture; see [MirrorGeometry.pointerGap]. Done
+    // after the overlap pass, which only looks at independent screens.
+    final mons = MirrorGeometry.withDetachedDestinations(
+      LayoutMath.resolveOverlaps(sanitized),
+    );
 
     // How kanshi should address each output. Descriptions win wherever the
     // display supplied one and it is unique inside this profile; see
@@ -206,20 +222,13 @@ class KanshiConfigWriter {
       final baseH = (m.rotation % 180 == 0) ? m.height : m.width;
       final refresh = m.refresh > 0 ? m.refresh : 60.0;
 
-      // Mirror destinations keep their OWN position — earlier releases
-      // (1.5.7) tried to stack them onto the source's Sway-coordinate
-      // rectangle so the cursor wouldn't get "lost" on the dead output.
-      // Empirically that backfires the moment wl-mirror is actually
-      // running: wl-mirror's layer-shell surface lands on the dest
-      // output's geometry, but because dest and source share the
-      // exact rect, sway also paints that surface onto the source
-      // output. wl-mirror then captures the source (now containing
-      // its own surface), projects that onto the dest (which already
-      // has it), and you get a 1980s-VCR infinity-mirror cascade.
-      // Lesson: mirror destination MUST occupy a different rectangle
-      // from the source. The cursor-routing concern is solved at the
-      // GUI / placement layer (drop the dest next to the source by
-      // default), not by overlapping rects in the kanshi config.
+      // A mirror destination never shares the source's rectangle. 1.5.7
+      // stacked them so the pointer could not get "lost" on the destination,
+      // and with wl-mirror running that painted wl-mirror's own surface onto
+      // the source, which wl-mirror then captured again: an infinity-mirror
+      // cascade. Since 2.3.3 the destination sits a pointer-proof gap away
+      // instead (`MirrorGeometry.withDetachedDestinations`, applied above),
+      // which keeps the pointer on the screens the user can see.
       final posX = m.x < 0 ? 0 : m.x.toInt();
       final posY = m.y < 0 ? 0 : m.y.toInt();
       final transform = m.rotation == 0 ? 'normal' : m.rotation.toString();
@@ -312,21 +321,29 @@ class KanshiConfigWriter {
             !isShellSafeCriteria(m.mirrorOf!)) {
           continue;
         }
-        // No shell. This was `exec sh -c 'pgrep … | grep -qF … || wl-mirror … &'`
-        // — a pipeline guarding against spawning a second wl-mirror for the
-        // same destination. It never ran: kanshi hands exec lines to /bin/sh
-        // after escaping only whitespace and quotes, so the `|`, `||` and `&`
-        // stayed bare at the OUTER level and the shell tried to run the words
-        // after them as commands. `grep -qF -- …: not found`, every time, and
-        // wl-mirror was never started by kanshi at all.
+        // No shell operators. This was once `exec sh -c 'pgrep … || wl-mirror
+        // … &'`, and it never ran: kanshi hands exec lines to /bin/sh after
+        // escaping only whitespace and quotes, so `|`, `||` and `&` stayed
+        // bare at the OUTER level and the shell ran the words after them as
+        // commands.
         //
-        // A guard cannot be expressed without shell operators, so it is gone
-        // and the invocation is direct. Duplicates are handled where they can
-        // actually be seen: MirrorRunner kills any externally-spawned mirror
-        // for a destination before taking ownership of it.
+        // The guard still matters, though: kanshi runs every exec line again
+        // on each reload, and a second wl-mirror on a sway output takes the
+        // fullscreen slot from the first for good. So the guard lives in a
+        // program — `kanshi-gui-mirror`, shipped with the package — and the
+        // line calls that. Where the launcher is not installed the line calls
+        // wl-mirror directly; the running GUI then removes the duplicates
+        // kanshi produces (`MirrorRunner.purgeExternalNotMatching`).
+        // The scaling word is one of wl-mirror's mode names; anything else
+        // would reach the shell unquoted, so an unknown value falls back.
+        final scaling = RegExp(r'^[a-z]+$').hasMatch(options.mirrorScaling)
+            ? options.mirrorScaling
+            : 'fit';
         buffer.writeln(
-          '    exec wl-mirror --scaling ${options.mirrorScaling} '
-          '--fullscreen-output "${m.id}" "${m.mirrorOf}"',
+          options.useMirrorLauncher
+              ? '    exec kanshi-gui-mirror "${m.id}" "${m.mirrorOf}" $scaling'
+              : '    exec wl-mirror --scaling $scaling '
+                  '--fullscreen-output "${m.id}" "${m.mirrorOf}"',
         );
       }
     }

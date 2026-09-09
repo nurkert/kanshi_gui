@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
@@ -166,14 +167,16 @@ void main() {
           reason: 'No named-claim leakage into the user-visible bar.');
     });
 
-    test('mirror destinations keep their own non-overlapping position', () {
+    test('mirror destinations are written a pointer gap away', () {
       // The 1.5.7 position-stack trick (dest borrows src's coords)
       // backfires when wl-mirror is actually running: sway paints
       // wl-mirror's fullscreen surface onto every output whose geometry
       // overlaps the dest's rect — including the source — and wl-mirror
       // then captures the source's now-self-containing image. Classic
-      // infinity mirror. Dest MUST occupy a different rectangle than
-      // src so the surface stays exclusively on the dest output.
+      // infinity mirror. And flush against the source is not enough
+      // either: the pointer slides over onto a screen that shows someone
+      // else's picture. The destination goes a full pointer gap to the
+      // right of the independent screens (see MirrorGeometry.pointerGap).
       final p = Profile(
         name: 'Mirror',
         monitors: [
@@ -187,11 +190,14 @@ void main() {
       );
       expect(out, contains("output 'A' enable"));
       expect(out, contains("output 'B' enable"));
-      expect(out, contains("position 1920,0"),
-          reason: "Mirror destination MUST stay at its own x — sharing "
-              "the source's rect makes wl-mirror's surface bleed across "
-              "outputs and recurse.");
-      // A is at 0,0; B at 1920,0. Both distinct rects.
+      expect(out, contains("position 0,0"));
+      expect(
+          out,
+          contains(
+              "position ${1920 + MirrorGeometry.pointerGap.toInt()},0"),
+          reason: "the destination sits beyond the gap the pointer "
+              "cannot cross, never on or next to the source");
+      // A is at 0,0; B far right. Both distinct rects.
       final positionLines = out
           .split('\n')
           .where((l) => l.contains('position '))
@@ -199,7 +205,7 @@ void main() {
       expect(positionLines, hasLength(2),
           reason: 'one position line per enabled output');
       expect(positionLines[0], contains('position 0,0'));
-      expect(positionLines[1], contains('position 1920,0'));
+      expect(positionLines[1], contains('position 3920,0'));
     });
 
     test('explicit workspaceRank overrides X-derived rank', () {

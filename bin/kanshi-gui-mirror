@@ -1,0 +1,56 @@
+#!/bin/sh
+# kanshi-gui-mirror DESTINATION SOURCE [SCALING]
+#
+# Starts wl-mirror so that DESTINATION shows SOURCE's picture — unless one
+# already does. Written for the `exec` lines kanshi_gui puts into the kanshi
+# config.
+#
+# kanshi runs every exec line of a profile again on each `kanshictl reload`
+# and whenever the profile is re-applied after an output came and went. A bare
+# `exec wl-mirror …` therefore stacks one wl-mirror per reload, and on sway a
+# second fullscreen window on the same output takes the fullscreen slot away
+# from the first: when the newer one dies, the survivor is left as an ordinary
+# tiled window, and the "mirror" is a small box on an otherwise normal screen.
+# That is the failure reported after a presentation. The guard has to live in
+# a program of its own because kanshi hands exec lines to /bin/sh after
+# escaping only whitespace and quotes — `||`, `|` and `&` cannot be written
+# into the config line itself.
+#
+# The running GUI owns mirrors while it is up; it kills and replaces
+# whatever this script started. This only covers the time without it.
+set -u
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: kanshi-gui-mirror DESTINATION SOURCE [SCALING]" >&2
+  exit 64
+fi
+
+dst=$1
+src=$2
+scaling=${3:-fit}
+
+# Any wl-mirror whose argv targets this destination. Connector names are
+# kernel-issued (letters, digits, dashes), but the config is a text file
+# anyone can edit, so the name is escaped before it goes into the regex:
+# a `.` or `+` would otherwise match the wrong process or break the
+# pattern and let the guard fall open. Matched against the full command
+# line so the check sees the `--fullscreen-output` argument, anchored so
+# this script's own command line does not match itself.
+escape_re() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|\\/]/\\&/g'; }
+dst_re=$(escape_re "$dst")
+src_re=$(escape_re "$src")
+on_dst="(^|/)wl-mirror .*--fullscreen-output $dst_re( |\$)"
+
+# The mirror asked for is already running: nothing to do. The source is
+# wl-mirror's last argument, right after the destination.
+if pgrep -f -- "(^|/)wl-mirror .*--fullscreen-output $dst_re $src_re\$" >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Something else is mirrored onto this destination — a stale process from an
+# earlier profile. The config is the authority; replace it.
+if pgrep -f -- "$on_dst" >/dev/null 2>&1; then
+  pkill -TERM -f -- "$on_dst" >/dev/null 2>&1
+fi
+
+exec wl-mirror --scaling "$scaling" --fullscreen-output "$dst" "$src"

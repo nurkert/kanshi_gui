@@ -138,6 +138,17 @@ abstract class MonitorService {
   }) async =>
       true;
 
+  /// Makes sure the window of process [pid] is fullscreen, and says whether
+  /// it is once this returns.
+  ///
+  /// A mirror is only a mirror while wl-mirror's window fills its output. On
+  /// sway the window can lose that without the process noticing — a second
+  /// fullscreen view on the same workspace takes the slot, a keybinding
+  /// toggles it — and then the screen shows a small tile with the other
+  /// screen's picture in it. Backends without a window tree return true:
+  /// there is nothing to check and nothing to repair.
+  Future<bool> ensureFullscreen(int pid) async => true;
+
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway → wlr-randr → noop.
   ///

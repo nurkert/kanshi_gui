@@ -47,7 +47,8 @@ class PresetsBar extends StatelessWidget {
                 _PresetButton(
                   icon: Icons.copy_all_outlined,
                   label: 'Mirror',
-                  tooltip: 'Mirror everything onto the leftmost output',
+                  tooltip: 'Every screen shows the built-in panel '
+                      '(or the leftmost screen when there is none)',
                   onPressed: onMirror!,
                 ),
               if (outputIds.length > 1)
