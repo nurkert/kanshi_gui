@@ -226,7 +226,7 @@ class KanshiConfigWriter {
       // stacked them so the pointer could not get "lost" on the destination,
       // and with wl-mirror running that painted wl-mirror's own surface onto
       // the source, which wl-mirror then captured again: an infinity-mirror
-      // cascade. Since 2.3.3 the destination sits a pointer-proof gap away
+      // cascade. Since 2.3.4 the destination sits a pointer-proof gap away
       // instead (`MirrorGeometry.withDetachedDestinations`, applied above),
       // which keeps the pointer on the screens the user can see.
       final posX = m.x < 0 ? 0 : m.x.toInt();
