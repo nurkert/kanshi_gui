@@ -21,6 +21,13 @@ class FakeMirrorRunner extends ChangeNotifier implements MirrorRunner {
   @override
   String? mirrorSourceFor(String dstId) => _active[dstId];
 
+  /// Pids the fake reports per destination; unset destinations report null,
+  /// like a spawn whose pid has not resolved yet.
+  final Map<String, int> pids = {};
+
+  @override
+  int? pidFor(String dstId) => pids[dstId];
+
   @override
   Set<String> get failedDestinations => Set.unmodifiable(_failed);
 

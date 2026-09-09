@@ -88,7 +88,31 @@ class ScreenStrip extends StatelessWidget {
               ],
             ),
             const SizedBox(height: Sp.x2),
-            if (isMirrorDestination)
+            if (isMirrorDestination &&
+                controller.mirrorRunner.failedDestinations.contains(m.id))
+              // The runner gave up: wl-mirror exited three times in thirty
+              // seconds. The user reads "mirror" on the tile and sees a bare
+              // desktop on the screen; without this line the two never meet.
+              Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 16, color: c.textSecondary),
+                  const SizedBox(width: Sp.x2),
+                  Expanded(
+                    child: Text(
+                      'The mirror stopped: wl-mirror keeps exiting on '
+                      '${m.id}.',
+                      style: T.caption.copyWith(color: c.textSecondary),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async =>
+                        onResult(await controller.retryMirror(m.id)),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              )
+            else if (isMirrorDestination)
               Text(
                 'Showing the same picture as ${m.mirrorOf}.',
                 style: T.caption.copyWith(color: c.textSecondary),

@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:collection/collection.dart' show IterableExtension;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
@@ -67,6 +69,19 @@ const double _presetsLaneHeight = 80;
 
 class _HomePageState extends State<HomePage> {
   final Map<String, MonitorTileData> _dragRollback = {};
+
+  /// The tile under the pointer right now, drawn above every other tile
+  /// for as long as the drag lasts. Without this a screen picked up from
+  /// the left slid *under* the ones to its right, and dropping it onto one
+  /// of them to mirror meant aiming at a tile you could no longer see.
+  String? _draggingId;
+
+  /// While a drag hovers far enough over another screen that a drop would
+  /// mirror, the dragged tile is drawn in that screen's place and shape.
+  /// The rect is in canvas coordinates; the model underneath keeps
+  /// following the pointer, so a drop still asks the same question it
+  /// would have asked without the preview.
+  ({String dragged, String target, Rect rect})? _mirrorDropPreview;
   bool? _wlMirrorAvailable;
   /// Environment warnings from [KanshiController.checkHealth], surfaced as a
   /// dismissible banner. Empty until the post-frame probe completes.
@@ -637,7 +652,15 @@ class _HomePageState extends State<HomePage> {
                                   ),
                                 ),
                               ),
-                            ...layout.displayMonitors.map((tile) {
+                            // The dragged tile last, so it paints on top.
+                            // Keys keep each tile's state across the
+                            // reorder.
+                            ...[
+                              ...layout.displayMonitors
+                                  .where((t) => t.id != _draggingId),
+                              ...layout.displayMonitors
+                                  .where((t) => t.id == _draggingId),
+                            ].map((tile) {
                               final original = c.activeMonitors
                                   .firstWhere((m) => m.id == tile.id);
                               final mirrorEnabled = c.supportsMirror &&
@@ -653,8 +676,11 @@ class _HomePageState extends State<HomePage> {
                                           m.mirrorOf == null)
                                       .toList()
                                   : const <MonitorTileData>[];
+                              // The same set the writer ranks: a mirror
+                              // destination owns no workspaces, so it must
+                              // not take a rank slot in the menu either.
                               final enabledMons = c.activeMonitors
-                                  .where((m) => m.enabled)
+                                  .where((m) => m.enabled && m.mirrorOf == null)
                                   .toList();
                               final ranks =
                                   resolveWorkspaceRanks(enabledMons);
@@ -728,6 +754,26 @@ class _HomePageState extends State<HomePage> {
                                         await c.setMirror(tile.id, srcId))
                                     : null,
                                 mirrorSources: sources,
+                                onMirrorTo: mirrorEnabled
+                                    ? (destId) async => _toast(
+                                        await c.setMirror(destId, tile.id))
+                                    : null,
+                                // Screens that could show this one: enabled,
+                                // not this tile, not already its copy, and
+                                // not feeding a copy of their own (that
+                                // would be a chain). One that copies a
+                                // third screen is fine — it is re-pointed.
+                                mirrorTargets: mirrorEnabled
+                                    ? c.activeMonitors
+                                        .where((m) =>
+                                            m.id != tile.id &&
+                                            m.enabled &&
+                                            m.mirrorOf != tile.id &&
+                                            !(layout.mirroredBy[m.id]
+                                                    ?.isNotEmpty ??
+                                                false))
+                                        .toList()
+                                    : const <MonitorTileData>[],
                                 mirroredBy:
                                     layout.mirroredBy[tile.id] ??
                                         const <String>[],
@@ -752,6 +798,13 @@ class _HomePageState extends State<HomePage> {
                                       c.identifyNumbers[dst]!,
                                 ],
                                 isSelected: tile.id == _selectedId,
+                                mirrorPreviewRect:
+                                    _mirrorDropPreview?.dragged == tile.id
+                                        ? _mirrorDropPreview!.rect
+                                        : null,
+                                isMirrorDropTarget:
+                                    _mirrorDropPreview?.target == tile.id,
+                                onDragCancel: _clearDragVisuals,
                                 onSelect: () =>
                                     setState(() => _selectedId = tile.id),
                               );
@@ -822,6 +875,39 @@ class _HomePageState extends State<HomePage> {
   void _onDragStart(MonitorTileData original) {
     _dragRollback[original.id] = original;
     c.beginDragSession(original.id, original);
+    setState(() => _draggingId = original.id);
+  }
+
+  void _clearDragVisuals() {
+    if (_draggingId == null && _mirrorDropPreview == null) return;
+    setState(() {
+      _draggingId = null;
+      _mirrorDropPreview = null;
+    });
+  }
+
+  /// Recomputes [_mirrorDropPreview] for the tile that just moved.
+  void _updateMirrorDropPreview(
+      MonitorTileData draggedAbs, DisplayLayout layout) {
+    final mirrorEnabled = c.supportsMirror && _wlMirrorAvailable == true;
+    final target = mirrorEnabled
+        ? LayoutMath.detectMirrorDropTarget(
+            dragged: draggedAbs, all: c.activeMonitors)
+        : null;
+    final shown = target == null
+        ? null
+        : layout.displayMonitors
+            .where((t) => t.id == target.id)
+            .firstOrNull;
+    final next = shown == null
+        ? null
+        : (
+            dragged: draggedAbs.id,
+            target: shown.id,
+            rect: Rect.fromLTWH(shown.x, shown.y, shown.width, shown.height),
+          );
+    if (next == _mirrorDropPreview) return;
+    setState(() => _mirrorDropPreview = next);
   }
 
   void _onTileUpdate(MonitorTileData updated, DisplayLayout layout) {
@@ -870,9 +956,11 @@ class _HomePageState extends State<HomePage> {
     c.updateMonitor(updatedAbs);
     // Drive snap guides while the drag is in progress.
     c.previewSnap(updatedAbs);
+    _updateMirrorDropPreview(updatedAbs, layout);
   }
 
   void _onDragEnd(MonitorTileData tile) async {
+    _clearDragVisuals();
     final mons = c.activeMonitors;
     final idx = mons.indexWhere((m) => m.id == tile.id);
     if (idx == -1) {
@@ -889,35 +977,51 @@ class _HomePageState extends State<HomePage> {
         ? LayoutMath.detectMirrorDropTarget(dragged: dragged, all: mons)
         : null;
     if (mirrorTarget != null) {
-      final confirm = await showDialog<bool>(
+      // Dropping one screen on another says "these two should show the same
+      // thing" — it does not say which one keeps its picture. The dialog
+      // used to decide that silently (the dragged screen became the copy),
+      // and a laptop dragged onto a television ended up showing the
+      // television, shrunk, while the audience saw the desktop. Ask, and
+      // put the likely answer first: the built-in panel is the source when
+      // there is one, otherwise the screen the user picked up.
+      final draggedIsSource = MirrorGeometry.isInternalPanel(dragged.id) ||
+          !MirrorGeometry.isInternalPanel(mirrorTarget.id);
+      final likely = draggedIsSource
+          ? (dst: mirrorTarget.id, src: dragged.id)
+          : (dst: dragged.id, src: mirrorTarget.id);
+      final other = (dst: likely.src, src: likely.dst);
+      final choice = await showDialog<({String dst, String src})>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text("Mirror ${dragged.id} onto ${mirrorTarget.id}?"),
+          title: const Text('Show the same picture on both?'),
           content: Text(
-            '${dragged.id} will display the same content as '
-            '${mirrorTarget.id}. Its position is locked to the source — '
-            'release the mirror via the three-dot menu when you want '
-            '${dragged.id} back as an independent screen.',
+            'Pick which screen shows the other one. The copy cannot be '
+            'used as a screen of its own until you stop mirroring from '
+            'the three-dot menu.',
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, other),
+              child: Text('${other.dst} shows ${other.src}'),
+            ),
             ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Mirror'),
+              onPressed: () => Navigator.pop(ctx, likely),
+              child: Text('${likely.dst} shows ${likely.src}'),
             ),
           ],
         ),
       );
-      if (confirm == true) {
+      if (choice != null) {
         // Roll back the drag-position write so the mirror takes over
         // an unchanged layout, then set up the mirror.
         final rollback = _dragRollback.remove(dragged.id);
         if (rollback != null) c.updateMonitor(rollback);
         c.endDragSession(dragged.id);
-        _toast(await c.setMirror(dragged.id, mirrorTarget.id));
+        _toast(await c.setMirror(choice.dst, choice.src));
         return;
       }
     }

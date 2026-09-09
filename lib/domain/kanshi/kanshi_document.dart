@@ -223,7 +223,11 @@ class KanshiDocument {
             body.contains('move workspace to output')) ||
         body.contains('workspace number 1') ||
         body.contains('.current_kanshi_profile') ||
-        body.contains('wl-mirror');
+        body.contains('wl-mirror') ||
+        // The mirror launcher (2.3.3) does not carry the substring
+        // `wl-mirror`; without this the app would not recognise its own
+        // line and write a second one beside it on every save.
+        body.contains('kanshi-gui-mirror');
   }
 
   /// Appends a whole profile, source text and all.

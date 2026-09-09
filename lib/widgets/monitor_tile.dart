@@ -68,16 +68,26 @@ class MonitorTile extends StatefulWidget {
   final VoidCallback? onCustomMode;
   final VoidCallback? onCustomModeRevert;
   final int? identifyNumber;
-  /// When non-null the three-dot menu offers a "Mirror onto …" submenu
-  /// (and a "Stop mirroring" item if this tile already has [data.mirrorOf]
-  /// set). The HomePage only wires this up on backends that support
-  /// mirroring AND when wl-mirror is installed; otherwise it stays null
-  /// and the menu omits the mirror entries entirely.
+  /// When non-null the three-dot menu offers a "Show another screen here…"
+  /// submenu — this tile becomes the destination and shows the chosen
+  /// source's picture — and a "Stop mirroring" item if this tile already
+  /// has [data.mirrorOf] set. The HomePage only wires this up on backends
+  /// that support mirroring AND when wl-mirror is installed; otherwise it
+  /// stays null and the menu omits the mirror entries entirely.
   final ValueChanged<String?>? onSetMirror;
   /// Other monitors in the same profile that are valid mirror sources
   /// (enabled, not themselves mirrors, and not this tile). Used to populate
-  /// the "Mirror onto …" submenu.
+  /// the "Show another screen here…" submenu.
   final List<MonitorTileData> mirrorSources;
+  /// The other direction: make the chosen screen show *this* tile's
+  /// picture. The common case — a laptop being put on a projector — and
+  /// the one the words "mirror my screen" mean to most people, so it is the
+  /// first mirror entry in the menu. Called with the destination's id.
+  final ValueChanged<String>? onMirrorTo;
+  /// Screens that can be made to show this tile: enabled, not this tile,
+  /// and not already showing it. Populates the "Show this screen on…"
+  /// submenu.
+  final List<MonitorTileData> mirrorTargets;
   /// Output ids that mirror *this* tile. When non-empty the tile renders
   /// with the cyan mirror accent and a "→ Mirrors to A, B" label, and the
   /// three-dot menu gains a "Stop mirroring X" entry per destination so
@@ -121,6 +131,16 @@ class MonitorTile extends StatefulWidget {
   final bool isSelected;
   /// Tapping the tile (as opposed to dragging) selects it.
   final VoidCallback? onSelect;
+  /// While set, the tile is drawn in this canvas rect instead of at the
+  /// pointer: the drag hovers over a screen a drop would mirror, so the
+  /// tile takes that screen's place and shape to show what the drop does.
+  /// Animated in and out; the pointer position is still tracked underneath.
+  final Rect? mirrorPreviewRect;
+  /// True for the screen another tile is hovering over as a mirror drop.
+  final bool isMirrorDropTarget;
+  /// Fired when a drag is cancelled from outside (hotplug, profile switch)
+  /// rather than released, so the parent can drop its drag-only visuals.
+  final VoidCallback? onDragCancel;
 
   const MonitorTile({
     super.key,
@@ -147,6 +167,8 @@ class MonitorTile extends StatefulWidget {
     this.identifyNumber,
     this.onSetMirror,
     this.mirrorSources = const [],
+    this.onMirrorTo,
+    this.mirrorTargets = const [],
     this.mirroredBy = const [],
     this.onStopMirroredBy,
     this.workspacePositionCount = 0,
@@ -157,6 +179,9 @@ class MonitorTile extends StatefulWidget {
     this.mirroredByNumbers = const [],
     this.isSelected = false,
     this.onSelect,
+    this.mirrorPreviewRect,
+    this.isMirrorDropTarget = false,
+    this.onDragCancel,
   });
 
   @override
@@ -173,6 +198,9 @@ class _MonitorTileState extends State<MonitorTile> {
   int? _sessionEpoch;
   /// The tile's `position` at drag start, used to roll back on cancel.
   Offset? _dragOrigin;
+  /// Until when the move back from a mirror preview to the pointer is
+  /// animated. Past it, position updates are applied at once again.
+  DateTime? _returnAnimationUntil;
 
   @override
   void initState() {
@@ -185,6 +213,10 @@ class _MonitorTileState extends State<MonitorTile> {
   @override
   void didUpdateWidget(MonitorTile oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.mirrorPreviewRect != null && widget.mirrorPreviewRect == null) {
+      _returnAnimationUntil =
+          DateTime.now().add(const Duration(milliseconds: 200));
+    }
     // Falls sich die Koordinaten ändern, aktualisieren wir die Position.
     position = Offset(widget.data.x, widget.data.y);
     tileWidth = widget.data.width;
@@ -223,11 +255,34 @@ class _MonitorTileState extends State<MonitorTile> {
     final canResize = canDrag;
     final canChangeMode = canDrag;
 
-    return Positioned(
-      left: position.dx,
-      top: position.dy,
-      width: tileWidth,
-      height: tileHeight,
+    // Hovering over a screen a drop would mirror: take that screen's place
+    // and shape, in the mirror colour, so the drop is shown before it is
+    // made. The move there and back is animated; ordinary dragging is not,
+    // because a tile that eases towards the pointer feels like it is being
+    // towed.
+    final preview = widget.mirrorPreviewRect;
+    final previewing = preview != null;
+    final returning = _returnAnimationUntil != null &&
+        DateTime.now().isBefore(_returnAnimationUntil!);
+    final mirrorHover = previewing || widget.isMirrorDropTarget;
+    final borderColor = mirrorHover
+        ? mirrorColor
+        : widget.isSelected
+            ? c.accent
+            : (isEnabled ? c.hairlineStrong : c.hairline);
+    final borderWidth = mirrorHover || widget.isSelected
+        ? Borders.ring
+        : Borders.hairline;
+
+    return AnimatedPositioned(
+      duration: previewing || returning
+          ? const Duration(milliseconds: 180)
+          : Duration.zero,
+      curve: Curves.easeOutCubic,
+      left: preview?.left ?? position.dx,
+      top: preview?.top ?? position.dy,
+      width: preview?.width ?? tileWidth,
+      height: preview?.height ?? tileHeight,
       child: Stack(
         children: [
           GestureDetector(
@@ -290,13 +345,14 @@ class _MonitorTileState extends State<MonitorTile> {
                             ? c.screenFillSelected
                             : c.screenFill),
                     border: Border.all(
-                      color: widget.isSelected
-                          ? c.accent
-                          : (isEnabled ? c.hairlineStrong : c.hairline),
-                      width: widget.isSelected
-                          ? Borders.ring
-                          : Borders.hairline,
+                      color: borderColor,
+                      width: borderWidth,
                     ),
+                    // Same glow the status dot wears, scaled up: the mirror
+                    // colour itself, blurred, no private alpha.
+                    boxShadow: mirrorHover
+                        ? [BoxShadow(color: mirrorColor, blurRadius: 18)]
+                        : null,
                   ),
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 10),
@@ -323,13 +379,17 @@ class _MonitorTileState extends State<MonitorTile> {
                             ),
                           ],
                         ),
-                        if (isMirrorSource || isMirrorDestination)
+                        if (previewing ||
+                            isMirrorSource ||
+                            isMirrorDestination)
                           Padding(
                             padding: const EdgeInsets.only(top: 6),
                             child: Text(
-                              isMirrorSource
-                                  ? '⇄ Mirrors to ${widget.mirroredBy.join(", ")}'
-                                  : '⇄ Mirror of ${widget.data.mirrorOf}',
+                              previewing
+                                  ? '⇄ Drop to mirror'
+                                  : isMirrorSource
+                                      ? '⇄ Mirrors to ${widget.mirroredBy.join(", ")}'
+                                      : '⇄ Mirror of ${widget.data.mirrorOf}',
                               textAlign: TextAlign.center,
                               style: T.micro.copyWith(
                                   fontWeight: FontWeight.w600,
@@ -489,6 +549,27 @@ class _MonitorTileState extends State<MonitorTile> {
                         leadingIcon: const Icon(Icons.link_off, size: 18),
                         child: Text('Stop mirroring to $dst'),
                       ),
+                  // Two directions, each named by what ends up where. The
+                  // old single entry read "Mirror onto X" and made THIS tile
+                  // the copy of X — the opposite of what someone putting a
+                  // laptop on a projector means, and what one user got on
+                  // stage: the laptop showing a shrunken television.
+                  if (widget.onMirrorTo != null &&
+                      !isMirrorDestination &&
+                      widget.mirrorTargets.isNotEmpty)
+                    SubmenuButton(
+                      leadingIcon:
+                          const Icon(Icons.screen_share_outlined, size: 18),
+                      menuChildren: [
+                        for (final dst in widget.mirrorTargets)
+                          MenuItemButton(
+                            onPressed: () =>
+                                widget.onMirrorTo!.call(dst.id),
+                            child: Text(_screenLabel(dst)),
+                          ),
+                      ],
+                      child: const Text('Show this screen on…'),
+                    ),
                   if (widget.onSetMirror != null &&
                       !isMirrorDestination &&
                       widget.mirrorSources.isNotEmpty)
@@ -500,14 +581,10 @@ class _MonitorTileState extends State<MonitorTile> {
                           MenuItemButton(
                             onPressed: () =>
                                 widget.onSetMirror!.call(src.id),
-                            child: Text(
-                              src.manufacturer.isNotEmpty
-                                  ? '${src.id} (${src.manufacturer})'
-                                  : src.id,
-                            ),
+                            child: Text(_screenLabel(src)),
                           ),
                       ],
-                      child: const Text('Mirror onto…'),
+                      child: const Text('Show another screen here…'),
                     ),
                   if (widget.onSetWorkspaceRank != null &&
                       widget.workspacePositionCount > 1 &&
@@ -650,6 +727,7 @@ class _MonitorTileState extends State<MonitorTile> {
   }
 
   void _abortDrag() {
+    widget.onDragCancel?.call();
     final origin = _dragOrigin;
     if (origin != null && mounted) {
       setState(() => position = origin);
@@ -727,3 +805,8 @@ class _MonitorTileState extends State<MonitorTile> {
     return items;
   }
 }
+
+/// Port plus the maker where one is known: `DP-1 (Samsung)`. What the mirror
+/// submenus show, so the two directions list screens the same way.
+String _screenLabel(MonitorTileData m) =>
+    m.manufacturer.isNotEmpty ? '${m.id} (${m.manufacturer})' : m.id;

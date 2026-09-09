@@ -1,5 +1,84 @@
 # Changelog
 
+## 2.3.3
+
+### Fixed
+
+- **A mirror that switched itself off within minutes, and showed the wrong
+  way round to begin with.** Reported from a talk: the laptop was to be
+  mirrored onto a television so the room could follow a VM. The picture on
+  the laptop was tiny, the pointer kept getting lost off the bottom-right
+  corner, and after five minutes at most the mirror was gone and the two
+  screens were separate again.
+
+  Three things, all in the app.
+
+  The direction was inverted. Dropping the laptop's tile on the television's
+  asked "Mirror eDP-1 onto DP-1?", and that made the *laptop* the copy: every
+  workspace went to the television, and the laptop showed the television's
+  desktop shrunk to fit. The config from that day says so:
+  `# kanshi_gui:mirror 'eDP-1'='DP-1'`. The drop now asks which screen should
+  show the other, with the built-in panel proposed as the source; the tile
+  menu offers both directions by name ("Show this screen on…", "Show another
+  screen here…"); and the Mirror preset copies the built-in panel rather than
+  whichever screen happened to be leftmost.
+
+  The mirror was killed by its own backup. kanshi runs every `exec` line of a
+  profile again on each reload, and the config carried a bare
+  `exec wl-mirror …` line, so each reload started a second wl-mirror on the
+  same output. Measured on sway 1.12: the newer window takes the fullscreen
+  slot, the older one is demoted to a tiled window, and when the newer one is
+  removed the survivor stays tiled — a 640 px wide box with the other
+  screen's picture in it. Reloads happen on every edit, so the mirror lasted
+  as long as the user left the app alone. The line now goes through
+  `kanshi-gui-mirror`, a launcher shipped with the package that starts
+  nothing when a wl-mirror already targets the destination (the guard cannot
+  be written into the config line itself: kanshi hands exec lines to the
+  shell with `||` and `|` bare). The runner also relaunches its own process
+  whenever it finds a duplicate next to it, and while a mirror is up the app
+  checks every four seconds that wl-mirror's window is still fullscreen and
+  puts it back when it is not.
+
+  The pointer could wander onto the copy. A mirror destination was applied
+  flush against its source, so the pointer slid over to a screen that shows
+  someone else's picture, took focus with it, and the next keystroke went
+  nowhere visible. The destination is now applied two thousand logical
+  pixels to the right of the independent screens; wlroots moves the pointer
+  to the closest point of the layout, so it stays where the user can see it.
+  The canvas keeps the screen's real position, and releasing the mirror puts
+  a screen that was read back detached next to the others again.
+
+  A mirror whose wl-mirror keeps exiting is now named in the screen's
+  properties strip, with a Retry.
+
+- **Two reviews of the above, folded in.** The runner waits for its own
+  process's pid before judging the process table by it, so a second start in
+  the moment after a spawn no longer kills the child it just started; a stop
+  that lands while a relaunch is mid-flight wins, and nothing is spawned
+  untracked; a late pid answer from a replaced process cannot overwrite its
+  successor's. The fullscreen watch follows the runner's own changes too, so
+  it ends when a mirror dies on its own and never starts after the app has
+  shut it down. A screen that is already feeding a copy cannot be made a copy
+  itself (a chain wl-mirror would not follow), in the menu and in the
+  controller. The launcher escapes the connector name before it goes into
+  `pgrep`'s pattern, checks the source as well as the destination, and
+  replaces a stale mirror onto the destination instead of leaving it. The
+  in-place save recognises the launcher line as its own, so repeated saves do
+  not stack copies of it, and the parser reads it back when the annotation
+  is missing. The workspace-position menu no longer counts a mirror
+  destination as a screen that could own workspaces.
+
+### Changed
+
+- **Dragging a screen keeps it on top, and shows the mirror before the
+  drop.** A screen picked up from the left used to slide under the ones to
+  its right, so dropping it onto one of them to mirror meant aiming at a tile
+  you could no longer see. The dragged tile now paints above every other. And
+  once it covers another screen far enough that a drop would mirror, it
+  takes that screen's place and shape in the mirror colour, with "Drop to
+  mirror" on it — the move there and back is animated; ordinary dragging is
+  not, because a tile that eases towards the pointer feels towed.
+
 ## 2.3.2
 
 ### Fixed

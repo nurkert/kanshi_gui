@@ -492,9 +492,28 @@ class KanshiConfigParser {
     for (final raw in block.split('\n')) {
       final line = raw.trim();
       final lower = line.toLowerCase();
-      if (!lower.startsWith('exec') || !lower.contains('wl-mirror')) {
+      if (!lower.startsWith('exec')) continue;
+      // The launcher form: `exec kanshi-gui-mirror DST SRC [SCALING]`.
+      final launcherIdx = lower.indexOf('kanshi-gui-mirror');
+      if (launcherIdx >= 0) {
+        // The writer double-quotes the names (scfg strips those before
+        // kanshi sees them); the tokenizer only knows single quotes.
+        final args = _tokenizeShell(
+                line.substring(launcherIdx + 'kanshi-gui-mirror'.length).trim())
+            .map((t) => t.length >= 2 && t.startsWith('"') && t.endsWith('"')
+                ? t.substring(1, t.length - 1)
+                : t)
+            .toList();
+        if (args.length >= 2) {
+          final tile = byId[args[0]];
+          if (tile != null) {
+            byId[args[0]] = tile.copyWith(mirrorOf: args[1]);
+            dirty = true;
+          }
+        }
         continue;
       }
+      if (!lower.contains('wl-mirror')) continue;
       // Skip the guarded exec form the writer emits today: it embeds
       // the substring `wl-mirror` inside a `pgrep -f "wl-mirror …"`
       // pattern, which this tokenising scraper would otherwise misread

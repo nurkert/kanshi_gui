@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/output_transform.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -352,6 +353,42 @@ class SwayBackend implements MonitorService {
   /// Wraps a workspace name in double quotes for swaymsg, escaping
   /// embedded `"` and `\` so a free-form name survives the IPC parser
   /// (e.g. `1: code "main"`).
+  @override
+  Future<bool> ensureFullscreen(int pid) async {
+    final bin = await _binary();
+    final tree = await _runner.run(bin, ['-t', 'get_tree']);
+    if (tree.exitCode != 0) return false;
+    final mode = _fullscreenModeOf(pid, jsonDecode(tree.stdout as String));
+    // Not mapped yet, or already gone. Nothing to repair either way; the
+    // process side is the runner's business.
+    if (mode == null) return false;
+    if (mode != 0) return true;
+    final r = await _runner.run(bin, ['[pid=$pid]', 'fullscreen', 'enable']);
+    return r.exitCode == 0;
+  }
+
+  /// sway's `fullscreen_mode` for the view of [pid] in a `get_tree` result:
+  /// 0 none, 1 on its output, 2 global. Null when no view carries that pid.
+  @visibleForTesting
+  static int? fullscreenModeOfPid(int pid, Object? tree) =>
+      _fullscreenModeOf(pid, tree);
+
+  static int? _fullscreenModeOf(int pid, Object? node) {
+    if (node is! Map<String, dynamic>) return null;
+    if (node['pid'] == pid && node['fullscreen_mode'] is int) {
+      return node['fullscreen_mode'] as int;
+    }
+    for (final key in const ['nodes', 'floating_nodes']) {
+      final children = node[key];
+      if (children is! List) continue;
+      for (final child in children) {
+        final found = _fullscreenModeOf(pid, child);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
   static String _quoteWsName(String name) {
     final escaped = name.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
     return '"$escaped"';

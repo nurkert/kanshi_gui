@@ -90,8 +90,12 @@ class FakeMonitorService implements MonitorService {
   @override
   Future<ProcessResult> apply(MonitorTileData target) async {
     calls.add('apply ${target.id}');
+    applied.add(target);
     return applyResult;
   }
+
+  /// Every tile handed to [apply], with the geometry it was applied at.
+  final List<MonitorTileData> applied = [];
 
   @override
   Future<ProcessResult> applyCustomMode(
@@ -198,5 +202,18 @@ class FakeMonitorService implements MonitorService {
       {Duration timeout = const Duration(milliseconds: 400)}) async {
     calls.add('waitForOutputClear');
     return true;
+  }
+
+  /// Pids handed to [ensureFullscreen], in order.
+  final List<int> ensureFullscreenCalls = [];
+
+  /// What [ensureFullscreen] reports. Defaults to "fullscreen, nothing to do".
+  bool ensureFullscreenResult = true;
+
+  @override
+  Future<bool> ensureFullscreen(int pid) async {
+    calls.add('ensureFullscreen $pid');
+    ensureFullscreenCalls.add(pid);
+    return ensureFullscreenResult;
   }
 }
