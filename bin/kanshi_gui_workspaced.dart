@@ -69,9 +69,14 @@ Future<void> main(List<String> args) async {
   }
   final once = args.contains('--once');
   final dryRun = args.contains('--dry-run');
-  // A dry run that says nothing is a dry run that answers nothing.
-  final verbose =
-      dryRun || args.contains('--verbose') || args.contains('-v');
+  // Decisions are logged unless asked not to. They are rare — one line per
+  // dock, per reload, per correction — and a helper that moved nothing for
+  // a week with an empty journal is a helper nobody can debug. `-v` is kept
+  // so old unit files and habits still work; a dry run always speaks.
+  final verbose = dryRun ||
+      args.contains('--verbose') ||
+      args.contains('-v') ||
+      !(args.contains('--quiet') || args.contains('-q'));
 
   final daemon = _Daemon(verbose: verbose, dryRun: dryRun);
   if (once) {
@@ -103,7 +108,8 @@ remembers: at login, whenever you plug a screen in, and after a sway reload.
 
   --once      apply the current setup's placement and exit
   --dry-run   work out the placement and print it, changing nothing
-  -v          log what it decides
+  -q          say nothing (decisions are logged by default; see
+              `journalctl --user -u kanshi-gui-workspaces`)
   -h          this text
 
 It also puts ONE workspace right when you switch to it and it is on the wrong
@@ -244,6 +250,8 @@ class _Daemon {
     _settleTimer = null;
     _configTimer?.cancel();
     _configTimer = null;
+    _verifyTimer?.cancel();
+    _verifyTimer = null;
     core.replanPending(false);
     _subscriber?.kill(ProcessSignal.sigterm);
     _subscriber = null;
@@ -274,6 +282,25 @@ class _Daemon {
   /// Debounce for a changed settings or kanshi config file. Deliberately not
   /// the settle timer — see [_watchTheFiles].
   Timer? _configTimer;
+
+  /// The look back at the desk after a repair. See
+  /// [WorkspaceDaemonCore.verifyRepair] for why one is needed.
+  Timer? _verifyTimer;
+
+  /// Long enough for kanshi to finish switching the new screens on, short
+  /// enough that a desk left wrong is put right before anyone starts
+  /// working on it.
+  static const _verifyAfter = Duration(seconds: 3);
+
+  void _scheduleVerify() {
+    _verifyTimer?.cancel();
+    _verifyTimer = Timer(_verifyAfter, () {
+      unawaited(core.serialised(() async {
+        // A repair that was sent again gets looked at again.
+        if (await core.verifyRepair()) _scheduleVerify();
+      }));
+    });
+  }
 
   /// Re-plans when the app changes its mind.
   ///
@@ -415,6 +442,7 @@ class _Daemon {
             } finally {
               core.replanPending(false);
             }
+            _scheduleVerify();
           }));
         });
         return;

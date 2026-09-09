@@ -294,6 +294,51 @@ class WorkspaceDaemonCore {
     }
   }
 
+  /// How often a repair that did not take is sent again before the helper
+  /// leaves the desk alone until the next screen change.
+  static const int repairRetryCeiling = 2;
+
+  int _repairRetries = 0;
+
+  /// Asks the desk whether the last repair took, and repairs once more when
+  /// it did not. Returns true when it sent another repair.
+  ///
+  /// A repair is a chain of `move workspace to output X`, and sway refuses a
+  /// move onto a screen it has not switched on yet. Docking is exactly the
+  /// moment that happens: the helper's plan is ready after a second and a
+  /// half, kanshi is still setting modes on the new screens, and every move
+  /// aimed at them is dropped with an error the helper never reads. The desk
+  /// then stays wrong for the whole session, and nothing says so. This is
+  /// the check that says so — and gives it one more go.
+  Future<bool> verifyRepair({DateTime? now}) async {
+    final plan = _plan;
+    if (plan == null) return false;
+    if (_replanning) return false;
+    final actual = await sway.workspaceOutputs();
+    final wrong = <String>[
+      for (final e in actual.entries)
+        if (plan.map[e.key] != null &&
+            plan.map[e.key] != e.value &&
+            !_movedByHand.contains(e.key))
+          '${e.key} on ${e.value}, wanted ${plan.map[e.key]}',
+    ];
+    if (wrong.isEmpty) {
+      _repairRetries = 0;
+      log('placement verified: every workspace is on its screen');
+      return false;
+    }
+    if (_repairRetries >= repairRetryCeiling) {
+      log('placement still wrong after $repairRetryCeiling repairs '
+          '(${wrong.join('; ')}); leaving it until the next screen change');
+      return false;
+    }
+    _repairRetries += 1;
+    log('repair did not take (${wrong.join('; ')}); '
+        'repairing again, $_repairRetries of $repairRetryCeiling');
+    await apply(ApplyReason.outputsChanged, now: now);
+    return true;
+  }
+
   static bool _sameMap(Map<int, String>? a, Map<int, String>? b) {
     if (a == null || b == null) return false;
     if (a.length != b.length) return false;
@@ -360,7 +405,10 @@ class WorkspaceDaemonCore {
     // workspace to its NEW screen looked like a decision by the user, after
     // which the helper stopped placing it. Comparing the map catches that:
     // the plan it was recorded against no longer exists.
-    if (!_sameMap(_plan?.map, plan.map)) _movedByHand.clear();
+    if (!_sameMap(_plan?.map, plan.map)) {
+      _movedByHand.clear();
+      _repairRetries = 0;
+    }
     _plan = plan;
 
     // Which half runs is the difference between invisible and disruptive.

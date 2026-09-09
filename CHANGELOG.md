@@ -1,6 +1,10 @@
 # Changelog
 
-## 2.3.3
+## 2.3.4
+
+2.3.3 was tagged with everything below except the last two fixes and was
+never published: the release pipeline died before building anything (see the
+last item). The tag is gone; this is the release.
 
 ### Fixed
 
@@ -67,6 +71,25 @@
   not stack copies of it, and the parser reads it back when the annotation
   is missing. The workspace-position menu no longer counts a mirror
   destination as a screen that could own workspaces.
+
+- **The workspace helper says what it decides, and checks that a repair
+  took.** Reported as "it silently stopped working": for a week every dock
+  put the workspaces where the setting says, then it did not, and
+  `journalctl --user -u kanshi-gui-workspaces` had nothing to say, because
+  the helper only spoke when started with `-v`. It now logs every decision
+  by default (one line per dock, reload or correction; `-q` silences it).
+  And a repair is a chain of `move workspace to output X`, which sway drops
+  for a screen it has not switched on yet — exactly where a dock is a second
+  and a half in, while kanshi is still setting modes. The helper now looks
+  at the desk three seconds after a repair, says which workspace is still on
+  the wrong screen, and repairs once more, at most twice per placement.
+
+- **Release pipeline: bullseye's security repository is gone from the
+  mirrors.** Debian 11 left LTS on 2026-08-31 and its `.deb` files under
+  `bullseye-security` were removed from deb.debian.org while the index was
+  left behind, expired. The build container could not install git. The
+  container now uses the snapshot.debian.org sources its image was built
+  from, which never move.
 
 ### Changed
 

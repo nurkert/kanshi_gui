@@ -40,6 +40,19 @@ jobs:
       # abandoned and the version bumped. That is what happened to 2.1.5+49.
       - name: Bootstrap container tools
         run: |
+          # Bullseye left LTS on 2026-08-31, and its security repository has
+          # since been taken off deb.debian.org: the index is still served,
+          # its Release file has expired, and the .deb files under it are
+          # gone. The image itself was built from that repository, so nothing
+          # depending on an installed package (perl, sudo, xz) can be
+          # installed any more — the container could not even get git, and
+          # the 2.3.3 release died here.
+          #
+          # The image carries the answer in its own sources.list: commented
+          # snapshot.debian.org lines pinned to the day it was built. Those
+          # never move and never expire. Switch to them.
+          sed -i 's|^# deb http://snapshot|deb http://snapshot|; s|^deb http://deb.debian.org|# deb http://deb.debian.org|' /etc/apt/sources.list
+          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-snapshot
           for attempt in 1 2 3; do
             apt-get update && apt-get install -y --no-install-recommends \
               git curl ca-certificates xz-utils unzip sudo && exit 0
