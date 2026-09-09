@@ -83,6 +83,11 @@ class FakeProcessRunner implements ProcessRunner {
   /// specific spawns.
   int _nextPid = 10000;
 
+  /// How long a spawned process takes to report its pid. Null resolves it
+  /// on the next microtask; a real `Process.start` takes milliseconds, and
+  /// tests of the window before the pid is known set this.
+  Duration? pidDelay;
+
   @override
   ProcessStream stream(String executable, List<String> arguments) {
     final invocation = [executable, ...arguments];
@@ -90,6 +95,7 @@ class FakeProcessRunner implements ProcessRunner {
     final key = invocation.join(' ');
     final ctl = openStream(key);
     final pid = _nextPid++;
+    final delay = pidDelay;
     return ProcessStream(
       lines: ctl.stream,
       kill: () async {
@@ -99,7 +105,9 @@ class FakeProcessRunner implements ProcessRunner {
         // a fresh process with its own pipes each time.
         _streamControllers.remove(key);
       },
-      pid: Future.value(pid),
+      pid: delay == null
+          ? Future.value(pid)
+          : Future.delayed(delay, () => pid),
     );
   }
 }

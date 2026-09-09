@@ -90,4 +90,7 @@ class NoopBackend implements MonitorService {
   Future<bool> waitForOutputClear(String dstId,
           {Duration timeout = const Duration(milliseconds: 400)}) async =>
       true;
+
+  @override
+  Future<bool> ensureFullscreen(int pid) async => true;
 }

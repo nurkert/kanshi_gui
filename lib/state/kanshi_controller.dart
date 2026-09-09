@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/domain/output_matcher.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -285,6 +286,11 @@ class KanshiController extends ChangeNotifier {
   /// (boot-fallback exec line) and pushed to the live [mirrorRunner].
   String _mirrorScaling = 'fit';
 
+  /// Whether `kanshi-gui-mirror` is on this machine's PATH. Probed once at
+  /// [init]; decides how the boot-fallback exec line is written. See
+  /// [KanshiWriteOptions.useMirrorLauncher].
+  bool _mirrorLauncherAvailable = false;
+
   final ProcessRunner _processRunner;
 
   KanshiController({
@@ -367,7 +373,10 @@ class KanshiController extends ChangeNotifier {
   /// rendered kanshi config and the controller's runtime apply path always
   /// agree on whether — and how — to distribute workspaces.
   KanshiWriteOptions _effectiveWriteOptions() {
-    final base = monitors.writeOptions.copyWith(mirrorScaling: _mirrorScaling);
+    final base = monitors.writeOptions.copyWith(
+      mirrorScaling: _mirrorScaling,
+      useMirrorLauncher: _mirrorLauncherAvailable,
+    );
     final dist = _workspaceDistribution;
     if (!supportsWorkspaceManagement || dist == null) {
       return base.copyWith(injectSwayWorkspaceExec: false);
@@ -487,6 +496,14 @@ class KanshiController extends ChangeNotifier {
     // happen while the file is still the only copy of the truth.
     await _migrateTransformConvention();
     await _loadConfig();
+    // Before anything can write the config: the exec line for a mirrored
+    // screen depends on it.
+    try {
+      _mirrorLauncherAvailable =
+          await _processRunner.exists('kanshi-gui-mirror');
+    } catch (_) {
+      _mirrorLauncherAvailable = false;
+    }
     await refreshConnectedMonitors();
     // Detect include directives BEFORE `ensureCurrentSetupMatches` —
     // that helper schedules a save, and we want the include-block
@@ -850,6 +867,7 @@ class KanshiController extends ChangeNotifier {
     _killIdentifyBanners();
     _killSafetyPrompts();
     mirrorRunner.removeListener(notifyListeners);
+    _mirrors.dispose();
     // ignore: discarded_futures
     mirrorRunner.stopAll();
     super.dispose();
@@ -1567,7 +1585,12 @@ class KanshiController extends ChangeNotifier {
     final idx = _activeProfileIndex;
     if (idx == null) return null;
     final failures = <String>[];
-    for (final m in List.of(_profiles[idx].monitors)) {
+    // The same geometry the config carries: a mirror destination is applied
+    // a pointer-proof gap away from the screens that own the picture.
+    final placed = MirrorGeometry.withDetachedDestinations(
+      List.of(_profiles[idx].monitors),
+    );
+    for (final m in placed) {
       final target = _resolveOutputName(m.id);
       if (!_currentMonitors.any((c) => _matchesOutput(c.id, target))) continue;
       try {
@@ -1614,8 +1637,10 @@ class KanshiController extends ChangeNotifier {
     return const OpResult.ok('Extended across all outputs.');
   }
 
-  /// Mirror every other enabled output onto the leftmost one (the primary).
-  /// Sway-only — wl-mirror drives the actual duplication on apply/reconcile.
+  /// Make every other enabled output show the picture of one source: the
+  /// built-in panel when there is one, otherwise the leftmost screen (see
+  /// [MirrorGeometry.preferredSource]). Sway-only — wl-mirror drives the
+  /// actual duplication on apply/reconcile.
   Future<OpResult> mirrorAll() async {
     if (!supportsMirror) {
       return const OpResult.err('Mirroring needs the Sway backend.');
@@ -1623,15 +1648,11 @@ class KanshiController extends ChangeNotifier {
     final idx = _activeProfileIndex;
     if (idx == null) return const OpResult.err('No active profile.');
     final profile = _profiles[idx];
-    final enabled = profile.monitors.where((m) => m.enabled).toList()
-      ..sort((a, b) {
-        final byX = a.x.compareTo(b.x);
-        return byX != 0 ? byX : a.id.compareTo(b.id);
-      });
+    final enabled = profile.monitors.where((m) => m.enabled).toList();
     if (enabled.length < 2) {
       return const OpResult.err('Need at least two enabled outputs to mirror.');
     }
-    final primary = enabled.first.id;
+    final primary = MirrorGeometry.preferredSource(enabled)!.id;
     _pushHistory('mirror all onto $primary');
     final updated = <String, MonitorTileData>{};
     for (final m in enabled) {
@@ -1647,7 +1668,7 @@ class KanshiController extends ChangeNotifier {
     if (failed != null) {
       return OpResult.err('Saved, but the compositor refused part of it: $failed');
     }
-    return OpResult.ok('Mirroring all outputs onto $primary.');
+    return OpResult.ok('Every screen now shows $primary.');
   }
 
   /// Enable only [keepId] and disable every other output — "laptop only" /
@@ -2036,6 +2057,21 @@ class KanshiController extends ChangeNotifier {
   Future<OpResult> setMirror(String destId, String? srcId) =>
       _ops.run(() => _setMirrorImpl(destId, srcId));
 
+  /// Gives a mirror whose retry budget ran out another go.
+  ///
+  /// The budget stops a mirror whose source is unplugged from being
+  /// relaunched every second; it also stops one that failed for a passing
+  /// reason from ever coming back on its own. This is the user's way to say
+  /// the reason has passed.
+  Future<OpResult> retryMirror(String destId) => _ops.run(() async {
+        mirrorRunner.clearFailure(destId);
+        await _reconcileMirrors();
+        if (mirrorRunner.activeDestinations.contains(destId)) {
+          return OpResult.ok('Mirror on $destId restarted.');
+        }
+        return OpResult.err('Could not restart the mirror on $destId.');
+      });
+
   Future<OpResult> _setMirrorImpl(String destId, String? srcId) async {
     if (!supportsMirror) {
       return const OpResult.err(
@@ -2057,6 +2093,15 @@ class KanshiController extends ChangeNotifier {
     if (srcId != null) {
       if (srcId == destId) {
         return const OpResult.err('A monitor cannot mirror itself.');
+      }
+      // The destination must not be feeding another screen either: A → B
+      // with C already showing B would be a chain, which wl-mirror does not
+      // follow (C would keep capturing B's now-mirrored output).
+      final fedByDest = mons.where((m) => m.mirrorOf == destId).toList();
+      if (fedByDest.isNotEmpty) {
+        return OpResult.err(
+            '$destId is shown on ${fedByDest.map((m) => m.id).join(', ')} '
+            '— stop that mirror first.');
       }
       final srcIdx = mons.indexWhere((m) => m.id == srcId);
       if (srcIdx == -1) {
@@ -2093,6 +2138,15 @@ class KanshiController extends ChangeNotifier {
         ? 'stop $destId mirroring'
         : 'mirror $destId onto $srcId');
     mons[destIdx] = mons[destIdx].copyWith(mirrorOf: srcId);
+    if (srcId == null) {
+      // While mirrored, the screen was applied a pointer-proof gap away from
+      // the others, and a config reload may have read that position back
+      // into the model. A released screen belongs next to the others again.
+      mons[destIdx] = MirrorGeometry.rejoined(
+        mons[destIdx],
+        mons.where((m) => m.enabled && m.mirrorOf == null),
+      );
+    }
     _store.setMonitors(_activeProfileIndex!, mons);
 
     // Flush the save *before* reconciling and reloading. The previous
@@ -2141,9 +2195,9 @@ class KanshiController extends ChangeNotifier {
 
     notifyListeners();
     if (srcId == null) {
-      return OpResult.ok('$destId no longer mirroring.');
+      return OpResult.ok('$destId is its own screen again.');
     }
-    return OpResult.ok('$destId mirrors $srcId.');
+    return OpResult.ok('$destId now shows $srcId.');
   }
 
   /// Diff the active profile's intended mirror set against MirrorRunner's

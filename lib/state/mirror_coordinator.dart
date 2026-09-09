@@ -16,7 +16,14 @@ class MirrorCoordinator {
   final MonitorService monitors;
   final MirrorRunner runner;
 
-  MirrorCoordinator(this.monitors, this.runner);
+  MirrorCoordinator(this.monitors, this.runner) {
+    // The runner changes its set on its own too — a crash that exhausts the
+    // retry budget removes a destination without any reconcile — so the
+    // watch follows the runner, not just the reconcile.
+    runner.addListener(_syncWatch);
+  }
+
+  bool _disposed = false;
 
   /// Serialises reconciles.
   ///
@@ -24,6 +31,54 @@ class MirrorCoordinator {
   /// can read each other's half-installed state and kill a process the other
   /// just spawned.
   Future<void> _chain = Future.value();
+
+  /// How often [heal] runs while a mirror is up.
+  ///
+  /// A `get_tree` round trip every few seconds is nothing; a mirror that has
+  /// silently turned into a tiled window for the length of a presentation is
+  /// the thing this exists to prevent.
+  static const Duration watchInterval = Duration(seconds: 4);
+
+  Timer? _watch;
+
+  /// Repairs every running mirror whose window is no longer fullscreen.
+  ///
+  /// The process can be alive and the mirror still gone: on sway a second
+  /// fullscreen view on the same workspace takes the slot, a keybinding
+  /// toggles it, and wl-mirror never hears about either. The runner sees
+  /// processes; this sees windows.
+  Future<void> heal() async {
+    for (final dst in runner.activeDestinations) {
+      final pid = runner.pidFor(dst);
+      if (pid == null) continue;
+      try {
+        await monitors.ensureFullscreen(pid);
+      } catch (e) {
+        debugPrint('mirror: fullscreen check for $dst failed: $e');
+      }
+    }
+  }
+
+  /// Keeps the periodic [heal] running exactly while there is something to
+  /// heal.
+  void _syncWatch() {
+    if (_disposed || runner.activeDestinations.isEmpty) {
+      _watch?.cancel();
+      _watch = null;
+      return;
+    }
+    _watch ??= Timer.periodic(watchInterval, (_) {
+      // ignore: discarded_futures
+      heal();
+    });
+  }
+
+  void dispose() {
+    _disposed = true;
+    runner.removeListener(_syncWatch);
+    _watch?.cancel();
+    _watch = null;
+  }
 
   /// Queues a reconcile behind any in-flight one.
   ///
@@ -116,6 +171,7 @@ class MirrorCoordinator {
         if (runner.activeDestinations.isNotEmpty) {
           await runner.stopAll();
         }
+        _syncWatch();
         return;
       }
 
@@ -151,6 +207,7 @@ class MirrorCoordinator {
       // the desired set: orphans from an older `exec wl-mirror` config, or
       // from a previous session that crashed before it could clean up.
       await runner.purgeExternalNotMatching(desired);
+      _syncWatch();
     } catch (e, st) {
       // start / purgeExternalNotMatching shell out to pgrep and kill; either
       // can fail when the system is out of fds, the binaries are missing, or

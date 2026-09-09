@@ -12,9 +12,12 @@ import 'package:kanshi_gui/services/process_runner.dart';
 /// the mirror from the profile).
 ///
 /// Lifecycle ownership: this runner owns the wl-mirror processes for as
-/// long as the host app is alive. The `exec wl-mirror …` lines that
+/// long as the host app is alive. The `exec kanshi-gui-mirror …` lines that
 /// kanshi_config_writer emits give kanshi the same job when the GUI is
-/// closed, so there is always exactly one owner of any given mirror.
+/// closed. kanshi re-runs them on every reload, so a destination can find
+/// itself with two wl-mirrors; the runner treats any process it did not
+/// start as a duplicate to remove, and relaunches its own afterwards
+/// because the duplicate took the fullscreen slot with it.
 class MirrorRunner extends ChangeNotifier {
   final ProcessRunner _runner;
   final DateTime Function() _now;
@@ -60,6 +63,10 @@ class MirrorRunner extends ChangeNotifier {
   /// currently mirrored.
   String? mirrorSourceFor(String dstId) => _entries[dstId]?.srcId;
 
+  /// Pid of the wl-mirror the runner owns for [dstId]; null while the spawn
+  /// is still resolving or when nothing is running there.
+  int? pidFor(String dstId) => _entries[dstId]?.pid;
+
   /// Destination ids whose retry budget was exhausted. Cleared by a
   /// successful [start] or explicit [clearFailure].
   Set<String> get failedDestinations => Set.unmodifiable(_failed);
@@ -81,8 +88,9 @@ class MirrorRunner extends ChangeNotifier {
     if (existing != null) {
       if (existing.srcId == srcId) {
         // Even when the entry matches, sweep externals: a duplicate
-        // process would race with ours for the same destination.
-        await _killExternalForDst(dstId);
+        // process would race with ours for the same destination. And
+        // once one was there, ours has to be relaunched — see [_relaunch].
+        if (await _killExternalForDst(dstId) > 0) await _relaunch(existing);
         return;
       }
       await stop(dstId);
@@ -128,36 +136,73 @@ class MirrorRunner extends ChangeNotifier {
   Future<void> purgeExternalNotMatching(
     Map<String, String> desiredDstToSrc,
   ) async {
+    // Know every pid of our own before judging the process table by them.
+    for (final e in _entries.values) {
+      if (e.pid == null) await e.pidKnown;
+    }
     final running = await _scanRunning();
+    final duplicated = <_MirrorEntry>{};
     for (final p in running) {
-      final desiredSrc = desiredDstToSrc[p.dst];
-      // Keep the process iff the runner already owns it (managed entry
-      // matching same src) AND it matches desired. Anything else is
-      // either an orphan or a duplicate.
       final managed = _entries[p.dst];
-      final ownedAndCorrect =
-          managed != null && managed.srcId == p.src && desiredSrc == p.src;
-      if (ownedAndCorrect) continue;
-      // Don't kill our own managed processes — start() already replaced
-      // them when they need replacing. Only target externals.
-      if (managed != null) continue;
+      if (managed == null) {
+        // Nobody owns this destination: an orphan from an older session or
+        // a kanshi exec line. Gone.
+        await _killPid(p.pid);
+        continue;
+      }
+      if (p.pid == managed.pid) continue;
+      // A second wl-mirror on a destination we own. kanshi starts one on
+      // every reload of a config that still carries a bare exec line.
       await _killPid(p.pid);
+      duplicated.add(managed);
+    }
+    for (final entry in duplicated) {
+      await _relaunch(entry);
     }
   }
 
   /// Kill any wl-mirror process whose `--fullscreen-output <DST>` argv
   /// points at [dstId] except the runner-owned process for that
   /// destination (which is killed via its [ProcessStream] handle).
-  Future<void> _killExternalForDst(String dstId) async {
-    final running = await _scanRunning();
+  /// Returns how many were killed.
+  Future<int> _killExternalForDst(String dstId) async {
     final managed = _entries[dstId];
+    // Know our own pid before judging the process table by it.
+    if (managed != null && managed.pid == null) await managed.pidKnown;
+    final running = await _scanRunning();
+    var killed = 0;
     for (final p in running) {
       if (p.dst != dstId) continue;
       if (managed != null && managed.pid != null && p.pid == managed.pid) {
         continue;
       }
       await _killPid(p.pid);
+      killed += 1;
     }
+    return killed;
+  }
+
+  /// Replaces the process behind [entry] with a fresh one.
+  ///
+  /// Needed after a duplicate was found next to it. sway allows one
+  /// fullscreen view per workspace: the later wl-mirror took the slot, ours
+  /// was demoted to a tiled window, and killing the duplicate does not hand
+  /// the slot back — measured on sway 1.12, the survivor ends up as a 640 px
+  /// wide tile. A fresh process makes a fresh fullscreen request. The retry
+  /// budget is untouched: this is the runner's own doing, not a crash.
+  Future<void> _relaunch(_MirrorEntry entry) async {
+    if (_entries[entry.dstId] != entry) return;
+    await entry.subscription?.cancel();
+    entry.subscription = null;
+    final stream = entry.stream;
+    entry.stream = null;
+    entry.pid = null;
+    if (stream != null) await stream.kill();
+    // A stop() may have landed while the kill was in flight; spawning now
+    // would leave a process nobody tracks.
+    if (_entries[entry.dstId] != entry || entry.intentionallyStopped) return;
+    _spawn(entry);
+    notifyListeners();
   }
 
   Future<List<_RunningMirror>> _scanRunning() async {
@@ -260,12 +305,15 @@ class MirrorRunner extends ChangeNotifier {
       entry.srcId,
     ]);
     entry.stream = ps;
-    // Resolve the pid asynchronously; we don't await because spawn
-    // continues regardless. _killExternalForDst handles the brief
-    // window where pid is null by skipping our managed entry only when
-    // its src/dst exactly matches the candidate.
-    // ignore: discarded_futures
-    ps.pid.then((p) => entry.pid = p);
+    entry.pid = null;
+    // The pid arrives once the process has started. Anything that scans the
+    // process table awaits [_MirrorEntry.pidKnown] first, otherwise the
+    // just-spawned child looks like a stranger and gets killed. The guard
+    // on `entry.stream` keeps a slow answer from an already-replaced
+    // process from overwriting the pid of its successor.
+    entry.pidKnown = ps.pid.then((p) {
+      if (entry.stream == ps) entry.pid = p;
+    }).catchError((_) {});
     entry.subscription = ps.lines.listen(
       (_) {}, // we do not consume wl-mirror's stdout
       onDone: () => _handleExit(entry),
@@ -325,6 +373,9 @@ class _MirrorEntry {
   ProcessStream? stream;
   StreamSubscription<String>? subscription;
   int? pid;
+  /// Completes once [pid] is set for the current [stream] (or the spawn
+  /// failed). Awaited before any process-table scan.
+  Future<void> pidKnown = Future.value();
   int retryCount = 0;
   DateTime? lastRetryAt;
   bool intentionallyStopped = false;

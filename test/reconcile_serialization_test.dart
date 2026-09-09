@@ -48,6 +48,9 @@ class GatedMirrorRunner extends ChangeNotifier implements MirrorRunner {
   String? mirrorSourceFor(String dstId) => _active[dstId];
 
   @override
+  int? pidFor(String dstId) => null;
+
+  @override
   Future<bool> isAvailable() async => true;
 
   @override
