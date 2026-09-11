@@ -504,6 +504,10 @@ class KanshiController extends ChangeNotifier {
     } catch (_) {
       _mirrorLauncherAvailable = false;
     }
+    // The config service was handed its options in the constructor, before
+    // this probe could run; without this line the launcher was found and
+    // never used, and every profile kept the bare `exec wl-mirror` line.
+    config.writeOptions = _effectiveWriteOptions();
     await refreshConnectedMonitors();
     // Detect include directives BEFORE `ensureCurrentSetupMatches` —
     // that helper schedules a save, and we want the include-block

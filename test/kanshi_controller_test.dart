@@ -11,6 +11,7 @@ import 'package:kanshi_gui/state/kanshi_controller.dart';
 
 import 'fakes/fake_mirror_runner.dart';
 import 'fakes/fake_monitor_service.dart';
+import 'fakes/fake_process_runner.dart';
 
 MonitorTileData _mon({
   String id = 'M',
@@ -841,7 +842,15 @@ void main() {
         writeOptions: KanshiWriteOptions.swayDefaults,
       );
       final mr = FakeMirrorRunner();
-      final c = KanshiController(monitors: fake, config: cfg, mirrorRunner: mr);
+      // No launcher on this fake PATH: the bare wl-mirror line is what the
+      // scaling has to show up in. (With the launcher installed the line
+      // reads `kanshi-gui-mirror "B" "A" exact`; see mirror_workspace_test.)
+      final c = KanshiController(
+        monitors: fake,
+        config: cfg,
+        mirrorRunner: mr,
+        processRunner: FakeProcessRunner(),
+      );
       await c.init();
       await c.setMirrorScaling('exact');
       expect(mr.scaling, 'exact');

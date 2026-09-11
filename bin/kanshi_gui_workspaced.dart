@@ -140,6 +140,7 @@ class _Daemon {
       dryRun: dryRun,
       withApplyLock: (action) =>
           WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guard(action),
+      applyInFlight: _applyLockIsHeld,
     );
   }
 
@@ -154,6 +155,15 @@ class _Daemon {
 
   void _log(String message) {
     if (verbose) stdout.writeln('kanshi-gui-workspaced: $message');
+  }
+
+  /// Whether the app (or this helper's own send) holds the apply lock. A
+  /// probe: taken and released at once, never kept.
+  static bool _applyLockIsHeld() {
+    final probe = WorkspaceApplyLock(WorkspaceApplyLock.applyLock);
+    if (!probe.tryHold()) return true;
+    probe.release();
+    return false;
   }
 
   Future<void> attach(String sock) async => _sock = sock;
