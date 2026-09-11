@@ -29,6 +29,24 @@ class MirrorGeometry {
   /// stays a sane size.
   static const double pointerGap = 2000;
 
+  /// The workspace a mirror destination shows its copy on: `⇄ DP-5` for a
+  /// screen showing DP-5.
+  ///
+  /// Named, not numbered, on purpose. wl-mirror's window lands on whatever
+  /// workspace the destination happens to have, and sway numbers a fresh one
+  /// with the lowest free digit — which the workspace rule then assigns to
+  /// another screen. The helper's next repair walk moved workspace 4 to the
+  /// laptop, with the mirror inside it, and the destination was left showing
+  /// an empty "10". Repairs and bindings only ever touch 1..9; a workspace
+  /// with a name of its own is outside everything that moves numbers.
+  static String workspaceName(String sourceId) => '$_workspaceMark $sourceId';
+
+  /// Whether [workspaceName] is one of ours.
+  static bool isMirrorWorkspace(String workspaceName) =>
+      workspaceName.startsWith('$_workspaceMark ');
+
+  static const String _workspaceMark = '⇄';
+
   /// Whether [id] names a built-in panel (`eDP-1`, `LVDS-1`, `DSI-1`, …).
   ///
   /// Connector names come from the kernel and follow the DRM connector type

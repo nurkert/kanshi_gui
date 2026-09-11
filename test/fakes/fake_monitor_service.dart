@@ -204,16 +204,33 @@ class FakeMonitorService implements MonitorService {
     return true;
   }
 
-  /// Pids handed to [ensureFullscreen], in order.
+  /// Pids handed to [ensureMirrorWindow], in order.
   final List<int> ensureFullscreenCalls = [];
 
-  /// What [ensureFullscreen] reports. Defaults to "fullscreen, nothing to do".
+  /// What [ensureMirrorWindow] reports. Defaults to "in place, nothing to
+  /// do".
   bool ensureFullscreenResult = true;
 
   @override
-  Future<bool> ensureFullscreen(int pid) async {
-    calls.add('ensureFullscreen $pid');
+  Future<bool> ensureMirrorWindow(
+    int pid, {
+    required String output,
+    required String workspace,
+  }) async {
+    calls.add('ensureMirrorWindow $pid $output $workspace');
     ensureFullscreenCalls.add(pid);
     return ensureFullscreenResult;
+  }
+
+  /// Every (output, name) handed to [prepareMirrorWorkspace], in order.
+  final List<({String output, String name})> preparedMirrorWorkspaces = [];
+
+  @override
+  Future<void> prepareMirrorWorkspace({
+    required String output,
+    required String name,
+  }) async {
+    calls.add('prepareMirrorWorkspace $output $name');
+    preparedMirrorWorkspaces.add((output: output, name: name));
   }
 }

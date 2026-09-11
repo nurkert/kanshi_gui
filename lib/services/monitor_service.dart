@@ -138,16 +138,34 @@ abstract class MonitorService {
   }) async =>
       true;
 
-  /// Makes sure the window of process [pid] is fullscreen, and says whether
-  /// it is once this returns.
+  /// Gives the mirror onto [output] a workspace of its own, named [name],
+  /// and makes it the one that output shows — so the window wl-mirror is
+  /// about to open lands there rather than on a numbered workspace that the
+  /// workspace rule will hand to another screen. See
+  /// `MirrorGeometry.workspaceName`. Backends without workspaces do nothing.
+  Future<void> prepareMirrorWorkspace({
+    required String output,
+    required String name,
+  }) async {}
+
+  /// Makes sure the window of process [pid] is fullscreen on the workspace
+  /// [workspace] of [output], and says whether it is once this returns.
   ///
-  /// A mirror is only a mirror while wl-mirror's window fills its output. On
-  /// sway the window can lose that without the process noticing — a second
-  /// fullscreen view on the same workspace takes the slot, a keybinding
-  /// toggles it — and then the screen shows a small tile with the other
-  /// screen's picture in it. Backends without a window tree return true:
-  /// there is nothing to check and nothing to repair.
-  Future<bool> ensureFullscreen(int pid) async => true;
+  /// A mirror is only a mirror while wl-mirror's window fills its
+  /// destination. On sway the window can lose that without the process
+  /// noticing — a second fullscreen view on the same workspace takes the
+  /// slot, a keybinding toggles it, a repair walk carries its workspace to
+  /// another screen — and then the destination shows an empty workspace
+  /// while the copy sits fullscreen somewhere nobody looks. The window is
+  /// brought back to its own workspace (re-created there when it is gone),
+  /// never merely to the output: a numbered workspace is the next one a
+  /// repair will carry off. Backends without a window tree return true.
+  Future<bool> ensureMirrorWindow(
+    int pid, {
+    required String output,
+    required String workspace,
+  }) async =>
+      true;
 
   /// Auto-detects the most appropriate backend for the current session.
   /// Order: Sway → wlr-randr → noop.

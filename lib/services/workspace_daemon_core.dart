@@ -80,12 +80,24 @@ class WorkspaceDaemonCore {
   /// workspaces at the same time. Injectable so tests need no filesystem.
   final Future<bool> Function(Future<void> Function())? withApplyLock;
 
+  /// Whether some process holds the apply lock right now — the app walking
+  /// the workspaces, or this helper's own chain still being executed.
+  ///
+  /// Every `move` sway emits while that is true was sent by software, not
+  /// pressed by a person. Without this, the app's repair after a mirror
+  /// change — moving five workspaces in one second — read as five decisions
+  /// by the user, and the helper stopped placing those five for the rest of
+  /// the session. Null means "cannot tell", and the plan comparison in
+  /// [noteMove] is all there is.
+  final bool Function()? applyInFlight;
+
   WorkspaceDaemonCore({
     required this.sway,
     required this.env,
     this.log = _ignore,
     this.dryRun = false,
     this.withApplyLock,
+    this.applyInFlight,
   });
 
   static void _ignore(String _) {}
@@ -159,6 +171,25 @@ class WorkspaceDaemonCore {
   /// for the round trip, far shorter than anyone reaches for a keybinding.
   static const Duration _ownMoveWindow = Duration(seconds: 3);
 
+  /// True while one of this helper's own commands is with the compositor.
+  bool _sending = false;
+
+  /// Runs [send] under the apply lock (when there is one) with [_sending]
+  /// raised for its duration. Returns false when someone else held the lock.
+  Future<bool> _sendLocked(Future<void> Function() send) async {
+    _sending = true;
+    try {
+      final lock = withApplyLock;
+      if (lock == null) {
+        await send();
+        return true;
+      }
+      return await lock(send);
+    } finally {
+      _sending = false;
+    }
+  }
+
   /// A screen appeared or disappeared and the placement is being worked out
   /// again. Until it is, the cached plan describes the previous desk — and
   /// correcting against it would drag workspaces back onto the screen they
@@ -193,10 +224,16 @@ class WorkspaceDaemonCore {
       if (since != null && at.difference(since) <= _ownMoveWindow) return false;
     }
     if (_replanning) return false;
+    // Our own chain first, then the file: while this process holds the apply
+    // lock, probing it would — with POSIX record locks, which is what Dart
+    // takes on Linux — release our own hold the moment the probe closes.
+    if (_sending) return false;
+    if (applyInFlight?.call() == true) return false;
     final want = _plan?.map[workspace];
     if (want == null || want == output) return false;
     if (!_movedByHand.add(workspace)) return true;
-    log('workspace $workspace was moved by hand; leaving it be from now on');
+    log('workspace $workspace was moved by hand to $output, not $want; '
+        'leaving it be from now on');
     return true;
   }
 
@@ -282,10 +319,7 @@ class WorkspaceDaemonCore {
       await sway.run(command);
     }
 
-    final lock = withApplyLock;
-    if (lock == null) {
-      await send();
-    } else if (!await lock(send)) {
+    if (!await _sendLocked(send)) {
       // A full apply is in flight and is on its way to the same end state.
       // Forget the cooldown so the next switch tries again if it was not.
       _correctedAt.remove(workspace);
@@ -452,10 +486,7 @@ class WorkspaceDaemonCore {
       await sway.run(command);
     }
 
-    final lock = withApplyLock;
-    if (lock == null) {
-      await send();
-    } else if (!await lock(send)) {
+    if (!await _sendLocked(send)) {
       // Someone else is mid-apply. They are on their way to the same end
       // state, and two walks interleaved end wherever the last one landed.
       log('another apply is in flight; leaving it to them');
