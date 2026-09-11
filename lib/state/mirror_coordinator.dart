@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
@@ -50,14 +51,23 @@ class MirrorCoordinator {
   Future<void> heal() async {
     for (final dst in runner.activeDestinations) {
       final pid = runner.pidFor(dst);
-      if (pid == null) continue;
+      final src = runner.mirrorSourceFor(dst);
+      if (pid == null || src == null) continue;
       try {
-        await monitors.ensureFullscreen(pid);
+        await monitors.ensureMirrorWindow(
+          pid,
+          output: _resolveConnector(dst),
+          workspace: MirrorGeometry.workspaceName(_resolveConnector(src)),
+        );
       } catch (e) {
-        debugPrint('mirror: fullscreen check for $dst failed: $e');
+        debugPrint('mirror: window check for $dst failed: $e');
       }
     }
   }
+
+  /// Stable id → live connector, as handed to the last [reconcile]. Held so
+  /// [heal] can name the output the way the compositor does.
+  String Function(String) _resolveConnector = (id) => id;
 
   /// Keeps the periodic [heal] running exactly while there is something to
   /// heal.
@@ -175,6 +185,7 @@ class MirrorCoordinator {
         return;
       }
 
+      _resolveConnector = resolveConnector;
       final connectedIds = liveOutputs.map((m) => m.id).toSet();
       final desired = desiredMirrors(profileMonitors, connectedIds);
 
@@ -199,6 +210,20 @@ class MirrorCoordinator {
               resolveConnector: resolveConnector,
             ),
           );
+        }
+        if (isNew) {
+          // A workspace of the mirror's own, so the window lands somewhere
+          // no repair walk will ever carry off. Best-effort like the
+          // evacuation: a missing workspace costs a cosmetic "10" on the
+          // destination, not the mirror.
+          try {
+            await monitors.prepareMirrorWorkspace(
+              output: resolveConnector(dst),
+              name: MirrorGeometry.workspaceName(resolveConnector(entry.value)),
+            );
+          } catch (e) {
+            debugPrint('mirror: preparing a workspace on $dst failed: $e');
+          }
         }
         await runner.start(entry.value, dst);
       }

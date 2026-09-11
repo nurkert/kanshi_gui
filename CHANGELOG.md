@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.3.5
+
+### Fixed
+
+- **Mirroring two external screens left the copy on the wrong screen and
+  the workspaces in disarray.** Tried at a docked desk: the left screen was
+  to show the middle one. It showed an empty workspace "10" instead, the copy
+  sat fullscreen on a workspace nobody was looking at, and the workspace
+  placement fell apart around it.
+
+  Root cause, from the helper's journal: wl-mirror's window lands on
+  whatever workspace the destination has, sway had numbered that fresh
+  workspace with the lowest free digit (4), the workspace rule assigns 4 to
+  the laptop, and the next repair walk moved workspace 4 to the laptop with
+  the mirror inside it. Two automations shared the destination's workspaces
+  and neither knew about the other. Three things change that, at the root:
+
+  The mirror gets a workspace of its own, named after what it shows
+  (`⇄ DP-5`), created and shown on the destination before wl-mirror starts.
+  Repairs and bindings only ever touch workspaces 1 to 9; a named one is
+  outside everything that moves numbers. Evacuation and the "is the
+  destination clear" check leave it alone.
+
+  The watchdog checks the window's screen as well as its fullscreen state,
+  and brings a window that was carried off back to its destination.
+
+  The helper no longer reads the app's own repair — five workspaces moved in
+  one second — as five decisions by the user. Moves that arrive while an
+  apply holds the lock are software's, and its log now says where a
+  hand-moved workspace went and where the rule wanted it.
+
+- **The launcher was installed and never used.** The exec line for a mirror
+  still called `wl-mirror` directly, so every kanshi reload started a second
+  one. The launcher probe ran after the config writer had been handed its
+  options; the writer now learns the result. The line is rewritten on the
+  next save of the setup.
+
 ## 2.3.4
 
 2.3.3 was tagged with everything below except the last two fixes and was

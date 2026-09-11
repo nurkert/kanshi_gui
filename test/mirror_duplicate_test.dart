@@ -195,51 +195,102 @@ void main() {
     });
   });
 
-  group('SwayBackend.ensureFullscreen', () {
-    Map<String, dynamic> tree(int mode) => {
-          'type': 'root',
-          'nodes': [
-            {
-              'type': 'output',
-              'name': 'DP-1',
-              'nodes': [
-                {
-                  'type': 'workspace',
-                  'nodes': [
-                    {'type': 'con', 'pid': 4321, 'fullscreen_mode': 0},
-                    {'type': 'con', 'pid': 1234, 'fullscreen_mode': mode},
-                  ],
-                  'floating_nodes': <Object>[],
-                }
-              ],
-            }
-          ],
-        };
+  group('SwayBackend.ensureMirrorWindow', () {
+    /// The view of pid 1234 on [output] / [workspace], fullscreen per
+    /// [mode]; a stray view 4321 on DP-1 so the search does not stop at the
+    /// first pid it meets.
+    Map<String, dynamic> tree(
+      int mode, {
+      String output = 'DP-1',
+      String workspace = '⇄ eDP-1',
+    }) {
+      Map<String, dynamic> ws(String out, String name) => {
+            'type': 'workspace',
+            'name': name,
+            'nodes': [
+              if (out == 'DP-1') {'type': 'con', 'pid': 4321, 'fullscreen_mode': 0},
+              if (out == output && name == workspace)
+                {'type': 'con', 'pid': 1234, 'fullscreen_mode': mode},
+            ],
+            'floating_nodes': <Object>[],
+          };
+      return {
+        'type': 'root',
+        'nodes': [
+          {
+            'type': 'output',
+            'name': 'DP-1',
+            'nodes': [ws('DP-1', output == 'DP-1' ? workspace : '10')],
+          },
+          {
+            'type': 'output',
+            'name': 'eDP-1',
+            'nodes': [ws('eDP-1', output == 'eDP-1' ? workspace : '2')],
+          },
+        ],
+      };
+    }
 
-    test('finds the view by pid anywhere in the tree', () {
-      expect(SwayBackend.fullscreenModeOfPid(1234, tree(1)), 1);
-      expect(SwayBackend.fullscreenModeOfPid(4321, tree(1)), 0);
-      expect(SwayBackend.fullscreenModeOfPid(9, tree(1)), isNull);
+    const wsJson = '''
+[
+  {"num": 2, "name": "2", "output": "eDP-1", "focused": true, "visible": true}
+]
+''';
+
+    test('finds the view by pid anywhere in the tree, with its place', () {
+      expect(SwayBackend.viewOfPid(1234, tree(1)),
+          (fullscreenMode: 1, output: 'DP-1', workspace: '⇄ eDP-1'));
+      expect(SwayBackend.viewOfPid(1234, tree(0, output: 'eDP-1')),
+          (fullscreenMode: 0, output: 'eDP-1', workspace: '⇄ eDP-1'));
+      expect(SwayBackend.viewOfPid(4321, tree(1)),
+          (fullscreenMode: 0, output: 'DP-1', workspace: '⇄ eDP-1'));
+      expect(SwayBackend.viewOfPid(9, tree(1)), isNull);
     });
 
-    test('re-enables fullscreen only when the view lost it', () async {
-      Future<List<List<String>>> run(int mode) async {
-        final fake = FakeProcessRunner(
-          installed: {'swaymsg'},
-          responses: {
-            'swaymsg -t get_tree':
-                ProcessResult(0, 0, jsonEncode(tree(mode)), ''),
-          },
-        );
-        final sway = SwayBackend(runner: fake);
-        expect(await sway.ensureFullscreen(1234), isTrue);
-        return fake.calls;
-      }
+    Future<List<String>> run(Map<String, dynamic> t) async {
+      final fake = FakeProcessRunner(
+        installed: {'swaymsg'},
+        responses: {
+          'swaymsg -t get_tree': ProcessResult(0, 0, jsonEncode(t), ''),
+          'swaymsg -t get_workspaces': ProcessResult(0, 0, wsJson, ''),
+        },
+      );
+      final sway = SwayBackend(runner: fake);
+      expect(
+        await sway.ensureMirrorWindow(1234, output: 'DP-1', workspace: '⇄ eDP-1'),
+        isTrue,
+      );
+      return [for (final c in fake.calls) if (c.length == 2) c[1]];
+    }
 
-      expect(await run(1),
-          isNot(anyElement(equals(['swaymsg', '[pid=1234]', 'fullscreen', 'enable']))));
-      expect(await run(0),
-          anyElement(equals(['swaymsg', '[pid=1234]', 'fullscreen', 'enable'])));
+    test('in place and fullscreen: nothing is sent', () async {
+      expect(await run(tree(1)), isEmpty);
+    });
+
+    test('fullscreen lost: re-enabled, nothing moved', () async {
+      expect(await run(tree(0)), ['[pid=1234] fullscreen enable']);
+    });
+
+    test('carried to another screen: its workspace is made again and it is '
+        'moved there by name', () async {
+      // The shape of the incident: a repair walk moved the workspace the
+      // mirror lived on to the laptop, fullscreen and all, and the
+      // destination was left showing a fresh numbered workspace. Moving to
+      // the OUTPUT would land on that number; the workspace is re-created
+      // and the window moved to it by name, fullscreen untouched.
+      expect(await run(tree(1, output: 'eDP-1')), [
+        'workspace "⇄ eDP-1" output DP-1',
+        'workspace "⇄ eDP-1"; move workspace to output DP-1; workspace number 2',
+        '[pid=1234] move container to workspace "⇄ eDP-1"',
+      ]);
+    });
+
+    test('on the destination but on a numbered workspace: moved home', () async {
+      expect(await run(tree(1, workspace: '10')), [
+        'workspace "⇄ eDP-1" output DP-1',
+        'workspace "⇄ eDP-1"; move workspace to output DP-1; workspace number 2',
+        '[pid=1234] move container to workspace "⇄ eDP-1"',
+      ]);
     });
 
     test('a pid without a window is reported, not repaired', () async {
@@ -250,7 +301,10 @@ void main() {
         },
       );
       final sway = SwayBackend(runner: fake);
-      expect(await sway.ensureFullscreen(9), isFalse);
+      expect(
+        await sway.ensureMirrorWindow(9, output: 'DP-1', workspace: '⇄ eDP-1'),
+        isFalse,
+      );
       expect(fake.calls, hasLength(1));
     });
   });

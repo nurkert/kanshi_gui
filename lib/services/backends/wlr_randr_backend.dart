@@ -277,5 +277,16 @@ class WlrRandrBackend implements MonitorService {
       true;
 
   @override
-  Future<bool> ensureFullscreen(int pid) async => true;
+  Future<void> prepareMirrorWorkspace({
+    required String output,
+    required String name,
+  }) async {}
+
+  @override
+  Future<bool> ensureMirrorWindow(
+    int pid, {
+    required String output,
+    required String workspace,
+  }) async =>
+      true;
 }

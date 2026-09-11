@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/domain/output_identity.dart';
 import 'package:kanshi_gui/domain/output_transform.dart';
 import 'package:kanshi_gui/models/monitor_mode.dart';
@@ -312,6 +313,8 @@ class SwayBackend implements MonitorService {
       }
       if (output != dstId) continue;
       if (name.isEmpty && (num is! int || num < 1)) continue;
+      // The mirror's own workspace belongs on the destination.
+      if (MirrorGeometry.isMirrorWorkspace(name)) continue;
       final target = targets[i % targets.length];
       i++;
       // Prefer `workspace number N` for numeric slots so we hit the
@@ -340,7 +343,9 @@ class SwayBackend implements MonitorService {
           final list = jsonDecode(r.stdout as String) as List;
           final any = list.any((raw) {
             final ws = raw as Map<String, dynamic>;
-            return (ws['output'] ?? '').toString() == dstId;
+            return (ws['output'] ?? '').toString() == dstId &&
+                !MirrorGeometry.isMirrorWorkspace(
+                    (ws['name'] ?? '').toString());
           });
           if (!any) return true;
         }
@@ -354,35 +359,107 @@ class SwayBackend implements MonitorService {
   /// embedded `"` and `\` so a free-form name survives the IPC parser
   /// (e.g. `1: code "main"`).
   @override
-  Future<bool> ensureFullscreen(int pid) async {
+  Future<void> prepareMirrorWorkspace({
+    required String output,
+    required String name,
+  }) async {
+    final bin = await _binary();
+    final quoted = _quoteWsName(name);
+    // Where it is born, should it ever have to be born again.
+    await _runner.run(bin, ['workspace $quoted output $output']);
+    final r = await _runner.run(bin, ['-t', 'get_workspaces']);
+    if (r.exitCode != 0) return;
+    String? refocus;
+    for (final raw in jsonDecode(r.stdout as String) as List) {
+      final ws = raw as Map<String, dynamic>;
+      final wsName = (ws['name'] ?? '').toString();
+      if (wsName == name && (ws['output'] ?? '').toString() == output) {
+        if (ws['visible'] == true) return; // already there, already shown
+      }
+      if (ws['focused'] == true) {
+        final num = ws['num'];
+        refocus = (num is int && num >= 1)
+            ? 'workspace number $num'
+            : (wsName.isNotEmpty ? 'workspace ${_quoteWsName(wsName)}' : null);
+      }
+    }
+    // Creating a workspace means focusing it; the user's own focus is handed
+    // straight back. The destination keeps showing the new workspace, and
+    // the numbered one sway had put there — empty now — is collected.
+    final parts = ['workspace $quoted', 'move workspace to output $output'];
+    if (refocus != null) parts.add(refocus);
+    await _runner.run(bin, [parts.join('; ')]);
+  }
+
+  @override
+  Future<bool> ensureMirrorWindow(
+    int pid, {
+    required String output,
+    required String workspace,
+  }) async {
     final bin = await _binary();
     final tree = await _runner.run(bin, ['-t', 'get_tree']);
     if (tree.exitCode != 0) return false;
-    final mode = _fullscreenModeOf(pid, jsonDecode(tree.stdout as String));
+    final view = _viewOf(pid, jsonDecode(tree.stdout as String));
     // Not mapped yet, or already gone. Nothing to repair either way; the
     // process side is the runner's business.
-    if (mode == null) return false;
-    if (mode != 0) return true;
-    final r = await _runner.run(bin, ['[pid=$pid]', 'fullscreen', 'enable']);
-    return r.exitCode == 0;
+    if (view == null) return false;
+    final displaced = view.workspace != workspace || view.output != output;
+    if (!displaced && view.fullscreenMode != 0) return true;
+    // Measured on sway 1.12: a walk that carried the mirror's workspace to
+    // the laptop leaves the window fullscreen there and the destination
+    // showing a fresh numbered workspace. `move container to output` would
+    // land the window on that number — the next thing a walk carries off.
+    // So the workspace of its own is made again, and the window moved
+    // there by name. As two commands: moving and toggling fullscreen in one
+    // breath was seen to end the process.
+    if (displaced) {
+      await prepareMirrorWorkspace(output: output, name: workspace);
+      final moved = await _runner.run(
+        bin,
+        ['[pid=$pid] move container to workspace ${_quoteWsName(workspace)}'],
+      );
+      if (moved.exitCode != 0) return false;
+    }
+    if (view.fullscreenMode == 0) {
+      final r = await _runner.run(bin, ['[pid=$pid] fullscreen enable']);
+      return r.exitCode == 0;
+    }
+    return true;
   }
 
-  /// sway's `fullscreen_mode` for the view of [pid] in a `get_tree` result:
-  /// 0 none, 1 on its output, 2 global. Null when no view carries that pid.
+  /// The view of [pid] in a `get_tree` result: sway's `fullscreen_mode`
+  /// (0 none, 1 on its output, 2 global), the output and the workspace it
+  /// is on. Null when no view carries that pid.
   @visibleForTesting
-  static int? fullscreenModeOfPid(int pid, Object? tree) =>
-      _fullscreenModeOf(pid, tree);
+  static ({int fullscreenMode, String? output, String? workspace})? viewOfPid(
+    int pid,
+    Object? tree,
+  ) =>
+      _viewOf(pid, tree);
 
-  static int? _fullscreenModeOf(int pid, Object? node) {
+  static ({int fullscreenMode, String? output, String? workspace})? _viewOf(
+    int pid,
+    Object? node, {
+    String? output,
+    String? workspace,
+  }) {
     if (node is! Map<String, dynamic>) return null;
+    if (node['type'] == 'output') output = node['name']?.toString();
+    if (node['type'] == 'workspace') workspace = node['name']?.toString();
     if (node['pid'] == pid && node['fullscreen_mode'] is int) {
-      return node['fullscreen_mode'] as int;
+      return (
+        fullscreenMode: node['fullscreen_mode'] as int,
+        output: output,
+        workspace: workspace,
+      );
     }
     for (final key in const ['nodes', 'floating_nodes']) {
       final children = node[key];
       if (children is! List) continue;
       for (final child in children) {
-        final found = _fullscreenModeOf(pid, child);
+        final found =
+            _viewOf(pid, child, output: output, workspace: workspace);
         if (found != null) return found;
       }
     }
