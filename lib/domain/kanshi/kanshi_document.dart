@@ -227,7 +227,11 @@ class KanshiDocument {
         // The mirror launcher (2.3.4) does not carry the substring
         // `wl-mirror`; without this the app would not recognise its own
         // line and write a second one beside it on every save.
-        body.contains('kanshi-gui-mirror');
+        body.contains('kanshi-gui-mirror') ||
+        // The workspace helper, started by kanshi after a profile applies.
+        // Recognised for the same reason, and so that switching the helper
+        // off takes the line out again instead of leaving it behind.
+        body.contains('kanshi-gui-workspaced');
   }
 
   /// Appends a whole profile, source text and all.

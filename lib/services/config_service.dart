@@ -159,6 +159,53 @@ class ConfigService {
     }
   }
 
+  /// Whether the file's workspace-helper line disagrees with [writeOptions]:
+  /// the helper is switched on and a profile with workspace bindings lacks
+  /// the line (the cheap signal that the file predates the switch), or it is
+  /// switched off and the line is still there.
+  ///
+  /// The switch lives in systemd and can change with the app closed, and an
+  /// upgrade brings the option to a config that was written before it
+  /// existed. Either way the file would say something the switch does not
+  /// until the next save, so the app rewrites it once on launch.
+  Future<bool> workspaceHelperLineDisagrees() async {
+    try {
+      final file = File(configPath);
+      if (!await file.exists()) return false;
+      final want = writeOptions.injectSwayWorkspaceExec &&
+          writeOptions.useWorkspaceHelper;
+      final helper = 'exec ${KanshiWriteOptions.workspaceHelperCommand}';
+      var bindingBlocks = 0;
+      var helperBlocks = 0;
+      var inBlock = false;
+      var hasBindings = false;
+      var hasHelper = false;
+      void close() {
+        if (!inBlock) return;
+        if (hasBindings) bindingBlocks++;
+        if (hasHelper) helperBlocks++;
+      }
+
+      for (final line in (await file.readAsString()).split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('profile ')) {
+          close();
+          inBlock = true;
+          hasBindings = false;
+          hasHelper = false;
+        } else if (trimmed.startsWith('exec swaymsg workspace ')) {
+          hasBindings = true;
+        } else if (trimmed == helper) {
+          hasHelper = true;
+        }
+      }
+      close();
+      return want ? helperBlocks < bindingBlocks : helperBlocks > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Rewrites a config whose `transform` values are in sway's naming rather
   /// than kanshi's, and stamps the file so it is only ever done once.
   ///

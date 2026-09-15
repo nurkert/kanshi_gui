@@ -11,12 +11,14 @@ import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
+import 'package:kanshi_gui/services/kanshi_autostart.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/kanshi_daemon.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
+import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
 import 'package:kanshi_gui/state/live_outputs.dart';
@@ -137,6 +139,120 @@ class KanshiController extends ChangeNotifier {
   Future<void> refreshKanshiRunning() async {
     _kanshiRunning = await KanshiDaemon(_processRunner).isRunning();
     if (!_isDisposed) notifyListeners();
+  }
+
+  /// What the "kanshi isn't running" dialog needs to know.
+  ///
+  /// Asked when the dialog opens, not on launch: reading the sway config and
+  /// asking systemd is not worth doing for a status that is fine on almost
+  /// every start.
+  Future<KanshiSetupFacts> kanshiSetupFacts() async {
+    Future<bool> has(String exe) async {
+      try {
+        return await _processRunner.exists(exe);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    final sway = monitors.writeOptions.injectSwayWorkspaceExec;
+    final autostart =
+        await KanshiAutostart.detect(runner: _processRunner, sway: sway);
+    final configExists = await File(config.configPath).exists();
+    final swayPath = autostart.swayConfigPath;
+    var writable = false;
+    if (swayPath != null) {
+      try {
+        // Opening for append writes nothing; it only asks the kernel.
+        final f = await File(await File(swayPath).resolveSymbolicLinks())
+            .open(mode: FileMode.append);
+        await f.close();
+        writable = true;
+      } catch (_) {
+        writable = false;
+      }
+    }
+    return KanshiSetupFacts(
+      installed: await has('kanshi'),
+      configExists: configExists,
+      autostart: autostart,
+      swayLines: sway && configExists
+          ? KanshiAutostart.swayLines(
+              kanshictl: await has('kanshictl'),
+              kanshiConfigPath: _kanshiConfigArgument(),
+            )
+          : null,
+      swayConfigWritable: writable,
+    );
+  }
+
+  /// The kanshi config path as kanshi has to be told it, or null when it is
+  /// the file kanshi reads anyway (`$XDG_CONFIG_HOME/kanshi/config`).
+  String? _kanshiConfigArgument() {
+    final env = Platform.environment;
+    final xdg = (env['XDG_CONFIG_HOME'] ?? '').isNotEmpty
+        ? env['XDG_CONFIG_HOME']!
+        : '${env['HOME'] ?? ''}/.config';
+    return config.configPath == '$xdg/kanshi/config' ? null : config.configPath;
+  }
+
+  /// Starts kanshi for this session, detached from the app.
+  Future<OpResult> startKanshi() async {
+    final probe = KanshiDaemon(_processRunner);
+    if (await probe.isRunning() == true) {
+      await refreshKanshiRunning();
+      return const OpResult.ok('kanshi is already running.');
+    }
+    final r = await KanshiDaemon(_processRunner, configPath: config.configPath)
+        .start();
+    if (r.exitCode != 0) {
+      final why = '${r.stderr}'.trim();
+      return OpResult.err(why.isEmpty ? 'kanshi could not be started.' : why);
+    }
+    // `setsid … &` returns before kanshi is up, and a kanshi that cannot read
+    // its config exits within milliseconds. Look a few times before saying
+    // either.
+    for (var i = 0; i < 10; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (await probe.isRunning() != false) break;
+    }
+    await refreshKanshiRunning();
+    return _kanshiRunning != false
+        ? const OpResult.ok('kanshi is running.')
+        : const OpResult.err(
+            'kanshi did not stay up. What it said is in /tmp/kanshi_gui.log.');
+  }
+
+  /// Appends the lines from [facts] to the sway config, then starts kanshi.
+  ///
+  /// Looks again first: the dialog may have been open while the user added a
+  /// line by hand, and two `exec kanshi` lines start two daemons.
+  Future<OpResult> addKanshiToSwayConfig(KanshiSetupFacts facts) async {
+    final path = facts.autostart.swayConfigPath;
+    final lines = facts.swayLines;
+    if (path == null || lines == null || !facts.swayConfigWritable) {
+      return const OpResult.err('There is no sway config this app can add '
+          'kanshi to.');
+    }
+    final now = await KanshiAutostart.detect(
+        runner: _processRunner, swayConfigPath: path);
+    if (!now.complete) {
+      return OpResult.err('Could not read $path, so nothing was added.');
+    }
+    if (!now.found) {
+      final err = await KanshiAutostart.addToSwayConfig(path, lines);
+      if (err != null) return OpResult.err(err);
+    }
+    final started = await startKanshi();
+    if (!started.success) {
+      return OpResult.err(now.found
+          ? 'kanshi is already set up to start, but did not start: '
+              '${started.message}'
+          : 'Added to $path, but kanshi did not start: ${started.message}');
+    }
+    return OpResult.ok(now.found
+        ? 'kanshi was already set up to start with sway, and is running now.'
+        : 'Added to $path. kanshi starts with sway from now on.');
   }
 
   /// How much of "these screens will come back exactly like this" the app has
@@ -291,6 +407,16 @@ class KanshiController extends ChangeNotifier {
   /// [KanshiWriteOptions.useMirrorLauncher].
   bool _mirrorLauncherAvailable = false;
 
+  /// Whether profiles carry `exec kanshi-gui-workspaced --from-kanshi`: the
+  /// helper is installed and its switch is on. Probed at [init] and again by
+  /// [refreshWorkspaceHelper]. See [KanshiWriteOptions.useWorkspaceHelper].
+  bool _workspaceHelperOn = false;
+
+  /// The switch behind [_workspaceHelperOn]. Null leaves the helper line out
+  /// entirely — the default, so no test and no embedding asks the real
+  /// systemd; the app's entry point passes the real one.
+  final WorkspaceDaemon? _workspaceDaemon;
+
   final ProcessRunner _processRunner;
 
   KanshiController({
@@ -302,7 +428,9 @@ class KanshiController extends ChangeNotifier {
     bool followProfileWorkspaceMap = false,
     bool learnWorkspaceMapFromLive = false,
     ProcessRunner? processRunner,
+    WorkspaceDaemon? workspaceDaemon,
   })  : mirrorRunner = mirrorRunner ?? MirrorRunner(),
+        _workspaceDaemon = workspaceDaemon,
         _snapThreshold = snapThreshold,
         _workspaceDistribution = workspaceDistribution,
         _followsWorkspaceMap =
@@ -376,6 +504,7 @@ class KanshiController extends ChangeNotifier {
     final base = monitors.writeOptions.copyWith(
       mirrorScaling: _mirrorScaling,
       useMirrorLauncher: _mirrorLauncherAvailable,
+      useWorkspaceHelper: _workspaceHelperOn,
     );
     final dist = _workspaceDistribution;
     if (!supportsWorkspaceManagement || dist == null) {
@@ -504,6 +633,9 @@ class KanshiController extends ChangeNotifier {
     } catch (_) {
       _mirrorLauncherAvailable = false;
     }
+    // The workspace helper's line depends on a switch that lives in systemd,
+    // and so is asked here, before anything writes.
+    _workspaceHelperOn = await _probeWorkspaceHelper();
     // The config service was handed its options in the constructor, before
     // this probe could run; without this line the launcher was found and
     // never used, and every profile kept the bare `exec wl-mirror` line.
@@ -611,10 +743,49 @@ class KanshiController extends ChangeNotifier {
   ///  * `dispose()` cancels a pending timer without flushing it, so a launch
   ///    short enough would drop the repair on the floor and leave the user
   ///    with the broken config they opened the app to fix.
+  ///
+  /// A third reason joined them in 2.3.6: the workspace helper's line not
+  /// matching its switch — after an upgrade, or after the switch was flipped
+  /// with `systemctl` while the app was closed. Written without a reload, like
+  /// the other two, so launching never re-applies anything; kanshi reads the
+  /// line at its next reload or login.
   Future<void> _migrateStaleWorkspaceExecs() async {
     if (!config.writeOptions.injectSwayWorkspaceExec) return;
-    if (!await config.carriesLegacyWorkspaceExec()) return;
+    if (!await config.carriesLegacyWorkspaceExec() &&
+        !await config.workspaceHelperLineDisagrees()) {
+      return;
+    }
     await _saves.flush(List<Profile>.of(_profiles));
+  }
+
+  /// Whether the helper is on this machine and its switch is on.
+  Future<bool> _probeWorkspaceHelper() async {
+    final daemon = _workspaceDaemon;
+    if (daemon == null) return false;
+    try {
+      final exe = KanshiWriteOptions.workspaceHelperCommand.split(' ').first;
+      if (!await _processRunner.exists(exe)) return false;
+      return await daemon.state() == WorkspaceDaemonState.enabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Re-reads the helper's switch after the Workspaces sheet changed it, and
+  /// rewrites the config when that adds or removes the helper line.
+  ///
+  /// [apply] false only updates what the next write will contain — for a
+  /// caller that is about to write anyway and should not cause two reloads.
+  Future<void> refreshWorkspaceHelper({bool apply = true}) async {
+    final on = await _probeWorkspaceHelper();
+    if (on == _workspaceHelperOn) return;
+    _workspaceHelperOn = on;
+    config.writeOptions = _effectiveWriteOptions();
+    // With placement off no profile carries workspace lines, so there is no
+    // line to add or take away.
+    if (!apply || !config.writeOptions.injectSwayWorkspaceExec) return;
+    await _flushSaveAndReload();
+    notifyListeners();
   }
 
   /// Reads the live `workspace_number → output_name` mapping from the
@@ -629,11 +800,12 @@ class KanshiController extends ChangeNotifier {
   /// the chain via kanshi's own exec line in any case.
   /// [force] = true bypasses the live-state mismatch check and runs the
   /// chain unconditionally. Callers that just MUTATED the active profile
-  /// (e.g. `setMirror`, profile switches) want this, because
-  /// `kanshictl reload` does NOT re-fire the `exec swaymsg "…"` line on
-  /// a still-active profile — sway is left with the OLD bindings while
-  /// the GUI's in-memory model has the new ones. Force-apply makes the
-  /// declarations land. The chain is idempotent enough that re-running
+  /// (e.g. `setMirror`, profile switches) want this. The reload does re-run
+  /// every `exec` line — kanshi 1.9 forgets its current profile on reload
+  /// (`kanshi_reload_config`), which an earlier version of this comment
+  /// denied — but those lines only say where a workspace is BORN, and sway
+  /// keeps the first binding a session was given. Open workspaces stay where
+  /// they are until something walks them. Force-apply does. The chain is idempotent enough that re-running
   /// is cheap (declarations no-op, focus dances end at ws 1).
   /// Records where the user's workspaces actually are, for this setup.
   ///

@@ -163,11 +163,14 @@ void main() {
       expect(backend.writeOptions, equals(KanshiWriteOptions.swayDefaults));
     });
 
-    test('falls back to bash restart when systemd unit is inactive',
-        () async {
+    test('falls back to bash restart when kanshi is not running and no unit '
+        'is active', () async {
       fake = FakeProcessRunner(
         installed: {'swaymsg'},
         responses: {
+          // Not running: a running kanshi gets a hang-up first; see
+          // kanshi_daemon_test.dart.
+          'pgrep -x kanshi': ProcessResult(0, 1, '', ''),
           'systemctl --user is-active --quiet kanshi.service':
               ProcessResult(0, 3, '', ''),
         },
