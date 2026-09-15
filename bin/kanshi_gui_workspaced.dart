@@ -78,6 +78,10 @@ Future<void> main(List<String> args) async {
       args.contains('-v') ||
       !(args.contains('--quiet') || args.contains('-q'));
 
+  if (args.contains('--from-kanshi')) {
+    await _fromKanshi(verbose: verbose, dryRun: dryRun);
+    return;
+  }
   final daemon = _Daemon(verbose: verbose, dryRun: dryRun);
   if (once) {
     final sock = await _findSocket();
@@ -107,6 +111,12 @@ kanshi-gui-workspaced — keeps sway workspaces on the screens kanshi_gui
 remembers: at login, whenever you plug a screen in, and after a sway reload.
 
   --once      apply the current setup's placement and exit
+  --from-kanshi
+              what kanshi runs after applying a profile: place the
+              workspaces once and exit. Moves open ones only when the
+              screens changed since the last run, so a reload after a
+              save in the app only declares. Logs to the journal
+              (`journalctl --user -t kanshi-gui-workspaced`)
   --dry-run   work out the placement and print it, changing nothing
   -q          say nothing (decisions are logged by default; see
               `journalctl --user -u kanshi-gui-workspaces`)
@@ -132,16 +142,50 @@ class _Daemon {
   /// "what would this do to my desk" without doing it.
   final bool dryRun;
 
-  _Daemon({required this.verbose, this.dryRun = false}) {
+  _Daemon({
+    required this.verbose,
+    this.dryRun = false,
+    void Function(String message)? sink,
+    bool waitForLock = false,
+  }) : _sink = sink {
     core = WorkspaceDaemonCore(
       sway: _SwaymsgConnection(this),
       env: _FileEnvironment(this),
       log: _log,
       dryRun: dryRun,
-      withApplyLock: (action) =>
-          WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guard(action),
-      applyInFlight: _applyLockIsHeld,
+      withApplyLock: waitForLock
+          ? _waitForApplyLock
+          : (action) =>
+              WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guard(action),
+      // Only the long-running helper reads `move` events.
+      applyInFlight: waitForLock ? null : _applyLockIsHeld,
     );
+  }
+
+  /// Where [_log] goes instead of stdout, when set.
+  final void Function(String message)? _sink;
+
+  /// The apply lock for a run started by kanshi: waited for, not skipped.
+  ///
+  /// The long-running helper skips when the lock is held, because whoever
+  /// holds it is on the way to the same answer. A run started by kanshi may
+  /// be carrying a newer one — kanshi starts it after the reload that follows
+  /// every save, often while the app is still placing workspaces for that
+  /// same save — so it waits its turn. Bounded, so a stuck holder cannot pile
+  /// processes up behind it.
+  static Future<bool> _waitForApplyLock(Future<void> Function() action) async {
+    final lock = WorkspaceApplyLock(WorkspaceApplyLock.applyLock);
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (!lock.tryHold()) {
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    try {
+      await action();
+      return true;
+    } finally {
+      lock.release();
+    }
   }
 
   /// Everything that decides anything lives here, and is driven by a fake
@@ -154,6 +198,11 @@ class _Daemon {
   Timer? _settleTimer;
 
   void _log(String message) {
+    final sink = _sink;
+    if (sink != null) {
+      sink(message);
+      return;
+    }
     if (verbose) stdout.writeln('kanshi-gui-workspaced: $message');
   }
 
@@ -657,4 +706,110 @@ Future<String?> _findSocket() async {
   // one belonging to the sway the user is looking at is the recent one.
   found.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
   return found.first.path;
+}
+
+// ── Started by kanshi ─────────────────────────────────────────────────────
+
+/// One run, started by kanshi from a profile's `exec` line.
+///
+/// kanshi runs its exec lines only once the compositor has confirmed every
+/// output of the profile (`config_handle_succeeded` in kanshi 1.9), which is
+/// the moment the long-running helper has to guess at with a settle timer.
+/// It also runs them on every `kanshictl reload` — so on every save in the
+/// app — and a save must not rearrange a desk. What tells the two apart is
+/// whether the screens changed since the last run, remembered per sway
+/// session in the runtime directory.
+Future<void> _fromKanshi({required bool verbose, required bool dryRun}) async {
+  final log = _journalLog(verbose: verbose, echo: dryRun);
+  final daemon =
+      _Daemon(verbose: verbose, dryRun: dryRun, sink: log, waitForLock: true);
+  final sock = await _findSocket();
+  if (sock == null) {
+    log('started by kanshi, but no sway socket found; nothing to place');
+    return;
+  }
+  await daemon.attach(sock);
+  final live = await daemon.core.sway.outputs();
+  if (live.isEmpty) return;
+  final seen = _LastScreens(sock);
+  final now = outputFingerprint(live);
+  final changed = seen.read() != now;
+  await daemon.core
+      .apply(ApplyReason.profileApplied, screensChanged: changed);
+  if (!dryRun) seen.write(now);
+  // A repair is a chain of moves, and one look afterwards costs a single
+  // `get_workspaces`. The same check the long-running helper makes, for the
+  // same reason: a move sway refused leaves no error anyone reads.
+  if (daemon.core.sent.any((c) => c.contains('move workspace to output'))) {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    await daemon.core.verifyRepair();
+  }
+}
+
+/// Where a run started by kanshi reports.
+///
+/// Always through `logger`, which files the lines under the name the
+/// service's lines carry, so `journalctl --user -t kanshi-gui-workspaced`
+/// shows both. stdout is no place for them: it is whatever kanshi's was. It
+/// used to be chosen whenever stdout was a terminal, and on a sway started
+/// from a console login it is — `/dev/tty1`, a screen nobody looks at while
+/// sway is on it — so the first live run logged every decision there and the
+/// journal showed nothing. A kanshi under a systemd unit is no better: its
+/// journal stream carries kanshi's name, not this one.
+///
+/// [echo] also prints, for a run by hand (`--dry-run`), and stdout is the
+/// fallback when there is no `logger`.
+void Function(String message) _journalLog({
+  required bool verbose,
+  required bool echo,
+}) {
+  return (message) {
+    if (!verbose) return;
+    var logged = false;
+    try {
+      logged = Process.runSync(
+              'logger', ['-t', 'kanshi-gui-workspaced', message]).exitCode ==
+          0;
+    } catch (_) {/* no logger: stdout below */}
+    if (echo || !logged) stdout.writeln('kanshi-gui-workspaced: $message');
+  };
+}
+
+/// The screens the previous run started by kanshi saw.
+///
+/// Kept with the sway socket's path, so a new sway session — a new socket —
+/// counts as a change even when the same screens are plugged in: the first
+/// run of a login may repair.
+class _LastScreens {
+  _LastScreens(this.socket);
+
+  final String socket;
+
+  static String get _dir =>
+      Platform.environment['XDG_RUNTIME_DIR'] ??
+      '/tmp/kanshi-gui-${Platform.environment['USER'] ?? 'user'}';
+
+  File get _file => File('$_dir/kanshi-gui-workspaces.screens');
+
+  String? read() {
+    try {
+      final raw = _file.readAsStringSync();
+      final nl = raw.indexOf('\n');
+      if (nl < 0 || raw.substring(0, nl) != socket) return null;
+      return raw.substring(nl + 1);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void write(String fingerprint) {
+    try {
+      Directory(_dir).createSync(recursive: true);
+      // Renamed into place: two runs started by one reload must not leave a
+      // half-written file for the next one to compare against.
+      final tmp = File('${_file.path}.$pid');
+      tmp.writeAsStringSync('$socket\n$fingerprint');
+      tmp.renameSync(_file.path);
+    } catch (_) {/* not remembered: the next run treats it as a change */}
+  }
 }

@@ -401,6 +401,20 @@ List<MonitorTileData> _placeableScreens(Profile profile) => [
         if (m.enabled && m.mirrorOf == null) m,
     ];
 
+/// The connected screens as one comparable string: connector, EDID
+/// descriptor and whether it is switched on, in a fixed order.
+///
+/// What the helper started from a kanshi `exec` line compares against the
+/// last run to tell a dock from a reload. A screen switched off by the new
+/// profile (a closed lid) is a change as much as one plugged in; a reload of
+/// the same profile on the same desk is not.
+String outputFingerprint(List<MonitorTileData> live) {
+  final parts = [
+    for (final m in live) '${m.id}\t${m.edidDescriptor}\t${m.enabled}',
+  ]..sort();
+  return parts.join('\n');
+}
+
 /// Whether [profile] describes exactly the screens in [live].
 ///
 /// The same question kanshi asks before activating a profile, and it has to

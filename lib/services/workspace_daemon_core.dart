@@ -64,6 +64,19 @@ enum ApplyReason {
   /// The app changed its mind — a pattern, a dragged number, a rewritten
   /// config. Says where things belong from now on; never moves what is open.
   configChanged,
+
+  /// kanshi applied a profile and started this helper from the profile's
+  /// `exec` line.
+  ///
+  /// kanshi does that at the right moment — after the compositor has
+  /// confirmed every output, not a guessed second and a half into a dock —
+  /// but it does it for every reason at once: a dock, a login, and every
+  /// `kanshictl reload`, which the app sends on each save. Only the first two
+  /// change the screens, so whether this may move open workspaces is decided
+  /// by the caller, which remembers the screens it saw last, and handed in as
+  /// `screensChanged`. A save therefore only declares, exactly like
+  /// [configChanged].
+  profileApplied,
 }
 
 /// The helper's decisions, with the compositor and the filesystem held at
@@ -402,7 +415,14 @@ class WorkspaceDaemonCore {
 
   /// Works out where the numbers go and tells sway, if there is anything to
   /// tell it.
-  Future<void> apply(ApplyReason reason, {DateTime? now}) async {
+  ///
+  /// [screensChanged] only means something for [ApplyReason.profileApplied];
+  /// see there.
+  Future<void> apply(
+    ApplyReason reason, {
+    DateTime? now,
+    bool screensChanged = false,
+  }) async {
     if (_runaway(now ?? DateTime.now())) return;
 
     final settings = await env.settings();
@@ -460,7 +480,9 @@ class WorkspaceDaemonCore {
       final want = plan.map[e.key];
       return want != null && want != e.value;
     });
-    final disturb = disagrees && reason == ApplyReason.outputsChanged;
+    final disturb = disagrees &&
+        (reason == ApplyReason.outputsChanged ||
+            (reason == ApplyReason.profileApplied && screensChanged));
 
     final command = disturb
         // Handed back to whatever the user was on, instead of dropping them

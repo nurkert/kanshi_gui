@@ -15,11 +15,11 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 - **Hotplug aware** — connect or disconnect a monitor and the app refreshes itself instantly.
 - **Identify displays** — a light-bulb button flashes pulsing numbers on each tile so you know which one is which.
 - **Workspace placement (opt-in)** — a picture of your screens with the number keys sitting on them, one tap from the main window. Drag a number onto another screen, or tap it to send it right; four shortcuts cover the common shapes (*left to right* → 1 4 7 · 2 5 8 · 3 6 9, *a block per screen* → 1 2 3 · 4 5 6 · 7 8 9, *where they are now*, *my own*). **Off by default** so a first launch never reshuffles anyone's workspaces.
-- **Optional helper service** — `kanshi-gui-workspaces.service` ships with the .deb, installed switched off. Turn it on in the Workspaces sheet and your placement is applied at login and on every hotplug — no need to open the app. `kanshi-gui-workspaced --dry-run` prints what it would do without doing it.
+- **Optional helper service** — `kanshi-gui-workspaces.service` ships with the .deb, installed switched off. Turn it on in the Workspaces sheet and your placement is applied at login and on every hotplug — no need to open the app. With it on, each profile in the kanshi config also carries `exec kanshi-gui-workspaced --from-kanshi`, so kanshi itself places the workspaces the moment it has switched the screens on; a reload after a save only re-declares, it never moves what is open. `kanshi-gui-workspaced --dry-run` prints what it would do without doing it, and `journalctl --user -t kanshi-gui-workspaced` shows what it did.
 - **First-run wizard** — picks up your detected layout and proposes a sensible profile name.
 - **Settings page** — a dedicated, grouped settings screen (behind the gear icon): theme (light/dark/system) and accent override, snap distance, scale-snapping, safety-net and revert timings, hotplug/suggestion notifications, wl-mirror scaling mode, backup retention, config-path override, and reset-to-defaults.
 - **Profile management** — create, rename, delete; switch with one click.
-- **kanshictl-aware reload** — uses `kanshictl reload` when available so re-applying a profile no longer flickers the screen.
+- **Reload without a restart** — `kanshictl reload` when kanshi answers on its socket, a `SIGHUP` for a kanshi packaged without kanshictl, and a restart only when neither works, so re-applying a profile does not flicker the screens.
 - **Compositor-agnostic** — auto-selects between `swaymsg` (Sway, full feature set) and `wlr-randr` (Hyprland / Wayfire / niri / other wlroots-style compositors) at startup; falls back to an offline editor when neither is installed.
 
 > **Heads-up:** the rich features (mirror onto another output, identify-banners on each screen, opt-in workspace placement across monitors, sway-accent theming) are **Sway-specific** because they rely on `swaymsg` IPC, `swaynag`, and `wl-mirror`. On non-Sway compositors (Hyprland, niri, river, …) the GUI gracefully degrades to position / mode / scale / rotate / enable-disable, which is what most users actually need.
@@ -39,7 +39,14 @@ Currently, _kanshi_gui does not claim to map all functionalities of kanshi_ in a
 	The app auto-detects the backend at startup. Sway requires a *running* sway IPC socket (`SWAYSOCK` env var pointing at an existing path) — having `swaymsg` installed is not enough, so non-Sway sessions with the sway tooling around still land on the wlr-randr fallback. If neither `swaymsg` nor `wlr-randr` is installed, kanshi_gui still works as an offline profile editor (toggle/mode actions are disabled).
 
 	Non-Sway compositor support is community-driven: open an issue with reproduction steps if something doesn't behave the way it should.
-- [**kanshi**](https://sr.ht/~emersion/kanshi/): Ensure [kanshi](https://sr.ht/~emersion/kanshi/) is installed and configured (with a working `~/.config/kanshi/config` file) on your system. 
+- [**kanshi**](https://sr.ht/~emersion/kanshi/): installed and running. Neither kanshi nor its packages start it for you. Under sway, these two lines in the sway config start it at login and have it re-apply the screens after `swaymsg reload` (which resets them):
+
+	```
+	exec kanshi
+	exec_always kanshictl reload
+	```
+
+	Where `kanshictl` is not available, `exec_always sh -c 'pkill -x kanshi; sleep 0.2; exec kanshi'` does the same by restarting it. When kanshi is not running, the app says so and offers to add the fitting lines for you — it shows them first, and appends them without touching the rest of the file.
 - **Flutter SDK**: Required to build the GUI yourself - [(Installation Guide)](https://flutter.dev/docs/get-started/install)
 
 ### Installation
