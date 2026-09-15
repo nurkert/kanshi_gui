@@ -462,6 +462,9 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
             await widget.daemon.setEnabled(true);
             await _refreshDaemon();
           } catch (_) {/* the switch below says what happened */}
+          // Only noted: the mode change below writes the config, with the
+          // helper's line in it, and reloads kanshi once.
+          await c.refreshWorkspaceHelper(apply: false);
         }
         await c.setWorkspaceMode(mode);
       };
@@ -474,6 +477,9 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
   Future<void> Function() _setDaemon(bool on) => () async {
         await widget.daemon.setEnabled(on);
         await _refreshDaemon();
+        // The switch also decides whether kanshi starts the helper after each
+        // profile, which is a line in the kanshi config.
+        await c.refreshWorkspaceHelper();
       };
 }
 

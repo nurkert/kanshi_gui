@@ -11,6 +11,7 @@ import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/config_service.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/sway_theme.dart';
+import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
 
 /*
@@ -50,6 +51,9 @@ Future<void> main() async {
       configPath: settings.kanshiConfigPath,
       writeOptions: monitors.writeOptions,
     ),
+    // The real systemd switch for the workspace helper. Only here: every
+    // other construction leaves it out and so never asks the machine.
+    workspaceDaemon: const WorkspaceDaemon(),
   );
   // Push the user's preferences in BEFORE init() so the first config save
   // already reflects them (and a fresh-install opt-out never reshuffles).

@@ -48,6 +48,20 @@ class KanshiWriteOptions {
   /// launcher is installed; a config that names a program the machine does
   /// not have would mirror nothing at boot.
   final bool useMirrorLauncher;
+  /// Add `exec kanshi-gui-workspaced --from-kanshi` to every profile while
+  /// workspace placement is on, so kanshi itself starts the helper once the
+  /// profile is applied. Written even where no `exec swaymsg workspace …`
+  /// binding could be (a display name a shell cannot be trusted with): the
+  /// helper talks to sway's socket, so that is exactly where it still works.
+  /// Ignored when [injectSwayWorkspaceExec] is false. On
+  /// only when the helper is installed AND the user switched on "Keep this up
+  /// with the app closed": the line moves open workspaces after a dock, which
+  /// is what that switch promises and nothing else does.
+  final bool useWorkspaceHelper;
+
+  /// The command [useWorkspaceHelper] writes. Plain words only — kanshi hands
+  /// it to /bin/sh.
+  static const workspaceHelperCommand = 'kanshi-gui-workspaced --from-kanshi';
 
   const KanshiWriteOptions({
     this.injectSwayWorkspaceExec = false,
@@ -57,6 +71,7 @@ class KanshiWriteOptions {
     this.followProfileWorkspaceMap = false,
     this.mirrorScaling = 'fit',
     this.useMirrorLauncher = false,
+    this.useWorkspaceHelper = false,
   });
 
   KanshiWriteOptions copyWith({
@@ -67,6 +82,7 @@ class KanshiWriteOptions {
     bool? followProfileWorkspaceMap,
     String? mirrorScaling,
     bool? useMirrorLauncher,
+    bool? useWorkspaceHelper,
   }) {
     return KanshiWriteOptions(
       injectSwayWorkspaceExec:
@@ -80,6 +96,7 @@ class KanshiWriteOptions {
           followProfileWorkspaceMap ?? this.followProfileWorkspaceMap,
       mirrorScaling: mirrorScaling ?? this.mirrorScaling,
       useMirrorLauncher: useMirrorLauncher ?? this.useMirrorLauncher,
+      useWorkspaceHelper: useWorkspaceHelper ?? this.useWorkspaceHelper,
     );
   }
 
@@ -411,6 +428,17 @@ class KanshiConfigWriter {
       final execs = buildWorkspaceConfigExecs(homes);
       for (final line in execs) {
         buffer.writeln('    exec $line');
+      }
+      // The bindings above say where a workspace is BORN; nothing in a config
+      // line can move one that is already open, because that needs a focus
+      // walk that sway only runs in order when it arrives as one command —
+      // and a shell-safe line cannot spell every screen's name. The helper
+      // talks to sway's socket, where no shell is involved, and kanshi starts
+      // it at the one moment the screens are known to be settled. The
+      // bindings stay: they are what still works if the helper is removed.
+      if (options.useWorkspaceHelper) {
+        buffer.writeln(
+            '    exec ${KanshiWriteOptions.workspaceHelperCommand}');
       }
     }
 

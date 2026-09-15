@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.3.6
+
+### Added
+
+- **kanshi places the workspaces itself when the helper is on.** kanshi runs
+  a profile's `exec` lines once the compositor has confirmed every output —
+  the moment the helper service has had to guess at with a settle timer
+  after a dock. With "Keep this up with the app closed" switched on, every
+  profile now also carries `exec kanshi-gui-workspaced --from-kanshi`. That
+  run places the workspaces once and exits, and moves open ones only when
+  the screens changed since its last run: kanshi also runs exec lines on
+  every `kanshictl reload`, which the app sends after each save, and a save
+  must not rearrange a desk. The line talks to sway's socket, so display
+  names with brackets — which break any exec line that goes through the
+  shell — are no problem here. The service keeps running beside it for this
+  release; both take the same lock, so the second one finds the desk already
+  right. What it did: `journalctl --user -t kanshi-gui-workspaced`.
+
+- **"kanshi isn't running" says what to do about it.** The line used to
+  open the general tips, which do not mention kanshi. It now opens a dialog
+  that looks at what is set up to start kanshi — `exec` lines in the sway
+  config and everything it includes, and a `kanshi.service` user unit — and
+  offers the one step that fits: install it, start it, or add the lines that
+  start it with sway. The lines are shown before anything is written, and
+  appended at the end of the file (through a symlink, if the config is one)
+  without touching the rest. Two things that both start kanshi are pointed
+  out, since two copies apply profiles over each other.
+
+### Fixed
+
+- **Re-applying a profile restarted kanshi where a reload would have done.**
+  Without `kanshictl` (Debian bookworm packages kanshi without it) the
+  reload chain went straight to killing and restarting kanshi, which
+  flickers every screen. kanshi 1.3 and later reload on `SIGHUP`, so that is
+  tried first; kanshi 1.1 and 1.2 have no handler and are ended by the
+  signal, which the chain notices and restarts, as before.
+
+- **Two comments claimed the opposite of what kanshi does.** A kanshi started
+  from the sway config does open its control socket (`kanshictl status`
+  answers it on kanshi 1.9), and `kanshictl reload` does run every `exec`
+  line again. Neither changed behaviour, but both would have misled the next
+  change.
+
 ## 2.3.5
 
 ### Fixed

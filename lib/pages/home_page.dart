@@ -18,6 +18,7 @@ import 'package:kanshi_gui/widgets/decision_card.dart';
 import 'package:kanshi_gui/design/theme_context.dart';
 import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/widgets/dot_grid_background.dart';
+import 'package:kanshi_gui/widgets/kanshi_setup_dialog.dart';
 import 'package:kanshi_gui/widgets/drift_ghost_painter.dart';
 import 'package:kanshi_gui/widgets/monitor_tile.dart';
 import 'package:kanshi_gui/widgets/presets_bar.dart';
@@ -293,8 +294,8 @@ class _HomePageState extends State<HomePage> {
         level: StatusLevel.attention,
         message: "kanshi isn't running, so this won't come back after a "
             'reboot.',
-        actionLabel: 'Details',
-        onAction: _showHelp,
+        actionLabel: 'Set up',
+        onAction: _showKanshiSetup,
       );
     }
     if (_healthWarnings.isNotEmpty && !_healthDismissed) {
@@ -366,6 +367,18 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
+  }
+
+  Future<void> _showKanshiSetup() async {
+    final facts = await c.kanshiSetupFacts();
+    if (!mounted) return;
+    final r = await KanshiSetupDialog.show(
+      context,
+      facts: facts,
+      onStart: c.startKanshi,
+      onAddToSway: () => c.addKanshiToSwayConfig(facts),
+    );
+    if (r != null) _toast(r);
   }
 
   Future<void> _showHelp() async {
