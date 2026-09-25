@@ -635,6 +635,7 @@ class KanshiController extends ChangeNotifier {
     }
     // The workspace helper's line depends on a switch that lives in systemd,
     // and so is asked here, before anything writes.
+    await _stopHelperWhilePlacementOff();
     _workspaceHelperOn = await _probeWorkspaceHelper();
     // The config service was handed its options in the constructor, before
     // this probe could run; without this line the launcher was found and
@@ -768,6 +769,27 @@ class KanshiController extends ChangeNotifier {
       return await daemon.state() == WorkspaceDaemonState.enabled;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Switches the helper service off when workspace placement is off.
+  ///
+  /// The sheet takes the service down together with placement, but a service
+  /// left enabled from before that — or switched on by hand — would go on
+  /// running after the window closes, for a feature that is off. Nothing
+  /// that belongs to this app should be running then.
+  Future<void> _stopHelperWhilePlacementOff() async {
+    final daemon = _workspaceDaemon;
+    if (daemon == null || workspaceMode.enabled) return;
+    try {
+      if (!daemon.isInstalled) return;
+      if (await daemon.state() != WorkspaceDaemonState.enabled &&
+          !await daemon.isRunning()) {
+        return;
+      }
+      await daemon.setEnabled(false);
+    } catch (e) {
+      debugPrint('could not stop the workspace helper: $e');
     }
   }
 
@@ -1829,6 +1851,14 @@ class KanshiController extends ChangeNotifier {
       return const OpResult.err('Need at least two enabled outputs to mirror.');
     }
     final primary = MirrorGeometry.preferredSource(enabled)!.id;
+    if (mirrorMode == MirrorMode.window) {
+      for (final m in enabled) {
+        if (m.id == primary) continue;
+        final r = await _openMirrorWindow(m.id, primary);
+        if (!r.success) return r;
+      }
+      return OpResult.ok('Showing $primary on every other screen.');
+    }
     _pushHistory('mirror all onto $primary');
     final updated = <String, MonitorTileData>{};
     for (final m in enabled) {
@@ -2230,8 +2260,55 @@ class KanshiController extends ChangeNotifier {
   /// `OpResult.err`). The runner is asked to spawn / kill wl-mirror
   /// immediately; the kanshi config write is scheduled and a
   /// `kanshictl reload` is fired so kanshi knows about the change.
-  Future<OpResult> setMirror(String destId, String? srcId) =>
-      _ops.run(() => _setMirrorImpl(destId, srcId));
+  Future<OpResult> setMirror(String destId, String? srcId) => _ops.run(() =>
+      srcId != null && mirrorMode == MirrorMode.window
+          ? _openMirrorWindow(destId, srcId)
+          : _setMirrorImpl(destId, srcId));
+
+  MirrorMode get mirrorMode => _settings?.mirrorMode ?? MirrorMode.managed;
+
+  /// [MirrorMode.window]: opens wl-mirror showing [srcId] on [destId], and
+  /// that is all.
+  ///
+  /// Nothing is written to the setup, no workspace is moved or made, and the
+  /// process is started in a session of its own so it outlives this window
+  /// and is never restarted by it. Closing the mirror window ends the mirror.
+  Future<OpResult> _openMirrorWindow(String destId, String srcId) async {
+    if (!supportsMirror) {
+      return const OpResult.err('Mirroring needs the Sway backend.');
+    }
+    if (srcId == destId) {
+      return const OpResult.err('A monitor cannot mirror itself.');
+    }
+    final dst = _resolveOutputName(destId);
+    final src = _resolveOutputName(srcId);
+    final fullscreen = _settings?.mirrorFullscreen ?? true;
+    try {
+      // A plain window opens wherever focus is, so send focus there first.
+      if (!fullscreen) {
+        await _processRunner.run('swaymsg', ['focus', 'output', dst]);
+      }
+      // Arguments go in as "$@", never pasted into the script: output names
+      // come from the compositor and are not ours to trust with a shell.
+      final r = await _processRunner.run('sh', [
+        '-c',
+        'setsid wl-mirror "\$@" >/dev/null 2>&1 &',
+        'sh',
+        '--scaling',
+        _mirrorScaling,
+        '--title',
+        MirrorRunner.windowTitle,
+        if (fullscreen) ...['--fullscreen-output', dst],
+        src,
+      ]);
+      if (r.exitCode != 0) {
+        return OpResult.err('Could not start wl-mirror: ${r.stderr}'.trim());
+      }
+    } catch (e) {
+      return OpResult.err('Could not start wl-mirror: $e');
+    }
+    return OpResult.ok('Showing $srcId on $destId. Close the window to stop.');
+  }
 
   /// Gives a mirror whose retry budget ran out another go.
   ///

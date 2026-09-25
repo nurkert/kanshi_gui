@@ -222,7 +222,7 @@ class ScreenStrip extends StatelessWidget {
         selected: {m.rotation % 360},
         showSelectedIcon: false,
         onSelectionChanged: (sel) =>
-            controller.updateMonitor(m.copyWith(rotation: sel.first)),
+            controller.updateMonitor(m.withRotation(sel.first)),
       ),
     );
   }

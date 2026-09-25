@@ -19,6 +19,10 @@ import 'package:kanshi_gui/services/process_runner.dart';
 /// start as a duplicate to remove, and relaunches its own afterwards
 /// because the duplicate took the fullscreen slot with it.
 class MirrorRunner extends ChangeNotifier {
+  /// The `--title` of a wl-mirror opened in [MirrorMode.window]. The process
+  /// scan recognises it by this and leaves it alone.
+  static const windowTitle = 'kanshi-gui-mirror-window';
+
   final ProcessRunner _runner;
   final DateTime Function() _now;
   bool? _availabilityCache;
@@ -270,6 +274,12 @@ class MirrorRunner extends ChangeNotifier {
         if (argv[i].startsWith('-')) continue;
         src = argv[i];
         break;
+      }
+      // A window the user asked for in [MirrorMode.window] is theirs, not a
+      // stray: nothing here may kill it.
+      final t = argv.indexOf('--title');
+      if (t != -1 && t + 1 < argv.length && argv[t + 1] == windowTitle) {
+        continue;
       }
       if (dst == null || src == null) continue;
       out.add(_RunningMirror(pid: pid, dst: dst, src: src));

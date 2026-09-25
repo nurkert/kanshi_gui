@@ -114,6 +114,23 @@ enum AppThemeChoice {
   String get jsonValue => name;
 }
 
+/// Who looks after a mirror once it is set up.
+///
+/// [managed] (the default) is the mirror as the app has always done it: saved
+/// with the setup, brought back after a reboot or a redock, restarted when
+/// wl-mirror exits, and given a workspace of its own on the destination.
+/// [window] only opens wl-mirror's window and leaves it alone — nothing is
+/// saved, nothing is restarted, and closing the window ends the mirror.
+enum MirrorMode {
+  managed,
+  window;
+
+  static MirrorMode fromJson(Object? raw) =>
+      raw == 'window' ? MirrorMode.window : MirrorMode.managed;
+
+  String get jsonValue => name;
+}
+
 /// wl-mirror's `--scaling` mode for mirror destinations. [fit] (the
 /// historical default) letterboxes to preserve aspect ratio; [cover] fills
 /// the destination by cropping; [exact] forbids scaling.
@@ -185,6 +202,10 @@ class AppSettings {
 
   // ── Advanced & mirror ──────────────────────────────────────────────────
   MirrorScaling mirrorScaling;
+  MirrorMode mirrorMode;
+  /// Whether a [MirrorMode.window] mirror opens fullscreen on the destination.
+  /// Off, it opens as an ordinary window there.
+  bool mirrorFullscreen;
   /// Override for the kanshi config path. Null = the standard
   /// `~/.config/kanshi/config`. Takes effect on the next launch.
   String? kanshiConfigPath;
@@ -198,6 +219,8 @@ class AppSettings {
     this.autoReapplyOnDrift = false,
     this.themeChoice = AppThemeChoice.dark,
     this.mirrorScaling = MirrorScaling.fit,
+    this.mirrorMode = MirrorMode.managed,
+    this.mirrorFullscreen = true,
     this.kanshiConfigPath,
   });
 
@@ -243,6 +266,8 @@ class AppSettings {
         autoReapplyOnDrift: _bool(json['autoReapplyOnDrift'], false),
         themeChoice: AppThemeChoice.fromJson(json['themeChoice']),
         mirrorScaling: MirrorScaling.fromJson(json['mirrorScaling']),
+        mirrorMode: MirrorMode.fromJson(json['mirrorMode']),
+        mirrorFullscreen: _bool(json['mirrorFullscreen'], true),
         kanshiConfigPath: json['kanshiConfigPath'] is String &&
                 (json['kanshiConfigPath'] as String).isNotEmpty
             ? json['kanshiConfigPath'] as String
@@ -302,6 +327,8 @@ class AppSettings {
       'autoReapplyOnDrift': autoReapplyOnDrift,
       'themeChoice': themeChoice.jsonValue,
       'mirrorScaling': mirrorScaling.jsonValue,
+      'mirrorMode': mirrorMode.jsonValue,
+      'mirrorFullscreen': mirrorFullscreen,
       if (kanshiConfigPath != null) 'kanshiConfigPath': kanshiConfigPath,
     });
     // Atomic write: fully populate `<path>.tmp`, fsync via flush, then
