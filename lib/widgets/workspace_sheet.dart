@@ -466,6 +466,17 @@ class _WorkspaceSheetState extends State<WorkspaceSheet> {
           // helper's line in it, and reloads kanshi once.
           await c.refreshWorkspaceHelper(apply: false);
         }
+        // And turning it off takes the helper down with it. With placement
+        // off it has nothing to do, and a process that stays behind after
+        // the window closes — for a feature the user just switched off —
+        // looks like exactly what it is not.
+        if (!mode.enabled && _daemon == WorkspaceDaemonState.enabled) {
+          try {
+            await widget.daemon.setEnabled(false);
+            await _refreshDaemon();
+          } catch (_) {/* the switch below says what happened */}
+          await c.refreshWorkspaceHelper(apply: false);
+        }
         await c.setWorkspaceMode(mode);
       };
 

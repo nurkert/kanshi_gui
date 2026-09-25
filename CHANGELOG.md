@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.3.7
+
+### Added
+
+- **Mirroring has settings of its own.** Advanced → Mirroring. "Kept up" is
+  the mirror as before: saved with the setup, back after a reboot or a
+  redock, restarted if it closes. "Just open it" starts wl-mirror on the
+  other screen and leaves it alone — nothing is saved, nothing is restarted,
+  no workspace is made for it, and closing the window ends it. It opens
+  fullscreen on the destination, or, with Fullscreen off, as an ordinary
+  window there. The scaling (Fit, Fill, Exact) was a setting without a
+  control until now; it is in the same place.
+
+### Fixed
+
+- **Rotating from the settings under the canvas turned the screen but not
+  its tile.** The tile kept its old shape, and a right-click afterwards
+  turned it relative to that wrong shape, so the picture and the desk
+  disagreed. Both ways of rotating now share one rule.
+
+- **Dragging or right-clicking a tile quietly dropped part of it.** The tile
+  was rebuilt field by field and lost its display identity, its mirror and
+  its workspace rank on the way.
+
+- **Switching workspace placement off left the helper service running.** It
+  had nothing to do, and stayed behind after the window closed. Switching
+  placement off now stops it and takes its line out of the kanshi config;
+  a helper left enabled while placement is off is stopped at startup.
+
+- **Long display names were cut through the middle of a line.** The tile
+  now drops the region and legal form a display's maker name carries
+  ("InfoVision Optoelectronics (Kunshan) Co. Ltd" becomes "InfoVision
+  Optoelectronics") and shows only as many lines as fit, ending in "…".
+
 ## 2.3.6
 
 ### Added

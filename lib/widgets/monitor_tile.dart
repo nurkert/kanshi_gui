@@ -6,6 +6,40 @@ import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/widgets/identify_overlay.dart';
 import 'package:collection/collection.dart';
 
+/// Legal-form words that say nothing about which screen this is.
+const _legalSuffixes = {
+  'co', 'co.', 'ltd', 'ltd.', 'inc', 'inc.', 'corp', 'corp.',
+  'corporation', 'company', 'limited', 'gmbh', 'ag', 'llc', 'plc', 'bv',
+  'b.v.', 'sa', 's.a.', 'srl', 'kk', 'k.k.', 'pty', 'pte',
+};
+
+/// The name a tile shows for the screen described by [fullName]
+/// (`make model serial`, as the backends build it).
+///
+/// EDID makes are registry names, not labels: "InfoVision Optoelectronics
+/// (Kunshan) Co. Ltd" spent two of a small tile's lines on a city and a legal
+/// form, and the tile cut the second line in half. The model and serial are
+/// dropped (the last two words, as before), then any parenthetical and any
+/// trailing legal-form words. If that leaves nothing, the untrimmed name is
+/// shown rather than an empty tile.
+String tileDisplayName(String fullName) {
+  final parts = fullName.split(' ').where((p) => p.isNotEmpty).toList();
+  final make =
+      parts.length > 2 ? parts.sublist(0, parts.length - 2) : parts;
+  final words = make
+      .join(' ')
+      .replaceAll(RegExp(r'\s*\([^)]*\)'), '')
+      .split(' ')
+      .where((w) => w.isNotEmpty)
+      .toList();
+  while (words.length > 1 &&
+      _legalSuffixes.contains(words.last.toLowerCase().replaceAll(',', ''))) {
+    words.removeLast();
+  }
+  final name = words.join(' ').replaceAll(RegExp(r'[,\s]+$'), '');
+  return name.isEmpty ? fullName.trim() : name;
+}
+
 /// New tile size after the corner grip moved by [delta].
 ///
 /// The grip changes the output's SCALE, which is uniform, so the tile has to
@@ -225,11 +259,7 @@ class _MonitorTileState extends State<MonitorTile> {
 
   @override
   Widget build(BuildContext context) {
-    // Name ohne die letzten zwei Worte
-    final parts = widget.data.manufacturer.split(' ');
-    final displayName = parts.length > 2
-        ? parts.sublist(0, parts.length - 2).join(' ')
-        : widget.data.manufacturer;
+    final displayName = tileDisplayName(widget.data.manufacturer);
 
     final isEnabled = widget.data.enabled;
     // A tile is "mirror-styled" when it acts as a mirror source — its
@@ -398,16 +428,34 @@ class _MonitorTileState extends State<MonitorTile> {
                           ),
                         const SizedBox(height: 8),
                         Flexible(
-                          child: Text(
-                            displayName,
-                            textAlign: TextAlign.center,
-                            style: T.body
-                                .copyWith(fontWeight: FontWeight.w600,
-                                    color: textColor),
-                            softWrap: true,
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          // maxLines alone ellipsizes by line count, not by
+                          // height: on a short tile the Flexible clipped the
+                          // name through the middle of a line. Only allow as
+                          // many lines as actually fit, so the cut is always
+                          // a clean ellipsis.
+                          child: LayoutBuilder(builder: (context, box) {
+                            final style = T.body.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: textColor);
+                            final probe = TextPainter(
+                              text: TextSpan(text: 'Ag', style: style),
+                              textDirection: TextDirection.ltr,
+                              textScaler: MediaQuery.textScalerOf(context),
+                            )..layout();
+                            final lineHeight = probe.height;
+                            probe.dispose();
+                            final fit = box.maxHeight.isFinite
+                                ? (box.maxHeight / lineHeight).floor()
+                                : 3;
+                            return Text(
+                              displayName,
+                              textAlign: TextAlign.center,
+                              style: style,
+                              softWrap: true,
+                              maxLines: fit.clamp(1, 3),
+                              overflow: TextOverflow.ellipsis,
+                            );
+                          }),
                         ),
                         const SizedBox(height: 4),
                         Text(

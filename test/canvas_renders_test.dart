@@ -93,6 +93,15 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
   }
 
+  // The canvas is the innermost LayoutBuilder that is not part of a tile —
+  // tiles measure their own name with one.
+  Finder canvasFinder() => find
+      .byWidgetPredicate((w) => w is LayoutBuilder)
+      .evaluate()
+      .where((e) => e.findAncestorWidgetOfExactType<MonitorTile>() == null)
+      .map((e) => find.byElementPredicate((x) => identical(x, e)))
+      .last;
+
   // The maintainer's real desk: two 1440p panels and a laptop, parked at the
   // large virtual coordinates a multi-head sway session actually produces.
   List<MonitorTileData> desk() => [
@@ -111,7 +120,7 @@ void main() {
     await pumpHome(tester, c, settings);
 
     final canvas =
-        tester.renderObject<RenderBox>(find.byType(LayoutBuilder).last);
+        tester.renderObject<RenderBox>(canvasFinder());
     expect(canvas.size.height, greaterThan(100),
         reason: 'the canvas collapsed — every tile would scale to nothing');
     expect(canvas.size.width, greaterThan(100));
@@ -206,7 +215,7 @@ void main() {
         reason: 'selecting a screen must open its settings');
 
     // A corner of the canvas no tile occupies.
-    final canvas = tester.renderObject<RenderBox>(find.byType(LayoutBuilder).last);
+    final canvas = tester.renderObject<RenderBox>(canvasFinder());
     final origin = canvas.localToGlobal(Offset.zero);
     await tester.tapAt(origin + const Offset(6, 6));
     await tester.pumpAndSettle();

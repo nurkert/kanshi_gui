@@ -437,6 +437,44 @@ void main() {
       );
     });
 
+    testWidgets('turning placement off takes the helper down with it',
+        (tester) async {
+      // Nothing of this app may keep running after the window closes for a
+      // feature that is switched off.
+      final unit = File('${tmp.path}/kanshi-gui-workspaces.service')
+        ..writeAsStringSync('[Unit]\n');
+      final runner = FakeProcessRunner(
+        installed: {'systemctl'},
+        responses: {
+          'systemctl --user is-enabled kanshi-gui-workspaces.service':
+              ProcessResult(0, 0, 'enabled\n', ''),
+        },
+        fallback: ProcessResult(0, 0, '', ''),
+      );
+      final (c, s) =
+          await boot(tester, mode: WorkspaceManagementMode.interleaved);
+      addTearDown(c.dispose);
+      await pumpSheet(tester, c, s,
+          WorkspaceDaemon(runner: runner, searchPaths: [unit.path]));
+
+      runner.responses['systemctl --user is-enabled '
+          'kanshi-gui-workspaces.service'] = ProcessResult(0, 1, 'disabled\n', '');
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+
+      expect(c.workspaceMode.enabled, isFalse);
+      expect(
+        runner.calls,
+        contains(equals([
+          'systemctl',
+          '--user',
+          'disable',
+          '--now',
+          'kanshi-gui-workspaces.service',
+        ])),
+      );
+    });
+
     testWidgets('systemd refusing it is said out loud', (tester) async {
       final unit = File('${tmp.path}/kanshi-gui-workspaces.service')
         ..writeAsStringSync('[Unit]\n');

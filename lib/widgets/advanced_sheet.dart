@@ -142,6 +142,77 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
                   ),
                 ),
               ],
+              if (widget.controller.supportsMirror) ...[
+                const SizedBox(height: Sp.x4),
+                _row(
+                  c,
+                  label: 'Mirroring',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SegmentedButton<MirrorMode>(
+                        segments: const [
+                          ButtonSegment(
+                              value: MirrorMode.managed,
+                              label: Text('Kept up')),
+                          ButtonSegment(
+                              value: MirrorMode.window,
+                              label: Text('Just open it')),
+                        ],
+                        selected: {s.mirrorMode},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (sel) {
+                          s.mirrorMode = sel.first;
+                          _persist();
+                        },
+                      ),
+                      const SizedBox(height: Sp.x1),
+                      Text(
+                        s.mirrorMode == MirrorMode.managed
+                            ? 'Saved with the setup and brought back after a '
+                                'reboot or redock. Restarted if it closes.'
+                            : 'Opens wl-mirror on the other screen and leaves '
+                                'it alone. Nothing is saved; close the window '
+                                'to stop.',
+                        style: T.caption.copyWith(color: c.textSecondary),
+                      ),
+                      if (s.mirrorMode == MirrorMode.window)
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: Text('Fullscreen',
+                              style: T.body.copyWith(color: c.textPrimary)),
+                          value: s.mirrorFullscreen,
+                          onChanged: (v) {
+                            s.mirrorFullscreen = v;
+                            _persist();
+                          },
+                        ),
+                      const SizedBox(height: Sp.x2),
+                      SegmentedButton<MirrorScaling>(
+                        segments: const [
+                          ButtonSegment(
+                              value: MirrorScaling.fit, label: Text('Fit')),
+                          ButtonSegment(
+                              value: MirrorScaling.cover,
+                              label: Text('Fill')),
+                          ButtonSegment(
+                              value: MirrorScaling.exact,
+                              label: Text('Exact')),
+                        ],
+                        selected: {s.mirrorScaling},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (sel) {
+                          s.mirrorScaling = sel.first;
+                          _persist();
+                          unawaited(widget.controller
+                              .setMirrorScaling(sel.first.arg));
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const Divider(height: Sp.x8),
               _row(
                 c,
