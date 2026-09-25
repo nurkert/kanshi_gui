@@ -130,6 +130,27 @@ class MonitorTileData {
           : workspaceRank as int?,
     );
   }
+
+  /// This screen turned to [rotation] degrees, with the rectangle turned
+  /// with it.
+  ///
+  /// [width] and [height] are stored already rotated, so a rotation that
+  /// crosses between landscape and portrait has to swap them. Setting
+  /// `rotation` alone — which the rotation picker under the canvas used to
+  /// do — turned the real screen and left the tile lying the old way round;
+  /// the next right-click then swapped relative to that wrong shape, and the
+  /// picture and the desk no longer agreed on anything. [resolution] is the
+  /// panel's native mode and does not turn.
+  MonitorTileData withRotation(int rotation) {
+    final r = rotation % 360;
+    final swap = (this.rotation % 180 == 0) != (r % 180 == 0);
+    return copyWith(
+      rotation: r,
+      width: swap ? height : width,
+      height: swap ? width : height,
+      orientation: r % 180 == 0 ? 'landscape' : 'portrait',
+    );
+  }
 }
 
 const Object _sentinel = Object();

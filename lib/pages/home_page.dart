@@ -930,13 +930,11 @@ class _HomePageState extends State<HomePage> {
     if (idx == -1 || !mons[idx].enabled) return;
 
     // Translate viewport coordinates back into the absolute monitor space.
+    // Rotation (right-click) goes through the same turn as the picker under
+    // the canvas, and everything else is carried over from the stored tile —
+    // rebuilding it field by field dropped the EDID descriptor, the mirror
+    // and the workspace rank on every drag.
     final old = mons[idx];
-    final oldRot = old.rotation;
-    final newRot = updated.rotation;
-    final wasLandscape = oldRot % 180 == 0;
-    final isLandscape = newRot % 180 == 0;
-    final newWidth = wasLandscape != isLandscape ? old.height : old.width;
-    final newHeight = wasLandscape != isLandscape ? old.width : old.height;
 
     // Use the origin the *current* layout actually projected from. While a
     // drag is in progress this is the pinned snapshot from drag-start, so
@@ -947,25 +945,9 @@ class _HomePageState extends State<HomePage> {
         (updated.x - layout.offsetX) / layout.scaleFactor;
     final newAbsY = layout.originY +
         (updated.y - layout.offsetY) / layout.scaleFactor;
-    final newOrientation = newRot % 180 == 0 ? 'landscape' : 'portrait';
 
-    final updatedAbs = MonitorTileData(
-      id: old.id,
-      manufacturer: old.manufacturer,
-      x: newAbsX,
-      y: newAbsY,
-      width: newWidth,
-      height: newHeight,
-      scale: old.scale,
-      rotation: newRot,
-      refresh: old.refresh,
-      resolution: newOrientation == 'landscape'
-          ? '${newWidth.toInt()}x${newHeight.toInt()}'
-          : '${newHeight.toInt()}x${newWidth.toInt()}',
-      orientation: newOrientation,
-      modes: old.modes,
-      enabled: old.enabled,
-    );
+    final updatedAbs =
+        old.withRotation(updated.rotation).copyWith(x: newAbsX, y: newAbsY);
     c.updateMonitor(updatedAbs);
     // Drive snap guides while the drag is in progress.
     c.previewSnap(updatedAbs);
@@ -1008,9 +990,12 @@ class _HomePageState extends State<HomePage> {
         builder: (ctx) => AlertDialog(
           title: const Text('Show the same picture on both?'),
           content: Text(
-            'Pick which screen shows the other one. The copy cannot be '
-            'used as a screen of its own until you stop mirroring from '
-            'the three-dot menu.',
+            c.mirrorMode == MirrorMode.window
+                ? 'Pick which screen shows the other one. A mirror window '
+                    'opens there; close it to stop.'
+                : 'Pick which screen shows the other one. The copy cannot be '
+                    'used as a screen of its own until you stop mirroring from '
+                    'the three-dot menu.',
           ),
           actions: [
             TextButton(
