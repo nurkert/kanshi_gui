@@ -944,6 +944,14 @@ class KanshiController extends ChangeNotifier {
   Duration get hotplugSettleWindow => _live.settleWindow;
   set hotplugSettleWindow(Duration v) => _live.settleWindow = v;
 
+  /// First wait before re-reading an output that was just switched on or off,
+  /// doubled on each of the following tries. Some compositors report the old
+  /// state for a moment after accepting the command, and one read straight
+  /// after it called a screen that did switch off "unchanged". Tests set it
+  /// to [Duration.zero].
+  Duration toggleConfirmBackoff = const Duration(milliseconds: 100);
+  static const int _toggleConfirmTries = 5;
+
   void _subscribeHotplug() {
     _live.subscribe((change) {
       if (_isDisposed) return;
@@ -1079,11 +1087,14 @@ class KanshiController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> refreshConnectedMonitors() async {
-    if (!await _live.refresh()) return;
+  /// Returns false when the outputs could not be read; the previous
+  /// snapshot is kept in that case.
+  Future<bool> refreshConnectedMonitors() async {
+    if (!await _live.refresh()) return false;
     _rehydrateProfilesAgainst(_currentMonitors);
     _recomputeDriftIssues();
     notifyListeners();
+    return true;
   }
 
   /// Walks every profile and refreshes the per-monitor `id`, `manufacturer`,
@@ -2488,8 +2499,10 @@ class KanshiController extends ChangeNotifier {
     }
 
     final target = _resolveOutputName(id);
-    final currentMode = _currentModeForOutput(target);
-    if (currentMode == null) {
+    // Only switching off needs the output in the live list. A compositor may
+    // drop a switched-off output from its list altogether, and refusing to
+    // switch it back on for that reason would leave the screen dark for good.
+    if (!enabled && _currentModeForOutput(target) == null) {
       return OpResult.err('Output $target not found.');
     }
 
@@ -2516,11 +2529,7 @@ class KanshiController extends ChangeNotifier {
       return OpResult.err('Error while toggling: $e');
     }
 
-    await refreshConnectedMonitors();
-
-    final live = _currentMonitors.any((m) =>
-        _normalizeOutputId(m.id) == _normalizeOutputId(target) &&
-        m.enabled == enabled);
+    final live = await _confirmOutputState(target, enabled);
     if (live) {
       _pushHistory(enabled ? 'enable $id' : 'disable $id');
       mons[idx] = mons[idx].copyWith(enabled: enabled);
@@ -2562,10 +2571,40 @@ class KanshiController extends ChangeNotifier {
       return OpResult.ok(enabled
           ? 'Output enabled.'
           : 'Output disabled.');
+    } else if (_live.lastError != null) {
+      return OpResult.err(
+          'Sent "${enabled ? 'enable' : 'disable'}" to $target, but could '
+          'not read the outputs back to check it (${monitors.name}): '
+          '${_live.lastError}');
     } else {
       return OpResult.err(
-          "Output ${enabled ? 'not enabled' : 'not disabled'} - status unchanged.");
+          '${monitors.name} accepted "${enabled ? 'enable' : 'disable'}" '
+          'for $target, but still reports it '
+          '${enabled ? 'off' : 'on'} - status unchanged.');
     }
+  }
+
+  /// Re-reads the outputs until [target] is in the [enabled] state, backing
+  /// off between tries. An output that is gone from the list counts as off:
+  /// some compositors stop listing an output once it is switched off, and
+  /// looking only for "listed and off" reported that as a failure.
+  Future<bool> _confirmOutputState(String target, bool enabled) async {
+    final norm = _normalizeOutputId(target);
+    var wait = toggleConfirmBackoff;
+    for (var attempt = 0; attempt < _toggleConfirmTries; attempt++) {
+      if (attempt > 0 && wait > Duration.zero) {
+        await Future<void>.delayed(wait);
+        wait *= 2;
+      }
+      if (!await refreshConnectedMonitors()) continue;
+      final match =
+          _currentMonitors.where((m) => _normalizeOutputId(m.id) == norm);
+      final confirmed = enabled
+          ? match.any((m) => m.enabled)
+          : match.every((m) => !m.enabled);
+      if (confirmed) return true;
+    }
+    return false;
   }
 
   /// Pushes the current state of [target] (position/scale/transform/mode)

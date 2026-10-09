@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.3.8
+
+### Fixed
+
+- **Switching a screen off always said "status unchanged".** The app sent
+  the command, then read the outputs back once, straight away, and only
+  believed a screen that was still listed and marked off. Three things broke
+  that check:
+  - The read itself could fail. The error was swallowed, the old list kept,
+    and the check read "still on" from it. It now tells you the outputs
+    could not be read back, and why.
+  - Some compositors take a moment to report the change, and some stop
+    listing an output once it is off. The app now asks again a few times,
+    over about a second and a half, and counts an output that has left the
+    list as off. A screen that has dropped out of the list can be switched
+    back on.
+  - On Sway, a non-desktop output such as a VR headset has no modes and no
+    position, and parsing it failed every read. Such outputs are skipped
+    now.
+
+  When the compositor really does ignore the command, the message names the
+  backend and the state it still reports.
+
 ## 2.3.7
 
 ### Added
