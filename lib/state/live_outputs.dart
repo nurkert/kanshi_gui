@@ -59,14 +59,21 @@ class LiveOutputs {
   List<MonitorTileData>? _latest;
   bool _disposed = false;
 
+  /// Why the last [refresh] failed, or null when it succeeded. Kept so a
+  /// caller that checks the compositor's answer can say the answer never
+  /// came, instead of reading the stale snapshot as "nothing changed".
+  Object? lastError;
+
   /// Re-reads the connected outputs. Returns false when the backend threw,
   /// leaving the previous snapshot in place rather than blanking it.
   Future<bool> refresh() async {
     try {
       _current = await monitors.getOutputs();
+      lastError = null;
       return true;
     } catch (e) {
       debugPrint('getOutputs failed: $e');
+      lastError = e;
       return false;
     }
   }

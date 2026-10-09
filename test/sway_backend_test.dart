@@ -46,6 +46,32 @@ void main() {
       expect(outputs.first.modes, hasLength(2));
     });
 
+    test('skips a non-desktop output instead of failing the whole read',
+        () async {
+      // Sway lists a VR headset with no modes and no rect. One such entry
+      // used to throw, so every read failed and every toggle came back
+      // "unchanged".
+      final json = _swayOutputJson.replaceFirst(
+          '[', '[{"name": "DP-9", "non_desktop": true, "make": "Valve"},');
+      final fake = FakeProcessRunner(
+        installed: {'swaymsg'},
+        responses: {'swaymsg -t get_outputs': ProcessResult(0, 0, json, '')},
+      );
+      final outputs = await SwayBackend(runner: fake).getOutputs();
+      expect(outputs.map((o) => o.id), equals(['DP-1']));
+    });
+
+    test('a disabled output without rect or modes still parses', () async {
+      const json = '[{"name": "HDMI-A-1", "active": false}]';
+      final fake = FakeProcessRunner(
+        installed: {'swaymsg'},
+        responses: {'swaymsg -t get_outputs': ProcessResult(0, 0, json, '')},
+      );
+      final outputs = await SwayBackend(runner: fake).getOutputs();
+      expect(outputs.single.id, equals('HDMI-A-1'));
+      expect(outputs.single.enabled, isFalse);
+    });
+
     test('strips literal "Unknown" from manufacturer string', () async {
       const json = '''
 [

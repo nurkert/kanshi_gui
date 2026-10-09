@@ -111,6 +111,60 @@ void main() {
     expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isFalse);
   });
 
+  group('toggleEnabled reads the answer back', () {
+    Future<(KanshiController, FakeMonitorService)> setUpTwo() async {
+      final fake = FakeMonitorService(outputs: [_mon(id: 'A'), _mon(id: 'B')]);
+      final c = KanshiController(monitors: fake, config: _tmpConfig(tmp))
+        ..toggleConfirmBackoff = Duration.zero;
+      await c.init();
+      return (c, fake);
+    }
+
+    test('a compositor that reports the change late still counts', () async {
+      final (c, fake) = await setUpTwo();
+      fake.staleReadsAfterToggle = 2;
+      final r = await c.toggleEnabled('A', false);
+      expect(r.success, isTrue, reason: r.message);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isFalse);
+    });
+
+    test('an output that leaves the list when switched off is off', () async {
+      final (c, fake) = await setUpTwo();
+      fake.disableRemovesOutput = true;
+      final r = await c.toggleEnabled('A', false);
+      expect(r.success, isTrue, reason: r.message);
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isFalse);
+    });
+
+    test('a vanished output can still be switched back on', () async {
+      final (c, fake) = await setUpTwo();
+      fake.disableRemovesOutput = true;
+      await c.toggleEnabled('A', false);
+      fake.outputs = [_mon(id: 'A', enabled: false), _mon(id: 'B')];
+      final r = await c.toggleEnabled('A', true);
+      expect(fake.calls, contains('enable A'));
+      expect(r.success, isTrue, reason: r.message);
+    });
+
+    test('a failed read says so instead of "unchanged"', () async {
+      final (c, fake) = await setUpTwo();
+      fake.getOutputsError = Exception('socket gone');
+      final r = await c.toggleEnabled('A', false);
+      expect(r.success, isFalse);
+      expect(r.message, contains('could not read the outputs back'));
+      expect(r.message, contains('socket gone'));
+    });
+
+    test('a compositor that ignores the command is named', () async {
+      final (c, fake) = await setUpTwo();
+      fake.staleReadsAfterToggle = 1000;
+      final r = await c.toggleEnabled('A', false);
+      expect(r.success, isFalse);
+      expect(r.message, contains('fake accepted "disable" for A'));
+      expect(c.activeMonitors.firstWhere((m) => m.id == 'A').enabled, isTrue);
+    });
+  });
+
   test('applyMode updates the active monitor and calls compositor when enabled',
       () async {
     final cfg = _tmpConfig(tmp);

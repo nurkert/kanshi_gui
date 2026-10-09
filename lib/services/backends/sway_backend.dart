@@ -55,7 +55,13 @@ class SwayBackend implements MonitorService {
       throw Exception('swaymsg failed: ${result.stderr}');
     }
     final outputs = jsonDecode(result.stdout as String) as List;
-    return outputs.map(_parseOutput).toList();
+    // A non-desktop output (a VR headset) comes without modes or a rect and
+    // cannot be arranged anyway. Parsing it threw, which failed the whole
+    // read and left the app checking every change against a stale list.
+    return outputs
+        .where((o) => o is Map<String, dynamic> && o['non_desktop'] != true)
+        .map(_parseOutput)
+        .toList();
   }
 
   MonitorTileData _parseOutput(dynamic raw) {
@@ -84,7 +90,8 @@ class SwayBackend implements MonitorService {
       serial: (output['serial'] ?? '').toString(),
     );
 
-    final modeMaps = (output['modes'] as List).cast<Map<String, dynamic>>();
+    final modeMaps = ((output['modes'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
     final modes = modeMaps
         .map((m) => MonitorMode(
               width: (m['width'] as num).toDouble(),
@@ -123,12 +130,13 @@ class SwayBackend implements MonitorService {
     final height = (rotation % 180 == 0) ? baseH : baseW;
     final orientation = (rotation % 180 == 0) ? 'landscape' : 'portrait';
 
+    final rect = (output['rect'] as Map<String, dynamic>?) ?? const {};
     return MonitorTileData(
       id: outputName,
       manufacturer: fullName,
       edidDescriptor: descriptor ?? '',
-      x: (output['rect']['x'] as num).toDouble(),
-      y: (output['rect']['y'] as num).toDouble(),
+      x: ((rect['x'] as num?) ?? 0).toDouble(),
+      y: ((rect['y'] as num?) ?? 0).toDouble(),
       width: width,
       height: height,
       scale: scale,

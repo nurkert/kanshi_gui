@@ -53,9 +53,28 @@ class FakeMonitorService implements MonitorService {
             applyCustomResult ?? ProcessResult(0, 0, '', ''),
         restartResult = restartResult ?? ProcessResult(0, 0, '', '');
 
+  /// When set, [getOutputs] throws it, the way a failing `swaymsg` does.
+  Object? getOutputsError;
+
+  /// How many reads after a successful enable/disable still return the list
+  /// from before it — a compositor that takes a moment to report the change.
+  int staleReadsAfterToggle = 0;
+
+  /// Makes a successful disable drop the output from the list instead of
+  /// marking it off, as some compositors do.
+  bool disableRemovesOutput = false;
+
+  List<MonitorTileData>? _stale;
+  int _staleLeft = 0;
+
   @override
   Future<List<MonitorTileData>> getOutputs() async {
     calls.add('getOutputs');
+    if (getOutputsError != null) throw getOutputsError!;
+    if (_stale != null && _staleLeft > 0) {
+      _staleLeft--;
+      return _stale!;
+    }
     return outputs;
   }
 
@@ -74,9 +93,16 @@ class FakeMonitorService implements MonitorService {
   }
 
   void _setEnabled(String id, bool enabled) {
+    _stale = outputs;
+    _staleLeft = staleReadsAfterToggle;
     outputs = [
       for (final m in outputs)
-        if (m.id == id) m.copyWith(enabled: enabled) else m,
+        if (m.id != id)
+          m
+        else if (!enabled && disableRemovesOutput)
+          ...[]
+        else
+          m.copyWith(enabled: enabled),
     ];
   }
 
