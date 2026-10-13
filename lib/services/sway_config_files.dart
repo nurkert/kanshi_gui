@@ -110,6 +110,86 @@ class SwayConfigFiles {
     return out;
   }
 
+  /// Whether this user can append to [path]. Opening for append writes
+  /// nothing; it only asks the kernel. A sway running from `/etc/sway/config`
+  /// is not something to edit from here.
+  static Future<bool> isWritable(String path) async {
+    try {
+      final f = await File(await File(path).resolveSymbolicLinks())
+          .open(mode: FileMode.append);
+      await f.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Appends [lines] under the comment [marker] to the sway config at [path].
+  ///
+  /// Appended, not rewritten: through a symlink (dotfile managers link the
+  /// config into place) and with its permissions untouched, and nothing the
+  /// user wrote is moved. Returns null on success and a sentence for the user
+  /// otherwise.
+  static Future<String?> appendBlock(
+      String path, String marker, List<String> lines) async {
+    try {
+      final target = File(await File(path).resolveSymbolicLinks());
+      final before = await target.readAsString();
+      final block = StringBuffer();
+      if (before.isNotEmpty && !before.endsWith('\n')) block.write('\n');
+      block.write('\n$marker\n');
+      for (final l in lines) {
+        block.write('$l\n');
+      }
+      await target.writeAsString(block.toString(),
+          mode: FileMode.append, flush: true);
+      return null;
+    } on FileSystemException catch (e) {
+      return 'Could not write $path: ${e.osError?.message ?? e.message}.';
+    }
+  }
+
+  /// Takes out what [appendBlock] put in: the lines of [ours] (each a whole
+  /// physical line, by 1-based number per file), the [marker] directly above
+  /// them, and the blank line [appendBlock] wrote above that.
+  ///
+  /// Only those. A line the user changed no longer matches and was never in
+  /// [ours]; a marker without our lines under it is left where it is.
+  /// Returns null on success and a sentence for the user otherwise.
+  static Future<String?> removeBlock(
+      String marker, List<SwayConfigLine> ours) async {
+    final byFile = <String, Set<int>>{};
+    for (final l in ours) {
+      (byFile[l.path] ??= <int>{}).add(l.number);
+    }
+    for (final entry in byFile.entries) {
+      try {
+        final target = File(await File(entry.key).resolveSymbolicLinks());
+        final raw = await target.readAsString();
+        final physical = raw.split('\n');
+        final drop = <int>{for (final n in entry.value) n - 1};
+        final first = drop.reduce((a, b) => a < b ? a : b);
+        if (first > 0 && physical[first - 1].trim() == marker) {
+          drop.add(first - 1);
+          if (first > 1 && physical[first - 2].trim().isEmpty) {
+            drop.add(first - 2);
+          }
+        }
+        final kept = [
+          for (var i = 0; i < physical.length; i++)
+            if (!drop.contains(i)) physical[i],
+        ];
+        // In place, so a symlinked config stays a symlink and keeps its
+        // permissions.
+        await target.writeAsString(kept.join('\n'), flush: true);
+      } on FileSystemException catch (e) {
+        return 'Could not write ${entry.key}: '
+            '${e.osError?.message ?? e.message}.';
+      }
+    }
+    return null;
+  }
+
   /// Strips `# …` after the first space-preceded `#`. Sway treats `#` after
   /// whitespace as a comment delimiter; the leading `#` of a colour literal
   /// (`#b162d5`) is NOT preceded by whitespace inside a token, so we look for

@@ -25,6 +25,10 @@ class WorkspaceApplyLock {
   /// Held for the lifetime of the helper, so a second one steps aside.
   static const String singletonLock = 'kanshi-gui-workspaced.lock';
 
+  /// Held while the lid rule runs, so sway's binding and kanshi's exec do
+  /// not decide over each other's half-finished work.
+  static const String lidLock = 'kanshi-gui-lid.lock';
+
   final String name;
 
   /// Where the lock file lives. Injectable so tests need no control over the
@@ -67,6 +71,29 @@ class WorkspaceApplyLock {
   /// already doing the same job.
   Future<bool> guard(Future<void> Function() action) async {
     if (!tryHold()) return false;
+    try {
+      await action();
+      return true;
+    } finally {
+      release();
+    }
+  }
+
+  /// Runs [action] while holding the lock, waiting up to [timeout] for it.
+  ///
+  /// For a run that may be carrying a newer answer than whoever holds the
+  /// lock, so it waits its turn instead of skipping. Bounded, so a stuck
+  /// holder cannot pile processes up behind it. Returns false when the wait
+  /// ran out and [action] did not run.
+  Future<bool> guardWaiting(
+    Future<void> Function() action, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!tryHold()) {
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
     try {
       await action();
       return true;
