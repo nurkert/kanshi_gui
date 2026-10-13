@@ -206,6 +206,12 @@ class AppSettings {
   /// Whether a [MirrorMode.window] mirror opens fullscreen on the destination.
   /// Off, it opens as an ordinary window there.
   bool mirrorFullscreen;
+  /// Whether closing the laptop lid switches the built-in screen off while
+  /// another screen is on. Off by default: it adds two lines to the sway
+  /// config, and nothing touches that file without being asked to. See
+  /// lib/domain/lid_policy.dart.
+  bool lidTurnsOffPanel;
+
   /// Override for the kanshi config path. Null = the standard
   /// `~/.config/kanshi/config`. Takes effect on the next launch.
   String? kanshiConfigPath;
@@ -221,6 +227,7 @@ class AppSettings {
     this.mirrorScaling = MirrorScaling.fit,
     this.mirrorMode = MirrorMode.managed,
     this.mirrorFullscreen = true,
+    this.lidTurnsOffPanel = false,
     this.kanshiConfigPath,
   });
 
@@ -268,6 +275,7 @@ class AppSettings {
         mirrorScaling: MirrorScaling.fromJson(json['mirrorScaling']),
         mirrorMode: MirrorMode.fromJson(json['mirrorMode']),
         mirrorFullscreen: _bool(json['mirrorFullscreen'], true),
+        lidTurnsOffPanel: _bool(json['lidTurnsOffPanel'], false),
         kanshiConfigPath: json['kanshiConfigPath'] is String &&
                 (json['kanshiConfigPath'] as String).isNotEmpty
             ? json['kanshiConfigPath'] as String
@@ -329,6 +337,7 @@ class AppSettings {
       'mirrorScaling': mirrorScaling.jsonValue,
       'mirrorMode': mirrorMode.jsonValue,
       'mirrorFullscreen': mirrorFullscreen,
+      'lidTurnsOffPanel': lidTurnsOffPanel,
       if (kanshiConfigPath != null) 'kanshiConfigPath': kanshiConfigPath,
     });
     // Atomic write: fully populate `<path>.tmp`, fsync via flush, then

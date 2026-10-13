@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.4.0
+
+### Added
+
+- **The laptop lid can switch the built-in screen off.** Advanced → Lid,
+  off by default and only offered on a laptop running sway. kanshi cannot
+  do this on its own: it picks a profile from the screens that are
+  connected, and closing the lid disconnects nothing, so the dark panel kept
+  its place in the layout, its workspaces and the pointer's way onto it.
+  - With the lid closed, the panel is switched off while another screen is
+    on, and sway moves its workspaces over. Opening the lid switches it back
+    on. Only what the lid switched off comes back: a panel your setup itself
+    switches off stays off.
+  - A lid closed with no other screen leaves the panel on, so the session is
+    never left without a screen. A panel mirrored onto a projector stays on
+    too, or the projector would show nothing.
+  - Switching it on shows two `bindswitch lid:…` lines and the sway config
+    they go into, adds them, and binds them in the running sway. A lid
+    binding you already have is named, because the new lines take its
+    place. Switching it off takes the lines out again and switches the panel
+    back on.
+  - Every kanshi profile carries `exec kanshi-gui-workspaced --lid` (or the
+    workspace helper's line, which now does the lid first). That covers the
+    case a sway binding cannot: a screen plugged in, or a save in the app,
+    with the lid already closed — kanshi re-applies its profile and switches
+    the panel back on.
+  - `kanshi-gui-workspaced --lid closed --dry-run` prints what it would do.
+    Decisions go to `journalctl --user -t kanshi-gui-workspaced`.
+
+### Fixed
+
+- **A screen that is connected but switched off no longer gets
+  workspaces.** The workspace plan, the app's own repair and the helper all
+  counted it as there, and sent moves sway refused, then retried them.
+- **A switched-off screen is no longer reported as moved.** Its position in
+  sway's answer is meaningless, and "re-apply" on that report switched it
+  back on — with automatic re-apply, over and over.
+
 ## 2.3.8
 
 ### Fixed

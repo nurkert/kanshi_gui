@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:kanshi_gui/services/process_runner.dart';
 import 'package:kanshi_gui/services/sway_config_files.dart';
 
@@ -216,33 +214,13 @@ class KanshiAutostart {
         : ["exec_always sh -c 'pkill -x kanshi; sleep 0.2; exec kanshi$arg'"];
   }
 
-  /// Appends [lines] under [marker] to the sway config at [path].
-  ///
-  /// Appended, not rewritten: through a symlink (dotfile managers link the
-  /// config into place) and with its permissions untouched, and nothing the
-  /// user wrote is moved. Returns null on success and a sentence for the user
-  /// otherwise.
+  /// Appends [lines] under [marker] to the sway config at [path]. See
+  /// [SwayConfigFiles.appendBlock].
   ///
   /// Not validated with `sway --validate`: in sway 1.12 that initialises a
   /// compositor backend before it reads the file, which is not something to
   /// start behind someone's back. The lines are fixed and use nothing but
   /// `exec` and `exec_always`.
-  static Future<String?> addToSwayConfig(
-      String path, List<String> lines) async {
-    try {
-      final target = File(await File(path).resolveSymbolicLinks());
-      final before = await target.readAsString();
-      final block = StringBuffer();
-      if (before.isNotEmpty && !before.endsWith('\n')) block.write('\n');
-      block.write('\n$marker\n');
-      for (final l in lines) {
-        block.write('$l\n');
-      }
-      await target.writeAsString(block.toString(),
-          mode: FileMode.append, flush: true);
-      return null;
-    } on FileSystemException catch (e) {
-      return 'Could not write $path: ${e.osError?.message ?? e.message}.';
-    }
-  }
+  static Future<String?> addToSwayConfig(String path, List<String> lines) =>
+      SwayConfigFiles.appendBlock(path, marker, lines);
 }

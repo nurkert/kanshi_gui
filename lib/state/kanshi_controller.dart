@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:kanshi_gui/domain/lid_policy.dart';
 import 'package:kanshi_gui/domain/mirror_geometry.dart';
 import 'package:kanshi_gui/domain/output_matcher.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
@@ -15,9 +16,11 @@ import 'package:kanshi_gui/services/kanshi_autostart.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 import 'package:kanshi_gui/services/kanshi_daemon.dart';
 import 'package:kanshi_gui/services/layout_math.dart';
+import 'package:kanshi_gui/services/lid_switch.dart';
 import 'package:kanshi_gui/services/mirror_runner.dart';
 import 'package:kanshi_gui/services/monitor_service.dart';
 import 'package:kanshi_gui/services/process_runner.dart';
+import 'package:kanshi_gui/services/sway_config_files.dart';
 import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/app_status.dart';
 import 'package:kanshi_gui/state/history_stack.dart';
@@ -160,18 +163,8 @@ class KanshiController extends ChangeNotifier {
         await KanshiAutostart.detect(runner: _processRunner, sway: sway);
     final configExists = await File(config.configPath).exists();
     final swayPath = autostart.swayConfigPath;
-    var writable = false;
-    if (swayPath != null) {
-      try {
-        // Opening for append writes nothing; it only asks the kernel.
-        final f = await File(await File(swayPath).resolveSymbolicLinks())
-            .open(mode: FileMode.append);
-        await f.close();
-        writable = true;
-      } catch (_) {
-        writable = false;
-      }
-    }
+    final writable =
+        swayPath != null && await SwayConfigFiles.isWritable(swayPath);
     return KanshiSetupFacts(
       installed: await has('kanshi'),
       configExists: configExists,
@@ -253,6 +246,69 @@ class KanshiController extends ChangeNotifier {
     return OpResult.ok(now.found
         ? 'kanshi was already set up to start with sway, and is running now.'
         : 'Added to $path. kanshi starts with sway from now on.');
+  }
+
+  // ── The lid ──────────────────────────────────────────────────────────────
+
+  /// Whether a closed lid switches the built-in screen off.
+  bool get lidSwitchOn => _lidSwitchOn;
+
+  /// Whether the lid switch can be offered at all: sway (the binding and the
+  /// commands are sway's), the helper installed, and a built-in screen among
+  /// the connected ones. A desktop is not asked about a lid it does not have.
+  bool get supportsLidSwitch =>
+      supportsWorkspaceManagement &&
+      _helperInstalled &&
+      _currentMonitors.any((m) => isBuiltInPanel(m.id));
+
+  /// What the lid dialog shows before anything is written: which sway config
+  /// would get the binding, whether it can, and lid bindings already there.
+  Future<LidSwitchFacts> lidSwitchFacts() async {
+    final path = await SwayConfigFiles.locate(runner: _processRunner);
+    if (path == null) return const LidSwitchFacts();
+    LidSwitchScan? scan;
+    try {
+      scan = LidSwitchBinding.scan(await SwayConfigFiles.readLines(path));
+    } catch (_) {/* unreadable: the dialog says so */}
+    return LidSwitchFacts(
+      swayConfigPath: path,
+      writable: await SwayConfigFiles.isWritable(path),
+      scan: scan,
+    );
+  }
+
+  /// Switches the lid rule on or off: the sway binding, the setting the
+  /// helper reads, and the kanshi line that covers a profile applied with the
+  /// lid already closed — in that order, so the reload at the end runs the
+  /// helper against the new setting.
+  ///
+  /// Switching off needs nothing switched back on by hand: kanshi re-applies
+  /// the profile on that reload, and the profile says the panel is on.
+  Future<OpResult> setLidSwitch(bool on, {required String swayConfigPath}) async {
+    final err = on
+        ? await LidSwitchBinding.install(swayConfigPath, runner: _processRunner)
+        : await LidSwitchBinding.uninstall(swayConfigPath,
+            runner: _processRunner);
+    if (err != null) return OpResult.err(err);
+    _lidSwitchOn = on;
+    final s = _settings;
+    if (s != null) {
+      s.lidTurnsOffPanel = on;
+      try {
+        await s.save();
+      } catch (e) {
+        return OpResult.err('The sway binding is '
+            '${on ? 'in place' : 'removed'}, but the setting could not be '
+            'saved: $e');
+      }
+    }
+    config.writeOptions = _effectiveWriteOptions();
+    await _flushSaveAndReload();
+    notifyListeners();
+    return OpResult.ok(on
+        ? 'Closing the lid now switches the built-in screen off while '
+            'another screen is on.'
+        : 'Closing the lid no longer switches the built-in screen off.');
   }
 
   /// How much of "these screens will come back exactly like this" the app has
@@ -412,6 +468,14 @@ class KanshiController extends ChangeNotifier {
   /// [refreshWorkspaceHelper]. See [KanshiWriteOptions.useWorkspaceHelper].
   bool _workspaceHelperOn = false;
 
+  /// Whether a closed lid switches the built-in screen off. The setting, as
+  /// [applyStartupSettings] and [setLidSwitch] last left it.
+  bool _lidSwitchOn = false;
+
+  /// Whether `kanshi-gui-workspaced`, which carries out the lid rule, is on
+  /// this machine. Probed at [init].
+  bool _helperInstalled = false;
+
   /// The switch behind [_workspaceHelperOn]. Null leaves the helper line out
   /// entirely — the default, so no test and no embedding asks the real
   /// systemd; the app's entry point passes the real one.
@@ -505,6 +569,9 @@ class KanshiController extends ChangeNotifier {
       mirrorScaling: _mirrorScaling,
       useMirrorLauncher: _mirrorLauncherAvailable,
       useWorkspaceHelper: _workspaceHelperOn,
+      useLidHelper: _lidSwitchOn &&
+          _helperInstalled &&
+          monitors.writeOptions.injectSwayWorkspaceExec,
     );
     final dist = _workspaceDistribution;
     if (!supportsWorkspaceManagement || dist == null) {
@@ -636,6 +703,11 @@ class KanshiController extends ChangeNotifier {
     // The workspace helper's line depends on a switch that lives in systemd,
     // and so is asked here, before anything writes.
     await _stopHelperWhilePlacementOff();
+    try {
+      _helperInstalled = await _processRunner.exists(LidSwitchBinding.helper);
+    } catch (_) {
+      _helperInstalled = false;
+    }
     _workspaceHelperOn = await _probeWorkspaceHelper();
     // The config service was handed its options in the constructor, before
     // this probe could run; without this line the launcher was found and
@@ -750,12 +822,17 @@ class KanshiController extends ChangeNotifier {
   /// with `systemctl` while the app was closed. Written without a reload, like
   /// the other two, so launching never re-applies anything; kanshi reads the
   /// line at its next reload or login.
+  ///
+  /// And one in 2.4.0: the lid line not matching the lid setting, for the
+  /// same reasons. It is not tied to workspace placement, so it is asked
+  /// whatever placement is set to.
   Future<void> _migrateStaleWorkspaceExecs() async {
-    if (!config.writeOptions.injectSwayWorkspaceExec) return;
-    if (!await config.carriesLegacyWorkspaceExec() &&
-        !await config.workspaceHelperLineDisagrees()) {
-      return;
-    }
+    final workspaces = config.writeOptions.injectSwayWorkspaceExec &&
+        (await config.carriesLegacyWorkspaceExec() ||
+            await config.workspaceHelperLineDisagrees());
+    final lid = supportsWorkspaceManagement &&
+        await config.lidHelperLineDisagrees();
+    if (!workspaces && !lid) return;
     await _saves.flush(List<Profile>.of(_profiles));
   }
 
@@ -1927,6 +2004,7 @@ class KanshiController extends ChangeNotifier {
     liveApply = s.liveApply;
     autoReapplyOnDrift = s.autoReapplyOnDrift;
     _mirrorScaling = s.mirrorScaling.arg;
+    _lidSwitchOn = s.lidTurnsOffPanel;
     _workspaceDistribution = s.workspaceManagement.distribution;
     _followsWorkspaceMap = s.workspaceManagement.followsMap;
     _learnsWorkspaceMap = s.workspaceManagement.learns;
