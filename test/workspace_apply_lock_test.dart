@@ -105,6 +105,33 @@ void main() {
     expect(probe.stdout, 'free', reason: 'a thrown step must not wedge it');
   }, timeout: const Timeout(Duration(seconds: 60)));
 
+  test('guardWaiting waits for the holder instead of skipping', () async {
+    // The lid binding and kanshi's exec can start together; the second must
+    // see the first one's result, not skip it.
+    final other = await holdInAnotherProcess();
+    addTearDown(() => other.kill());
+    var ran = false;
+    final pending = lock().guardWaiting(() async => ran = true,
+        timeout: const Duration(seconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(ran, isFalse, reason: 'it ran while the other process held it');
+    other.kill();
+    expect(await pending, isTrue);
+    expect(ran, isTrue);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('guardWaiting gives up after its timeout', () async {
+    final other = await holdInAnotherProcess();
+    addTearDown(() => other.kill());
+    var ran = false;
+    expect(
+      await lock().guardWaiting(() async => ran = true,
+          timeout: const Duration(milliseconds: 300)),
+      isFalse,
+    );
+    expect(ran, isFalse);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test('a directory it cannot use does not stop the work', () async {
     // Locking is an optimisation, not a correctness requirement: a read-only
     // filesystem or a kernel without record locks must not mean the

@@ -37,12 +37,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kanshi_gui/domain/lid_policy.dart';
 import 'package:kanshi_gui/domain/output_identity.dart';
+import 'package:kanshi_gui/domain/output_matcher.dart';
 import 'package:kanshi_gui/domain/workspace_plan.dart';
 import 'package:kanshi_gui/models/monitor_tile_data.dart';
 import 'package:kanshi_gui/models/profiles.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/kanshi_config_parser.dart';
+import 'package:kanshi_gui/services/lid_switch.dart';
 import 'package:kanshi_gui/services/workspace_apply_lock.dart';
 import 'package:kanshi_gui/services/workspace_daemon_core.dart';
 
@@ -82,6 +85,19 @@ Future<void> main(List<String> args) async {
     await _fromKanshi(verbose: verbose, dryRun: dryRun);
     return;
   }
+  final lidAt = args.indexOf('--lid');
+  if (lidAt >= 0) {
+    final word = lidAt + 1 < args.length ? args[lidAt + 1] : null;
+    final reported = LidState.fromArgument(word);
+    if (word != null && !word.startsWith('-') && reported == null) {
+      stderr.writeln('kanshi-gui-workspaced: --lid takes open or closed, '
+          'not "$word".');
+      exitCode = 2;
+      return;
+    }
+    await _lid(reported: reported, verbose: verbose, dryRun: dryRun);
+    return;
+  }
   final daemon = _Daemon(verbose: verbose, dryRun: dryRun);
   if (once) {
     final sock = await _findSocket();
@@ -115,8 +131,16 @@ remembers: at login, whenever you plug a screen in, and after a sway reload.
               what kanshi runs after applying a profile: place the
               workspaces once and exit. Moves open ones only when the
               screens changed since the last run, so a reload after a
-              save in the app only declares. Logs to the journal
+              save in the app only declares. Applies the lid rule
+              (see --lid) first. Logs to the journal
               (`journalctl --user -t kanshi-gui-workspaced`)
+  --lid [open|closed]
+              the laptop lid. With a state, what sway's lid binding runs
+              when the lid moves; without one, what kanshi runs after
+              applying a profile, reading the lid from ACPI. Switches the
+              built-in screen off while the lid is closed and another
+              screen is on, and back on when it opens. Does nothing
+              unless that is switched on in kanshi_gui (Advanced → Lid)
   --dry-run   work out the placement and print it, changing nothing
   -q          say nothing (decisions are logged by default; see
               `journalctl --user -u kanshi-gui-workspaces`)
@@ -173,20 +197,8 @@ class _Daemon {
   /// every save, often while the app is still placing workspaces for that
   /// same save — so it waits its turn. Bounded, so a stuck holder cannot pile
   /// processes up behind it.
-  static Future<bool> _waitForApplyLock(Future<void> Function() action) async {
-    final lock = WorkspaceApplyLock(WorkspaceApplyLock.applyLock);
-    final deadline = DateTime.now().add(const Duration(seconds: 10));
-    while (!lock.tryHold()) {
-      if (DateTime.now().isAfter(deadline)) return false;
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    try {
-      await action();
-      return true;
-    } finally {
-      lock.release();
-    }
-  }
+  static Future<bool> _waitForApplyLock(Future<void> Function() action) =>
+      WorkspaceApplyLock(WorkspaceApplyLock.applyLock).guardWaiting(action);
 
   /// Everything that decides anything lives here, and is driven by a fake
   /// sway in test/workspace_daemon_loop_test.dart. This file is the wiring.
@@ -729,6 +741,9 @@ Future<void> _fromKanshi({required bool verbose, required bool dryRun}) async {
     return;
   }
   await daemon.attach(sock);
+  // The lid first, so the workspaces are placed on the screens that stay on.
+  await _applyLid(daemon, sock,
+      trigger: LidTrigger.profileApplied, log: log, dryRun: dryRun);
   final live = await daemon.core.sway.outputs();
   if (live.isEmpty) return;
   final seen = _LastScreens(sock);
@@ -744,6 +759,113 @@ Future<void> _fromKanshi({required bool verbose, required bool dryRun}) async {
     await Future<void>.delayed(const Duration(seconds: 2));
     await daemon.core.verifyRepair();
   }
+}
+
+// ── The lid ───────────────────────────────────────────────────────────────
+
+/// One run for the lid: from sway's binding ([reported] set) or from kanshi's
+/// exec line after a profile was applied ([reported] null).
+Future<void> _lid({
+  required LidState? reported,
+  required bool verbose,
+  required bool dryRun,
+}) async {
+  final log = _journalLog(verbose: verbose, echo: dryRun);
+  final daemon = _Daemon(verbose: verbose, dryRun: dryRun, sink: log);
+  final sock = await _findSocket();
+  if (sock == null) {
+    log('lid: no sway socket found; nothing to do');
+    return;
+  }
+  await daemon.attach(sock);
+  await _applyLid(
+    daemon,
+    sock,
+    trigger: reported == null ? LidTrigger.profileApplied : LidTrigger.lidMoved,
+    reported: reported,
+    log: log,
+    dryRun: dryRun,
+  );
+}
+
+/// Applies the lid rule once. See lib/domain/lid_policy.dart for the rule.
+///
+/// Serialised on its own lock: the lid closing while kanshi applies a profile
+/// starts both a binding run and an exec run, and each must see the other's
+/// result rather than the state both started from.
+Future<void> _applyLid(
+  _Daemon daemon,
+  String sock, {
+  required LidTrigger trigger,
+  LidState? reported,
+  required void Function(String message) log,
+  required bool dryRun,
+}) async {
+  if (!(await AppSettings.load()).lidTurnsOffPanel) {
+    // Said only when the lid moved: kanshi runs the helper line on every
+    // apply, and a switched-off feature has nothing to report there.
+    if (reported != null) log('lid ${reported.name}; the lid rule is off');
+    return;
+  }
+  final ran = await WorkspaceApplyLock(WorkspaceApplyLock.lidLock)
+      .guardWaiting(() async {
+    final memory = LidMemory(sock).read();
+    if (reported != null) memory.lid = reported;
+    final live = await daemon.core.sway.outputs();
+    if (live.isEmpty) return;
+    final decision = decideLid(
+      lid: reported ?? readLidState(remembered: memory.lid),
+      trigger: trigger,
+      live: live,
+      switchedOff: memory.switchedOff,
+      mirrorDestinations: await _mirrorDestinations(daemon, live),
+    );
+    if (decision.changesAnything || reported != null) log(decision.reason);
+    if (dryRun) {
+      for (final id in decision.switchOff) {
+        log('would send: ${LidDecision.command(id, on: false)}');
+      }
+      for (final id in decision.switchOn) {
+        log('would send: ${LidDecision.command(id, on: true)}');
+      }
+      return;
+    }
+    final off = {...decision.switchedOff};
+    for (final id in decision.switchOff) {
+      // A panel sway refused to switch off is not one the lid switched off.
+      if (!await daemon.core.sway.run(LidDecision.command(id, on: false))) {
+        off.remove(id);
+      }
+    }
+    for (final id in decision.switchOn) {
+      // Kept, so the next lid opening tries again.
+      if (!await daemon.core.sway.run(LidDecision.command(id, on: true))) {
+        off.add(id);
+      }
+    }
+    memory
+      ..switchedOff = off
+      ..write();
+  }, timeout: const Duration(seconds: 5));
+  if (!ran) log('lid: another lid run did not finish; leaving it to that one');
+}
+
+/// The screens the active setup mirrors another screen onto. They show a
+/// picture, not a desktop, so they do not count as a screen to take over —
+/// and a panel mirrored onto a projector must stay on for the projector to
+/// show anything.
+Future<Set<String>> _mirrorDestinations(
+    _Daemon daemon, List<MonitorTileData> live) async {
+  final profile = matchProfile(
+    await daemon.core.env.profiles(),
+    live,
+    preferProfileName: await daemon.core.env.markedProfile(),
+  );
+  if (profile == null) return const {};
+  return {
+    for (final m in profile.monitors)
+      if (m.mirrorOf != null) OutputMatcher.resolveConnector(m.id, live),
+  };
 }
 
 /// Where a run started by kanshi reports.

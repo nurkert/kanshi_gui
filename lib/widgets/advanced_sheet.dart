@@ -7,6 +7,7 @@ import 'package:kanshi_gui/design/tokens.dart';
 import 'package:kanshi_gui/services/app_settings.dart';
 import 'package:kanshi_gui/services/workspace_daemon.dart';
 import 'package:kanshi_gui/state/kanshi_controller.dart';
+import 'package:kanshi_gui/widgets/lid_switch_dialog.dart';
 import 'package:kanshi_gui/widgets/workspace_sheet.dart';
 
 /// Everything the app still asks the user to decide, plus the facts it owes
@@ -213,6 +214,31 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
                   ),
                 ),
               ],
+              if (widget.controller.supportsLidSwitch) ...[
+                const SizedBox(height: Sp.x4),
+                _row(
+                  c,
+                  label: 'Lid',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('Closed lid switches the screen off',
+                            style: T.body.copyWith(color: c.textPrimary)),
+                        value: widget.controller.lidSwitchOn,
+                        onChanged: _changeLidSwitch,
+                      ),
+                      Text(
+                        'Only while another screen is on. It comes back '
+                        'when the lid opens.',
+                        style: T.caption.copyWith(color: c.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const Divider(height: Sp.x8),
               _row(
                 c,
@@ -264,6 +290,24 @@ class _AdvancedSheetState extends State<AdvancedSheet> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Shows what flipping the lid switch writes, and flips it on confirm.
+  Future<void> _changeLidSwitch(bool on) async {
+    final facts = await widget.controller.lidSwitchFacts();
+    if (!mounted) return;
+    final r = await LidSwitchDialog.show(
+      context,
+      on: on,
+      facts: facts,
+      onConfirm: () => widget.controller
+          .setLidSwitch(on, swayConfigPath: facts.swayConfigPath!),
+    );
+    if (!mounted || r == null) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(r.message ?? 'Done.')),
     );
   }
 

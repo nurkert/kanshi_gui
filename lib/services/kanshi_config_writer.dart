@@ -63,6 +63,19 @@ class KanshiWriteOptions {
   /// it to /bin/sh.
   static const workspaceHelperCommand = 'kanshi-gui-workspaced --from-kanshi';
 
+  /// Add `exec kanshi-gui-workspaced --lid` to every profile, so a profile
+  /// kanshi applies with the lid closed does not leave the built-in screen
+  /// on. kanshi re-applies on every plug and every save, and each time it
+  /// switches the panel back on — a sway binding only fires when the lid
+  /// moves, so this is the one moment nothing else covers. Where the
+  /// [workspaceHelperCommand] line is written it does the lid first, and
+  /// this line is left out: one process, so the workspaces are placed on the
+  /// screens that are still on. Sway-only, like the binding.
+  final bool useLidHelper;
+
+  /// The command [useLidHelper] writes. Plain words only.
+  static const lidHelperCommand = 'kanshi-gui-workspaced --lid';
+
   const KanshiWriteOptions({
     this.injectSwayWorkspaceExec = false,
     this.writeCurrentProfileMarker = false,
@@ -72,6 +85,7 @@ class KanshiWriteOptions {
     this.mirrorScaling = 'fit',
     this.useMirrorLauncher = false,
     this.useWorkspaceHelper = false,
+    this.useLidHelper = false,
   });
 
   KanshiWriteOptions copyWith({
@@ -83,6 +97,7 @@ class KanshiWriteOptions {
     String? mirrorScaling,
     bool? useMirrorLauncher,
     bool? useWorkspaceHelper,
+    bool? useLidHelper,
   }) {
     return KanshiWriteOptions(
       injectSwayWorkspaceExec:
@@ -97,6 +112,7 @@ class KanshiWriteOptions {
       mirrorScaling: mirrorScaling ?? this.mirrorScaling,
       useMirrorLauncher: useMirrorLauncher ?? this.useMirrorLauncher,
       useWorkspaceHelper: useWorkspaceHelper ?? this.useWorkspaceHelper,
+      useLidHelper: useLidHelper ?? this.useLidHelper,
     );
   }
 
@@ -440,6 +456,10 @@ class KanshiConfigWriter {
         buffer.writeln(
             '    exec ${KanshiWriteOptions.workspaceHelperCommand}');
       }
+    }
+    if (options.useLidHelper &&
+        !(options.injectSwayWorkspaceExec && options.useWorkspaceHelper)) {
+      buffer.writeln('    exec ${KanshiWriteOptions.lidHelperCommand}');
     }
 
     if (options.writeCurrentProfileMarker) {

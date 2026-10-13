@@ -73,7 +73,10 @@ class DriftMonitor {
       // and would report drift permanently.
       if (!pe.enabled || pe.mirrorOf != null) continue;
       final live = liveById[pe.id];
-      if (live == null) continue;
+      // Off right now has no position to drift from. Reporting one would
+      // also invite "re-apply", which switches a panel behind a closed lid
+      // back on — and with auto re-apply, does so in a loop.
+      if (live == null || !live.enabled) continue;
       final dx = (pe.x - live.x).abs();
       final dy = (pe.y - live.y).abs();
       if (dx > tolerance || dy > tolerance) {

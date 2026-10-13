@@ -73,8 +73,14 @@ class WorkspacePlacement {
 
       // A profile entry may be keyed by EDID description rather than by the
       // port sway currently uses. Resolve, and skip anything not connected —
-      // it would only produce sway warnings.
-      final connected = liveOutputs.map((m) => m.id).toSet();
+      // it would only produce sway warnings. Connected and switched OFF is
+      // the same as not there: a workspace cannot be moved onto a screen
+      // that is off, and the setup may want a panel on that a closed lid has
+      // switched off (see lib/domain/lid_policy.dart).
+      final connected = {
+        for (final m in liveOutputs)
+          if (m.enabled) m.id,
+      };
       final resolved = <MonitorTileData>[];
       for (final m in desired) {
         final live = resolveConnector(m.id);

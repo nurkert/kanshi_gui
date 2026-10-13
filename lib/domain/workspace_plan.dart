@@ -486,7 +486,13 @@ WorkspacePlan? planWorkspaces({
   // The same predicate the writer uses when it renders the exec chain: a
   // mirror destination shows another screen's picture and must not be given
   // workspaces of its own.
-  final connected = {for (final m in live) m.id};
+  // Switched on, not just plugged in. The setup can want a screen on that is
+  // off right now — a laptop panel behind a closed lid — and a plan that
+  // gives it workspaces sends moves sway refuses, then retries them.
+  final connected = {
+    for (final m in live)
+      if (m.enabled) m.id,
+  };
   final resolved = <MonitorTileData>[];
   for (final m in profile.monitors) {
     if (!m.enabled || m.mirrorOf != null) continue;

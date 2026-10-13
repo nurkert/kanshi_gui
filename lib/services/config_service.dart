@@ -206,6 +206,50 @@ class ConfigService {
     }
   }
 
+  /// Whether the file's lid lines disagree with [writeOptions]: the lid
+  /// switch is on and a profile carries neither the lid line nor the helper
+  /// line (which does the lid too), or it is off and a lid line is left.
+  ///
+  /// Same reason as [workspaceHelperLineDisagrees]: an upgrade, or a file
+  /// written by an older version, would otherwise say something the setting
+  /// does not until the next save.
+  Future<bool> lidHelperLineDisagrees() async {
+    try {
+      final file = File(configPath);
+      if (!await file.exists()) return false;
+      final lid = 'exec ${KanshiWriteOptions.lidHelperCommand}';
+      final helper = 'exec ${KanshiWriteOptions.workspaceHelperCommand}';
+      var blocks = 0;
+      var covered = 0;
+      var lidLines = 0;
+      var inBlock = false;
+      var hasCover = false;
+      void close() {
+        if (!inBlock) return;
+        blocks++;
+        if (hasCover) covered++;
+      }
+
+      for (final line in (await file.readAsString()).split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('profile ')) {
+          close();
+          inBlock = true;
+          hasCover = false;
+        } else if (trimmed == lid) {
+          lidLines++;
+          hasCover = true;
+        } else if (trimmed == helper) {
+          hasCover = true;
+        }
+      }
+      close();
+      return writeOptions.useLidHelper ? covered < blocks : lidLines > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Rewrites a config whose `transform` values are in sway's naming rather
   /// than kanshi's, and stamps the file so it is only ever done once.
   ///
