@@ -567,5 +567,10 @@ class KanshiConfigWriter {
     final isInt = (hz - hz.round()).abs() < 0.01;
     return isInt ? hz.round().toString() : hz.toStringAsFixed(3);
   }
+
+  /// Refresh for `wlr-randr --mode`. It matches a mode by its exact value,
+  /// so a mode reported as 143.996 must not be sent as "144" ([formatHz]
+  /// rounds anything within 0.01 of a whole number).
+  static String formatHzExact(double hz) => hz.toStringAsFixed(3);
 }
 
