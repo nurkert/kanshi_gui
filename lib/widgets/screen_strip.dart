@@ -135,6 +135,12 @@ class ScreenStrip extends StatelessWidget {
     );
   }
 
+  /// 119.88 and 120 are different modes; rounding made them read the same.
+  static String _hzLabel(double hz) {
+    final t = hz.toStringAsFixed(3);
+    return t.replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   Widget _labelled(BuildContext context, String label, Widget child) {
     final c = context.colors;
     return Row(
@@ -186,7 +192,7 @@ class ScreenStrip extends StatelessWidget {
                 value: mode,
                 child: Text(
                   '${mode.width.toInt()} × ${mode.height.toInt()}'
-                  '  ·  ${mode.refresh.round()} Hz',
+                  '  ·  ${_hzLabel(mode.refresh)} Hz',
                   style: T.mono,
                 ),
               ),

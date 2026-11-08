@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kanshi_gui/models/monitor_mode.dart';
 import 'package:kanshi_gui/services/backends/wlr_randr_backend.dart';
 import 'package:kanshi_gui/services/kanshi_config_writer.dart';
 
@@ -65,5 +66,15 @@ void main() {
       fake.calls.last,
       equals(['wlr-randr', '--output', 'HDMI-A-1', '--off']),
     );
+  });
+
+  test('setMode sends the exact refresh, not a rounded one', () async {
+    final fake = FakeProcessRunner(installed: {'wlr-randr'});
+    final backend = WlrRandrBackend(runner: fake);
+    await backend.setMode(
+      'HDMI-A-1',
+      const MonitorMode(width: 2560, height: 1440, refresh: 143.996),
+    );
+    expect(fake.calls.last.join(' '), contains('--mode 2560x1440@143.996Hz'));
   });
 }

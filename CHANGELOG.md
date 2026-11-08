@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.1
+
+### Fixed
+
+- **Picking a refresh rate on wlroots compositors (Wayfire, river, labwc)
+  could fail with "unknown mode".** A mode that the screen reports as
+  143.996 Hz was sent to `wlr-randr` as "144", which names no mode. The exact
+  value is sent now. The resolution list also shows 119.88 Hz and 120 Hz as
+  two entries instead of two identical-looking "120 Hz" lines.
+
 ## 2.4.0
 
 ### Added

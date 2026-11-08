@@ -130,7 +130,7 @@ class WlrRandrBackend implements MonitorService {
       outputId,
       '--mode',
       '${mode.width.toInt()}x${mode.height.toInt()}'
-          '@${KanshiConfigWriter.formatHz(mode.refresh)}Hz',
+          '@${KanshiConfigWriter.formatHzExact(mode.refresh)}Hz',
     ]);
   }
 
@@ -149,7 +149,7 @@ class WlrRandrBackend implements MonitorService {
       '--on',
       '--mode',
       '${mode.width.toInt()}x${mode.height.toInt()}'
-          '@${KanshiConfigWriter.formatHz(mode.refresh)}Hz',
+          '@${KanshiConfigWriter.formatHzExact(mode.refresh)}Hz',
       '--scale',
       target.scale.toStringAsFixed(2),
       '--transform',
@@ -171,7 +171,7 @@ class WlrRandrBackend implements MonitorService {
       outputId,
       '--mode',
       '${width.toInt()}x${height.toInt()}'
-          '@${KanshiConfigWriter.formatHz(refresh)}Hz',
+          '@${KanshiConfigWriter.formatHzExact(refresh)}Hz',
     ]);
   }
 
